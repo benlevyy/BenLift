@@ -37,7 +37,7 @@ enum ClaudeError: Error, LocalizedError {
 private struct ClaudeRequest: Encodable {
     let model: String
     let maxTokens: Int
-    let system: String
+    let system: [SystemBlock]
     let messages: [ClaudeMessage]
 
     enum CodingKeys: String, CodingKey {
@@ -45,6 +45,32 @@ private struct ClaudeRequest: Encodable {
         case maxTokens = "max_tokens"
         case system
         case messages
+    }
+}
+
+/// A system prompt content block. The first block (knowledge base) gets
+/// `cache_control: {"type": "ephemeral"}` so Anthropic caches it across calls
+/// (~90% cost reduction on the cached portion after the first request).
+struct SystemBlock: Encodable {
+    let type: String
+    let text: String
+    let cacheControl: CacheControl?
+
+    enum CodingKeys: String, CodingKey {
+        case type, text
+        case cacheControl = "cache_control"
+    }
+
+    struct CacheControl: Encodable {
+        let type: String
+    }
+
+    static func cached(_ text: String) -> SystemBlock {
+        SystemBlock(type: "text", text: text, cacheControl: CacheControl(type: "ephemeral"))
+    }
+
+    static func dynamic(_ text: String) -> SystemBlock {
+        SystemBlock(type: "text", text: text, cacheControl: nil)
     }
 }
 
@@ -106,6 +132,14 @@ actor ClaudeCoachService: CoachServiceProtocol {
     }
 
     // MARK: - Core Request
+
+    /// Builds system blocks: the knowledge base (cached) + the per-call system prompt (dynamic).
+    private func buildSystemBlocks(systemPrompt: String) -> [SystemBlock] {
+        [
+            .cached(TrainingKnowledgeBase.knowledgeBase),
+            .dynamic(systemPrompt)
+        ]
+    }
 
     private func sendRequest<T: Decodable>(
         systemPrompt: String,

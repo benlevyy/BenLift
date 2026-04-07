@@ -256,6 +256,18 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         }
     }
 
+    // MARK: - Skip Warmups
+
+    func skipWarmups() {
+        guard let idx = activeExerciseIndex else { return }
+        exerciseStates[idx].isWarmupPhase = false
+        // Load working weight
+        let state = exerciseStates[idx]
+        currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
+        currentReps = 0
+        print("[BenLift/Watch] Skipped warmups for \(state.info.name)")
+    }
+
     // MARK: - Add Exercise Mid-Workout
 
     func addExercise(_ info: WatchExerciseInfo) {

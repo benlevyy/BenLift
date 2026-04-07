@@ -135,14 +135,26 @@ struct ExerciseView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(workoutVM.currentReps <= 0 && !workoutVM.isWarmupPhase)
 
-                // Back to list
-                Button {
-                    workoutVM.backToList()
-                } label: {
-                    Text("← Back")
-                        .font(.caption2)
+                // Skip warmup / Back
+                HStack(spacing: 8) {
+                    if workoutVM.isWarmupPhase {
+                        Button {
+                            workoutVM.skipWarmups()
+                        } label: {
+                            Text("Skip Warm-ups")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button {
+                        workoutVM.backToList()
+                    } label: {
+                        Text("← Back")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
             .padding(.horizontal, 4)
         }

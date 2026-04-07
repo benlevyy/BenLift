@@ -187,11 +187,12 @@ class CoachViewModel {
         print("[BenLift/Coach] Loaded last weights for \(_weightCache.count) exercises")
     }
 
+    /// Only generate 1 warmup set for the first compound exercise. Keep it simple.
     private func defaultWarmups(weight: Double, equipment: Equipment?) -> [WarmupSet]? {
-        guard weight >= 95, equipment == .barbell else { return nil }
+        guard weight >= 135, equipment == .barbell else { return nil }
+        // Single warmup: ~50% of working weight
         return [
-            WarmupSet(weight: 45, reps: 10),
-            WarmupSet(weight: round(weight * 0.6 / 5) * 5, reps: 5),
+            WarmupSet(weight: round(weight * 0.5 / 5) * 5, reps: 5),
         ]
     }
 
