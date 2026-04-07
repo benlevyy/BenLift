@@ -120,15 +120,27 @@ struct ProgramOverview: View {
         .cornerRadius(12)
     }
 
+    @State private var showSplitEditor = false
+
     private func weeklySchedule(_ program: TrainingProgram) -> some View {
         let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         let split = program.split
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Weekly Split")
-                .font(.caption.bold())
-                .foregroundColor(.secondaryText)
-                .textCase(.uppercase)
+            HStack {
+                Text("Weekly Split")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondaryText)
+                    .textCase(.uppercase)
+                Spacer()
+                Button {
+                    showSplitEditor = true
+                } label: {
+                    Text("Edit")
+                        .font(.caption)
+                        .foregroundColor(.accentBlue)
+                }
+            }
 
             HStack(spacing: 4) {
                 ForEach(Array(days.enumerated()), id: \.offset) { index, day in
@@ -153,6 +165,9 @@ struct ProgramOverview: View {
         .padding()
         .background(Color.cardSurface)
         .cornerRadius(12)
+        .sheet(isPresented: $showSplitEditor) {
+            SplitEditorView(program: program)
+        }
     }
 
     private func volumeTargets(_ program: TrainingProgram) -> some View {

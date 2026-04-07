@@ -4,6 +4,7 @@ import SwiftData
 struct HistoryListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
+    @State private var showClearConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -15,22 +16,83 @@ struct HistoryListView: View {
                         description: Text("Start your first session from the Today tab.")
                     )
                 } else {
-                    List(sessions) { session in
-                        NavigationLink {
-                            SessionDetailView(session: session)
-                        } label: {
-                            sessionRow(session)
+                    List {
+                        ForEach(sessions) { session in
+                            NavigationLink {
+                                SessionDetailView(session: session)
+                            } label: {
+                                sessionRow(session)
+                            }
                         }
+                        .onDelete(perform: deleteSessions)
                     }
                 }
             }
             .navigationTitle("History")
+            .toolbar {
+                if !sessions.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu {
+                            Button(role: .destructive) {
+                                showClearConfirm = true
+                            } label: {
+                                Label("Clear All History", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                }
+            }
+            .alert("Clear All History?", isPresented: $showClearConfirm) {
+                Button("Delete All", role: .destructive) {
+                    clearAllHistory()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will permanently delete all \(sessions.count) workout sessions and their AI analyses.")
+            }
         }
     }
 
+    // MARK: - Delete
+
+    private func deleteSessions(at offsets: IndexSet) {
+        for index in offsets {
+            deleteSession(sessions[index])
+        }
+        try? modelContext.save()
+    }
+
+    private func deleteSession(_ session: WorkoutSession) {
+        // Delete associated analysis
+        let sessionId = session.id
+        let analysisDescriptor = FetchDescriptor<PostWorkoutAnalysis>(
+            predicate: #Predicate { $0.sessionId == sessionId }
+        )
+        if let analyses = try? modelContext.fetch(analysisDescriptor) {
+            for analysis in analyses { modelContext.delete(analysis) }
+        }
+        // Delete child objects explicitly in case cascade doesn't fire
+        for entry in session.entries {
+            for set in entry.sets { modelContext.delete(set) }
+            modelContext.delete(entry)
+        }
+        modelContext.delete(session)
+    }
+
+    private func clearAllHistory() {
+        for session in sessions {
+            deleteSession(session)
+        }
+        try? modelContext.save()
+        print("[BenLift] Cleared all workout history")
+    }
+
+    // MARK: - Row
+
     private func sessionRow(_ session: WorkoutSession) -> some View {
         HStack(spacing: 12) {
-            // Category badge
             Text(String(session.category.displayName.prefix(1)))
                 .font(.caption.bold())
                 .foregroundColor(.white)
@@ -61,7 +123,6 @@ struct HistoryListView: View {
 
             Spacer()
 
-            // Rating badge (from analysis if available)
             ratingBadge(for: session)
         }
     }

@@ -151,23 +151,35 @@ struct SettingsView: View {
         }
     }
 
+    @State private var showClearAll = false
+
     private var dataSection: some View {
         Section("Data") {
             Button("Reseed Exercise Library") {
                 DefaultExercises.reseed(in: modelContext)
             }
 
-            Button("Clear All Data", role: .destructive) {
-                clearAllData()
+            Button("Clear Workout History", role: .destructive) {
+                showClearAll = true
+            }
+            .alert("Clear Everything?", isPresented: $showClearAll) {
+                Button("Delete All", role: .destructive) { clearAllData() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Deletes all workout sessions, analyses, weekly reviews, and your training program. Exercise library is kept.")
             }
         }
     }
 
     private func clearAllData() {
-        try? modelContext.delete(model: WorkoutSession.self)
+        // Delete in dependency order: analyses first, then sessions (cascade deletes entries/sets)
         try? modelContext.delete(model: PostWorkoutAnalysis.self)
         try? modelContext.delete(model: WeeklyReview.self)
+        try? modelContext.delete(model: ExerciseEntry.self)
+        try? modelContext.delete(model: SetLog.self)
+        try? modelContext.delete(model: WorkoutSession.self)
         try? modelContext.delete(model: TrainingProgram.self)
         try? modelContext.save()
+        print("[BenLift] Cleared ALL data (sessions, analyses, reviews, program)")
     }
 }

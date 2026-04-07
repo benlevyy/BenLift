@@ -60,9 +60,9 @@ enum WorkoutCategory: String, Codable, CaseIterable, Identifiable {
 
     var muscleGroups: [MuscleGroup] {
         switch self {
-        case .push: return [.chest, .shoulders, .triceps]
-        case .pull: return [.back, .biceps, .forearms]
-        case .legs: return [.quads, .hamstrings, .glutes, .calves]
+        case .push: return [.chest, .shoulders, .triceps, .core]
+        case .pull: return [.back, .biceps, .forearms, .core]
+        case .legs: return [.quads, .hamstrings, .glutes, .calves, .core]
         }
     }
 }
