@@ -54,6 +54,21 @@ struct ExerciseListHubView: View {
                     }
                 }
 
+                // Add exercise
+                Button {
+                    showAddExercise = true
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.caption)
+                        Text("Add Exercise")
+                            .font(.caption.bold())
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+
                 // Finish button
                 Button {
                     workoutVM.currentScreen = .summary
@@ -65,13 +80,17 @@ struct ExerciseListHubView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
-                .padding(.top, 8)
             }
             .padding(.horizontal, 4)
         }
         .navigationTitle(workoutVM.currentPlan?.category.displayName ?? "Workout")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showAddExercise) {
+            WatchAddExerciseView(workoutVM: workoutVM)
+        }
     }
+
+    @State private var showAddExercise = false
 
     private func exerciseButton(state: WorkoutViewModel.ExerciseState, index: Int) -> some View {
         Button {

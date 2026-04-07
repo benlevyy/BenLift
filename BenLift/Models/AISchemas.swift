@@ -101,11 +101,14 @@ struct PlannedExercise: Codable, Identifiable {
     let name: String
     let sets: Int
     let targetReps: String
-    let suggestedWeight: Double
+    let suggestedWeight: Double?
     let repScheme: String?
     let warmupSets: [WarmupSet]?
     let notes: String?
     let intent: String?
+
+    /// Safe weight accessor — returns 0 for bodyweight exercises
+    var weight: Double { suggestedWeight ?? 0 }
 }
 
 struct WarmupSet: Codable {
@@ -163,6 +166,8 @@ struct WatchWorkoutPlan: Codable {
     let category: WorkoutCategory
     let exercises: [WatchExerciseInfo]
     let sessionStrategy: String?
+    var restTimerDuration: Double?     // seconds, from Settings
+    var weightIncrement: Double?       // lbs, from Settings
 }
 
 struct WatchExerciseInfo: Codable, Identifiable {

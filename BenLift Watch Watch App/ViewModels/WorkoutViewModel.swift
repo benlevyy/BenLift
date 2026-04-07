@@ -133,6 +133,15 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         averageHeartRate = 0
         activeCalories = 0
 
+        // Apply settings from the plan (sent by iPhone)
+        if let timer = plan.restTimerDuration, timer > 0 {
+            restTimerDuration = timer
+        }
+        if let increment = plan.weightIncrement, increment > 0 {
+            weightIncrement = increment
+        }
+        print("[BenLift/Watch] Settings: rest=\(restTimerDuration)s, increment=\(weightIncrement)lbs")
+
         startHealthKitSession()
         currentScreen = .exerciseList
         print("[BenLift/Watch] Started \(plan.category.displayName) workout: \(plan.exercises.count) exercises")
@@ -245,6 +254,18 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         } else {
             currentScreen = .exercise
         }
+    }
+
+    // MARK: - Add Exercise Mid-Workout
+
+    func addExercise(_ info: WatchExerciseInfo) {
+        let state = ExerciseState(
+            id: info.name,
+            info: info,
+            isWarmupPhase: false
+        )
+        exerciseStates.append(state)
+        print("[BenLift/Watch] Added exercise mid-workout: \(info.name)")
     }
 
     // MARK: - Skip / Back

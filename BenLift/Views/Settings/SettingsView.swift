@@ -5,6 +5,15 @@ struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
     @Environment(\.modelContext) private var modelContext
 
+    // AppStorage directly in the view — works reliably with SwiftUI bindings
+    @AppStorage("restTimerDuration") private var restTimerDuration: Double = 150
+    @AppStorage("weightIncrement") private var weightIncrement: Double = 5.0
+    @AppStorage("dumbbellIncrement") private var dumbbellIncrement: Double = 2.5
+    @AppStorage("warmUpGeneration") private var warmUpGeneration: Bool = true
+    @AppStorage("weeklyReviewDay") private var weeklyReviewDay: Int = 1
+    @AppStorage("weeklyReviewEnabled") private var weeklyReviewEnabled: Bool = true
+    @AppStorage("weightUnit") private var weightUnitRaw: String = WeightUnit.lbs.rawValue
+
     private let modelOptions = [
         "claude-haiku-4-5-20251001",
         "claude-3-haiku-20240307",
@@ -101,33 +110,39 @@ struct SettingsView: View {
             HStack {
                 Text("Rest Timer")
                 Spacer()
-                Text(TimeInterval(viewModel.restTimerDuration).formattedMinSec)
+                Text(TimeInterval(restTimerDuration).formattedMinSec)
                     .foregroundColor(.secondary)
-                Stepper("", value: $viewModel.restTimerDuration, in: 30...300, step: 15)
+                Stepper("", value: $restTimerDuration, in: 30...300, step: 15)
                     .labelsHidden()
             }
 
             HStack {
                 Text("Barbell Increment")
                 Spacer()
-                Text("\(viewModel.weightIncrement, specifier: "%.1f") lbs")
+                Text("\(weightIncrement, specifier: "%.1f") lbs")
                     .foregroundColor(.secondary)
-                Stepper("", value: $viewModel.weightIncrement, in: 2.5...10, step: 2.5)
+                Stepper("", value: $weightIncrement, in: 2.5...10, step: 2.5)
                     .labelsHidden()
             }
 
-            Toggle("Generate Warm-up Sets", isOn: $viewModel.warmUpGeneration)
+            HStack {
+                Text("Dumbbell Increment")
+                Spacer()
+                Text("\(dumbbellIncrement, specifier: "%.1f") lbs")
+                    .foregroundColor(.secondary)
+                Stepper("", value: $dumbbellIncrement, in: 2.5...10, step: 2.5)
+                    .labelsHidden()
+            }
+
+            Toggle("Generate Warm-up Sets", isOn: $warmUpGeneration)
         }
     }
 
     private var unitsSection: some View {
         Section("Units") {
-            Picker("Weight Unit", selection: Binding(
-                get: { viewModel.weightUnit },
-                set: { viewModel.weightUnit = $0 }
-            )) {
-                Text("lbs").tag(WeightUnit.lbs)
-                Text("kg").tag(WeightUnit.kg)
+            Picker("Weight Unit", selection: $weightUnitRaw) {
+                Text("lbs").tag(WeightUnit.lbs.rawValue)
+                Text("kg").tag(WeightUnit.kg.rawValue)
             }
             .pickerStyle(.segmented)
         }
@@ -135,10 +150,10 @@ struct SettingsView: View {
 
     private var notificationsSection: some View {
         Section("Notifications") {
-            Toggle("Weekly Review", isOn: $viewModel.weeklyReviewEnabled)
+            Toggle("Weekly Review", isOn: $weeklyReviewEnabled)
 
-            if viewModel.weeklyReviewEnabled {
-                Picker("Review Day", selection: $viewModel.weeklyReviewDay) {
+            if weeklyReviewEnabled {
+                Picker("Review Day", selection: $weeklyReviewDay) {
                     Text("Sunday").tag(1)
                     Text("Monday").tag(2)
                     Text("Tuesday").tag(3)
@@ -172,7 +187,6 @@ struct SettingsView: View {
     }
 
     private func clearAllData() {
-        // Delete in dependency order: analyses first, then sessions (cascade deletes entries/sets)
         try? modelContext.delete(model: PostWorkoutAnalysis.self)
         try? modelContext.delete(model: WeeklyReview.self)
         try? modelContext.delete(model: ExerciseEntry.self)
@@ -180,6 +194,7 @@ struct SettingsView: View {
         try? modelContext.delete(model: WorkoutSession.self)
         try? modelContext.delete(model: TrainingProgram.self)
         try? modelContext.save()
-        print("[BenLift] Cleared ALL data (sessions, analyses, reviews, program)")
+        print("[BenLift] Cleared ALL data")
     }
 }
+

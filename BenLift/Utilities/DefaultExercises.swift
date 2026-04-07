@@ -160,6 +160,8 @@ struct DefaultExercises {
         ExerciseDef(name: "Farmer's Carry", muscleGroup: .core, equipment: .dumbbell, defaultWeight: 70),
         ExerciseDef(name: "Suitcase Carry", muscleGroup: .core, equipment: .dumbbell, defaultWeight: 50),
         ExerciseDef(name: "Cable Woodchop", muscleGroup: .core, equipment: .cable, defaultWeight: 30),
+        ExerciseDef(name: "Weighted Leg Raises", muscleGroup: .core, equipment: .dumbbell, defaultWeight: 10),
+        ExerciseDef(name: "Plank", muscleGroup: .core, equipment: .bodyweight, defaultWeight: nil),
     ]
 
     static let all: [ExerciseDef] = push + pull + legs + core

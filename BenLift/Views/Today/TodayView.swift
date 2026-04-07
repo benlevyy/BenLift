@@ -175,11 +175,17 @@ struct TodayView: View {
             if selectedCategory == category {
                 selectedCategory = nil
             } else {
+                // Save current plan if switching categories
+                coachVM.savePlanForCurrentCategory()
+
                 selectedCategory = category
-                // Reset any previous plan and load fresh template
-                coachVM.resetPlan()
                 coachVM.selectedCategory = category
-                coachVM.loadDefaultTemplate(category: category, modelContext: modelContext)
+
+                // Try to restore a saved plan, else load defaults
+                if !coachVM.restorePlan(for: category) {
+                    coachVM.loadLastWeights(for: category, modelContext: modelContext)
+                    coachVM.loadDefaultTemplate(category: category, modelContext: modelContext)
+                }
             }
         } label: {
             VStack(spacing: 6) {
@@ -224,6 +230,7 @@ struct ActivePlanView: View {
     @State private var feeling: Int = 3
     @State private var concerns: String = ""
     @State private var isEditing = false
+    @State private var iterateText: String = ""
 
     @Query private var allExercises: [Exercise]
 
@@ -260,15 +267,41 @@ struct ActivePlanView: View {
                 }
             }
 
-            // Strategy note
+            // Strategy note + iterate
             if let strategy = coachVM.currentPlan?.sessionStrategy {
-                Text(strategy)
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.cardSurface)
-                    .cornerRadius(8)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.accentBlue)
+                            .font(.caption)
+                            .padding(.top, 2)
+                        Text(strategy)
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
+
+                    // Iterate on the plan
+                    HStack(spacing: 8) {
+                        TextField("e.g. drop leg extension, go heavier on bench", text: $iterateText, axis: .vertical)
+                            .font(.caption)
+                            .lineLimit(1...5)
+                            .textFieldStyle(.roundedBorder)
+                            .submitLabel(.send)
+                            .onSubmit { submitIteration() }
+
+                        Button {
+                            submitIteration()
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(iterateText.isEmpty ? .secondaryText : .accentBlue)
+                        }
+                        .disabled(iterateText.isEmpty || coachVM.isGenerating)
+                    }
+                }
+                .padding(10)
+                .background(Color.cardSurface)
+                .cornerRadius(8)
             }
 
             // Loading
@@ -338,8 +371,8 @@ struct ActivePlanView: View {
             // Action buttons
             HStack(spacing: 12) {
                 Button {
+                    coachVM.savePlanForCurrentCategory()
                     onDismiss()
-                    coachVM.resetPlan()
                 } label: {
                     Text("Close")
                         .frame(maxWidth: .infinity)
@@ -411,7 +444,7 @@ struct ActivePlanView: View {
                 HStack(spacing: 6) {
                     Text("\(exercise.sets) × \(exercise.targetReps)")
                         .font(.subheadline.monospacedDigit())
-                    Text("@ \(Int(exercise.suggestedWeight)) lbs")
+                    Text("@ \(Int(exercise.weight)) lbs")
                         .font(.subheadline)
                         .foregroundColor(.accentBlue)
                 }
@@ -420,15 +453,23 @@ struct ActivePlanView: View {
             Spacer()
 
             if let warmups = exercise.warmupSets, !warmups.isEmpty {
-                Text("\(warmups.count)W")
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.secondaryText.opacity(0.2))
-                    .cornerRadius(4)
+                Text("\(warmups.count) warm-up")
+                    .font(.caption2)
+                    .foregroundColor(.secondaryText)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func submitIteration() {
+        guard !iterateText.isEmpty, !coachVM.isGenerating else { return }
+        coachVM.concerns = iterateText
+        iterateText = ""
+        // Dismiss keyboard
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        Task {
+            await coachVM.generatePlan(modelContext: modelContext, program: programVM.currentProgram)
+        }
     }
 
     private func intentColor(_ intent: String?) -> Color {
@@ -530,7 +571,8 @@ struct AIAdjustSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Today's adjustments")
                             .font(.headline)
-                        TextField("e.g. shoulder sore, go heavy, skip isolation", text: $concerns)
+                        TextField("e.g. shoulder sore, go heavy, skip isolation", text: $concerns, axis: .vertical)
+                            .lineLimit(1...5)
                             .textFieldStyle(.roundedBorder)
                     }
 
