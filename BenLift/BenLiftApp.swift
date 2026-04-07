@@ -1,32 +1,49 @@
-//
-//  BenLiftApp.swift
-//  BenLift
-//
-//  Created by Ben Levy on 4/7/26.
-//
-
 import SwiftUI
 import SwiftData
 
 @main
 struct BenLiftApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+    let container: ModelContainer
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    init() {
+        print("[BenLift] App launching...")
+        let schema = Schema([
+            Exercise.self,
+            WorkoutTemplate.self,
+            TemplateExercise.self,
+            WorkoutSession.self,
+            ExerciseEntry.self,
+            SetLog.self,
+            TrainingProgram.self,
+            PostWorkoutAnalysis.self,
+            WeeklyReview.self,
+        ])
+        let config = ModelConfiguration(isStoredInMemoryOnly: false)
+        container = try! ModelContainer(for: schema, configurations: config)
+        print("[BenLift] SwiftData container initialized")
+
+        // Seed default exercises on first launch
+        let context = container.mainContext
+        DefaultExercises.seedIfNeeded(in: context)
+
+        // Debug: check API key status
+        let hasKey = KeychainService.load(key: KeychainService.apiKeyKey) != nil
+        print("[BenLift] API key in Keychain: \(hasKey)")
+
+        // Activate WatchConnectivity
+        WatchSyncService.shared.activate()
+    }
+
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if hasCompletedOnboarding {
+                ContentView()
+            } else {
+                OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
+            }
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(container)
     }
 }

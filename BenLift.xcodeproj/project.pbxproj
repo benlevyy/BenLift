@@ -6,14 +6,50 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5CDD695C2F857B6800D5E175 /* BenLift Watch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5CDD69522F857B6600D5E175 /* BenLift Watch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5CDD69782F85859000D5E175 /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CDD69772F85859000D5E175 /* HealthKit.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		5CDD695A2F857B6800D5E175 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5CD521DD2F855CB100F00E60 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5CDD69512F857B6600D5E175;
+			remoteInfo = "BenLift Watch Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5CDD69602F857B6800D5E175 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				5CDD695C2F857B6800D5E175 /* BenLift Watch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		5CD521E52F855CB200F00E60 /* BenLift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BenLift.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5CDD69522F857B6600D5E175 /* BenLift Watch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "BenLift Watch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5CDD69772F85859000D5E175 /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = Platforms/WatchOS.platform/Developer/SDKs/WatchOS26.2.sdk/System/Library/Frameworks/HealthKit.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5CD521E72F855CB200F00E60 /* BenLift */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = BenLift;
+			sourceTree = "<group>";
+		};
+		5CDD69532F857B6600D5E175 /* BenLift Watch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "BenLift Watch Watch App";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -26,6 +62,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5CDD694F2F857B6600D5E175 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5CDD69782F85859000D5E175 /* HealthKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -33,6 +77,8 @@
 			isa = PBXGroup;
 			children = (
 				5CD521E72F855CB200F00E60 /* BenLift */,
+				5CDD69532F857B6600D5E175 /* BenLift Watch Watch App */,
+				5CDD69762F85858F00D5E175 /* Frameworks */,
 				5CD521E62F855CB200F00E60 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,8 +87,17 @@
 			isa = PBXGroup;
 			children = (
 				5CD521E52F855CB200F00E60 /* BenLift.app */,
+				5CDD69522F857B6600D5E175 /* BenLift Watch Watch App.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		5CDD69762F85858F00D5E175 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				5CDD69772F85859000D5E175 /* HealthKit.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -55,10 +110,12 @@
 				5CD521E12F855CB200F00E60 /* Sources */,
 				5CD521E22F855CB200F00E60 /* Frameworks */,
 				5CD521E32F855CB200F00E60 /* Resources */,
+				5CDD69602F857B6800D5E175 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				5CDD695B2F857B6800D5E175 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5CD521E72F855CB200F00E60 /* BenLift */,
@@ -68,6 +125,28 @@
 			);
 			productName = BenLift;
 			productReference = 5CD521E52F855CB200F00E60 /* BenLift.app */;
+			productType = "com.apple.product-type.application";
+		};
+		5CDD69512F857B6600D5E175 /* BenLift Watch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5CDD695D2F857B6800D5E175 /* Build configuration list for PBXNativeTarget "BenLift Watch Watch App" */;
+			buildPhases = (
+				5CDD694E2F857B6600D5E175 /* Sources */,
+				5CDD694F2F857B6600D5E175 /* Frameworks */,
+				5CDD69502F857B6600D5E175 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5CDD69532F857B6600D5E175 /* BenLift Watch Watch App */,
+			);
+			name = "BenLift Watch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "BenLift Watch Watch App";
+			productReference = 5CDD69522F857B6600D5E175 /* BenLift Watch Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -81,6 +160,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					5CD521E42F855CB200F00E60 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					5CDD69512F857B6600D5E175 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -100,12 +182,20 @@
 			projectRoot = "";
 			targets = (
 				5CD521E42F855CB200F00E60 /* BenLift */,
+				5CDD69512F857B6600D5E175 /* BenLift Watch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		5CD521E32F855CB200F00E60 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5CDD69502F857B6600D5E175 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +212,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		5CDD694E2F857B6600D5E175 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		5CDD695B2F857B6800D5E175 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5CDD69512F857B6600D5E175 /* BenLift Watch Watch App */;
+			targetProxy = 5CDD695A2F857B6800D5E175 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		5CD521F02F855CB500F00E60 /* Debug */ = {
@@ -246,6 +351,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = BenLift/BenLift.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Z59UGG7SZG;
@@ -254,6 +360,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BenLift reads sleep, heart rate, and HRV to personalize your AI coaching based on recovery.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BenLift saves workouts to Apple Health.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -290,6 +398,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = BenLift/BenLift.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Z59UGG7SZG;
@@ -298,6 +407,8 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BenLift reads sleep, heart rate, and HRV to personalize your AI coaching based on recovery.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BenLift saves workouts to Apple Health.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -329,6 +440,77 @@
 			};
 			name = Release;
 		};
+		5CDD695E2F857B6800D5E175 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "BenLift Watch Watch App/BenLift Watch Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z59UGG7SZG;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "BenLift Watch";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = a;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = benlevy.BenLift;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = benlevy.BenLift.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		5CDD695F2F857B6800D5E175 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "BenLift Watch Watch App/BenLift Watch Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z59UGG7SZG;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "BenLift Watch";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = a;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = benlevy.BenLift;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = benlevy.BenLift.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -346,6 +528,15 @@
 			buildConfigurations = (
 				5CD521F32F855CB500F00E60 /* Debug */,
 				5CD521F42F855CB500F00E60 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5CDD695D2F857B6800D5E175 /* Build configuration list for PBXNativeTarget "BenLift Watch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5CDD695E2F857B6800D5E175 /* Debug */,
+				5CDD695F2F857B6800D5E175 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
