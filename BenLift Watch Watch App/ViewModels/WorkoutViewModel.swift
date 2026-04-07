@@ -3,14 +3,13 @@ import WatchKit
 import HealthKit
 import Combine
 
-/// The brain of the Watch workout flow.
-/// Manages exercise progression, set logging, rest timer, heart rate, and results.
+/// Manages the Watch workout: exercise list hub, set logging, rest timer, HR, results.
 class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HKLiveWorkoutBuilderDelegate {
+
     // MARK: - Plan State
     @Published var currentPlan: WatchWorkoutPlan?
-    @Published var currentExerciseIndex: Int = 0
-    @Published var currentSetNumber: Int = 1
-    @Published var isWarmupPhase: Bool = false
+    @Published var exerciseStates: [ExerciseState] = []
+    @Published var activeExerciseIndex: Int? = nil // which exercise is being logged right now
 
     // MARK: - Heart Rate & HealthKit
     @Published var currentHeartRate: Double = 0
@@ -29,49 +28,69 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     // MARK: - Workout State
     @Published var isWorkoutActive: Bool = false
     @Published var workoutStartDate: Date?
-    @Published var completedEntries: [WatchExerciseResult] = []
-    @Published var currentSets: [WatchSetResult] = []
 
     // MARK: - Rest Timer
     @Published var isResting: Bool = false
     @Published var restTimerRemaining: TimeInterval = 0
-    @Published var restTimerDuration: TimeInterval = 150 // 2:30 default
+    @Published var restTimerDuration: TimeInterval = 150
     private var restTimer: Timer?
 
     // MARK: - Screen Navigation
     @Published var currentScreen: WatchScreen = .home
 
-    // MARK: - Computed Properties
+    // MARK: - Exercise State Tracking
 
-    var currentExercise: WatchExerciseInfo? {
-        guard let plan = currentPlan,
-              currentExerciseIndex < plan.exercises.count else { return nil }
-        return plan.exercises[currentExerciseIndex]
+    struct ExerciseState: Identifiable {
+        let id: String // exercise name
+        let info: WatchExerciseInfo
+        var loggedSets: [WatchSetResult] = []
+        var isWarmupPhase: Bool
+
+        var targetSets: Int { info.sets }
+        var workingSetsCompleted: Int { loggedSets.filter { !$0.isWarmup }.count }
+        var isComplete: Bool { workingSetsCompleted >= targetSets }
+        var warmupSetsCompleted: Int { loggedSets.filter(\.isWarmup).count }
+        var totalWarmups: Int { info.warmupSets?.count ?? 0 }
+
+        var totalVolume: Double {
+            loggedSets.filter { !$0.isWarmup }.reduce(0) { $0 + $1.weight * floor($1.reps) }
+        }
     }
 
-    var totalExercises: Int {
-        currentPlan?.exercises.count ?? 0
+    // MARK: - Computed
+
+    var activeExercise: ExerciseState? {
+        guard let idx = activeExerciseIndex, idx < exerciseStates.count else { return nil }
+        return exerciseStates[idx]
     }
 
-    var warmupSetsForCurrentExercise: [WarmupSet] {
-        currentExercise?.warmupSets ?? []
+    var activeExerciseInfo: WatchExerciseInfo? {
+        activeExercise?.info
+    }
+
+    var currentSetNumber: Int {
+        guard let ex = activeExercise else { return 1 }
+        return ex.workingSetsCompleted + 1
+    }
+
+    var isWarmupPhase: Bool {
+        activeExercise?.isWarmupPhase ?? false
+    }
+
+    var warmupSetIndex: Int {
+        activeExercise?.warmupSetsCompleted ?? 0
     }
 
     var totalWarmupSets: Int {
-        warmupSetsForCurrentExercise.count
-    }
-
-    var currentWarmupSetIndex: Int {
-        // Count warmup sets already logged
-        currentSets.filter(\.isWarmup).count
+        activeExercise?.totalWarmups ?? 0
     }
 
     var targetSets: Int {
-        currentExercise?.sets ?? 3
+        activeExercise?.targetSets ?? 3
     }
 
     var workingSetsCompleted: Int {
-        currentSets.filter { !$0.isWarmup }.count
+        activeExercise?.workingSetsCompleted ?? 0
     }
 
     var elapsedTime: TimeInterval {
@@ -80,32 +99,33 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     }
 
     var totalVolume: Double {
-        var volume = 0.0
-        for entry in completedEntries {
-            for set in entry.sets where !set.isWarmup {
-                volume += set.weight * floor(set.reps)
-            }
-        }
-        // Add current exercise sets
-        for set in currentSets where !set.isWarmup {
-            volume += set.weight * floor(set.reps)
-        }
-        return volume
+        exerciseStates.reduce(0) { $0 + $1.totalVolume }
     }
 
     var totalSetsCompleted: Int {
-        let previous = completedEntries.reduce(0) { $0 + $1.sets.filter { !$0.isWarmup }.count }
-        return previous + workingSetsCompleted
+        exerciseStates.reduce(0) { $0 + $1.workingSetsCompleted }
+    }
+
+    var allExercisesComplete: Bool {
+        exerciseStates.allSatisfy(\.isComplete)
+    }
+
+    var incompleteCount: Int {
+        exerciseStates.filter { !$0.isComplete }.count
     }
 
     // MARK: - Start Workout
 
     func startWorkout(with plan: WatchWorkoutPlan) {
         currentPlan = plan
-        currentExerciseIndex = 0
-        currentSetNumber = 1
-        completedEntries = []
-        currentSets = []
+        exerciseStates = plan.exercises.map { info in
+            ExerciseState(
+                id: info.name,
+                info: info,
+                isWarmupPhase: (info.warmupSets?.count ?? 0) > 0
+            )
+        }
+        activeExerciseIndex = nil
         isWorkoutActive = true
         workoutStartDate = Date()
         heartRateSamples = []
@@ -113,15 +133,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         averageHeartRate = 0
         activeCalories = 0
 
-        loadExerciseDefaults()
-
-        // Start with warmups if available
-        isWarmupPhase = totalWarmupSets > 0
-
-        // Start HKWorkoutSession for HR tracking + Activity Ring contribution
         startHealthKitSession()
-
-        currentScreen = .exercise
+        currentScreen = .exerciseList
         print("[BenLift/Watch] Started \(plan.category.displayName) workout: \(plan.exercises.count) exercises")
     }
 
@@ -130,64 +143,67 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         startWorkout(with: plan)
     }
 
-    // MARK: - Load Exercise Defaults
+    // MARK: - Select Exercise (from list)
 
-    private func loadExerciseDefaults() {
-        guard let exercise = currentExercise else { return }
+    func selectExercise(at index: Int) {
+        guard index < exerciseStates.count else { return }
+        activeExerciseIndex = index
 
-        if isWarmupPhase && currentWarmupSetIndex < totalWarmupSets {
-            let warmup = warmupSetsForCurrentExercise[currentWarmupSetIndex]
+        let state = exerciseStates[index]
+        // Load defaults
+        if state.isWarmupPhase && state.warmupSetsCompleted < state.totalWarmups {
+            let warmup = state.info.warmupSets![state.warmupSetsCompleted]
             currentWeight = warmup.weight
             currentReps = Double(warmup.reps)
         } else {
-            // Use last set's weight or suggested weight
-            if let lastWeight = exercise.lastWeight {
-                currentWeight = lastWeight
-            } else {
-                currentWeight = exercise.suggestedWeight
-            }
-            currentReps = 0 // User enters reps
+            currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
+            currentReps = 0
         }
+
+        currentScreen = .exercise
     }
 
     // MARK: - Log Set
 
     func logSet() {
-        guard currentExercise != nil else { return }
+        guard let idx = activeExerciseIndex else { return }
+        var state = exerciseStates[idx]
 
-        let set = WatchSetResult(
-            setNumber: currentSetNumber,
+        let setResult = WatchSetResult(
+            setNumber: state.loggedSets.count + 1,
             weight: currentWeight,
             reps: currentReps,
             timestamp: Date(),
-            isWarmup: isWarmupPhase
+            isWarmup: state.isWarmupPhase
         )
-        currentSets.append(set)
+        state.loggedSets.append(setResult)
 
-        let warmupLabel = isWarmupPhase ? " (warmup)" : ""
-        print("[BenLift/Watch] Logged set \(currentSetNumber): \(Int(currentWeight))x\(currentReps.formattedReps)\(warmupLabel)")
+        let label = state.isWarmupPhase ? " (warmup)" : ""
+        print("[BenLift/Watch] Logged: \(state.info.name) \(Int(currentWeight))x\(currentReps.formattedReps)\(label)")
 
-        // Haptic feedback
         WKInterfaceDevice.current().play(.click)
 
-        // Advance state
-        if isWarmupPhase {
-            if currentWarmupSetIndex >= totalWarmupSets {
-                // Done with warmups, switch to working sets
-                isWarmupPhase = false
-                currentSetNumber = 1
-                loadExerciseDefaults()
+        // Check warmup phase
+        if state.isWarmupPhase {
+            if state.warmupSetsCompleted >= state.totalWarmups {
+                state.isWarmupPhase = false
+                // Load working weight
+                currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
+                currentReps = 0
             } else {
-                currentSetNumber += 1
-                loadExerciseDefaults()
+                // Next warmup
+                let nextWarmup = state.info.warmupSets![state.warmupSetsCompleted]
+                currentWeight = nextWarmup.weight
+                currentReps = Double(nextWarmup.reps)
             }
-            // Short rest for warmups — go straight back, no timer
+            exerciseStates[idx] = state
+            // No rest timer for warmups
             return
         }
 
-        currentSetNumber += 1
+        exerciseStates[idx] = state
 
-        // Start rest timer
+        // Start rest timer, then return to exercise list
         startRestTimer()
     }
 
@@ -203,11 +219,9 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             guard let self else { return }
             DispatchQueue.main.async {
                 self.restTimerRemaining -= 1
-
                 if self.restTimerRemaining <= 30 && self.restTimerRemaining > 29 {
                     WKInterfaceDevice.current().play(.click)
                 }
-
                 if self.restTimerRemaining <= 0 {
                     self.finishRest()
                     WKInterfaceDevice.current().play(.notification)
@@ -216,9 +230,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         }
     }
 
-    func skipRest() {
-        finishRest()
-    }
+    func skipRest() { finishRest() }
 
     private func finishRest() {
         restTimer?.invalidate()
@@ -226,102 +238,74 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         isResting = false
         restTimerRemaining = 0
 
-        // Check if we've completed target sets
-        if workingSetsCompleted >= targetSets {
-            currentScreen = .transition
+        // If current exercise is complete (hit target sets), go back to list
+        // Otherwise stay on the exercise to keep logging
+        if let idx = activeExerciseIndex, exerciseStates[idx].isComplete {
+            currentScreen = .exerciseList
         } else {
             currentScreen = .exercise
         }
     }
 
-    // MARK: - Exercise Navigation
+    // MARK: - Skip / Back
 
-    func nextExercise() {
-        // Save current exercise
-        if let exercise = currentExercise {
-            let entry = WatchExerciseResult(
-                exerciseName: exercise.name,
-                order: currentExerciseIndex,
-                sets: currentSets
-            )
-            completedEntries.append(entry)
-        }
-
-        currentSets = []
-        currentExerciseIndex += 1
-        currentSetNumber = 1
-
-        if currentExerciseIndex >= totalExercises {
-            currentScreen = .summary
-        } else {
-            isWarmupPhase = totalWarmupSets > 0
-            loadExerciseDefaults()
-            currentScreen = .exercise
-        }
-    }
-
-    func skipExercise() {
-        nextExercise()
-    }
-
-    func addExtraSet() {
-        // Go back to exercise screen to log another set
-        currentScreen = .exercise
+    func backToList() {
+        activeExerciseIndex = nil
+        currentScreen = .exerciseList
     }
 
     // MARK: - Finish Workout
 
-    func finishWorkout() -> WatchWorkoutResult {
-        // Save any in-progress exercise
-        if let exercise = currentExercise, !currentSets.isEmpty {
-            let entry = WatchExerciseResult(
-                exerciseName: exercise.name,
-                order: currentExerciseIndex,
-                sets: currentSets
+    func finishWorkout() {
+        // Capture data before any state changes
+        let entries = exerciseStates.enumerated().compactMap { index, state -> WatchExerciseResult? in
+            guard !state.loggedSets.isEmpty else { return nil }
+            return WatchExerciseResult(
+                exerciseName: state.info.name,
+                order: index,
+                sets: state.loggedSets
             )
-            completedEntries.append(entry)
         }
 
-        let duration = elapsedTime
+        let duration = workoutStartDate.map { Date().timeIntervalSince($0) } ?? 0
+        let volume = exerciseStates.reduce(0.0) { $0 + $1.totalVolume }
+        let category = currentPlan?.category ?? .push
+
         let result = WatchWorkoutResult(
             date: workoutStartDate ?? Date(),
-            category: currentPlan?.category ?? .push,
+            category: category,
             duration: duration,
             feeling: nil,
             concerns: nil,
-            entries: completedEntries
+            entries: entries
         )
 
-        // Send result to iPhone
+        // Stop timer first
+        restTimer?.invalidate()
+        restTimer = nil
+        isWorkoutActive = false
+
+        // Send result
         WatchSyncService.shared.sendWorkoutResult(result)
 
-        // Haptic confirmation
+        // Haptic
         WKInterfaceDevice.current().play(.success)
 
-        print("[BenLift/Watch] Workout finished: \(completedEntries.count) exercises, \(Int(totalVolume))lbs volume, \(TimeInterval(duration).formattedDuration)")
+        print("[BenLift/Watch] Workout finished: \(entries.count) exercises, \(Int(volume))lbs, \(TimeInterval(duration).formattedDuration)")
 
-        // End HealthKit session
+        // End HealthKit safely
         endHealthKitSession()
-
-        // Clean up timer but stay on summary — don't go home yet
-        isWorkoutActive = false
-        restTimer?.invalidate()
-        // currentScreen stays on .summary — user calls dismissSummary() to go home
-
-        return result
     }
 
-    /// Called when user taps "Done" on the summary screen
     func dismissSummary() {
-        completedEntries = []
-        currentSets = []
+        exerciseStates = []
+        activeExerciseIndex = nil
         currentPlan = nil
-        currentExerciseIndex = 0
-        currentSetNumber = 1
+        workoutStartDate = nil
         currentScreen = .home
     }
 
-    // MARK: - Weight Adjustment (Digital Crown)
+    // MARK: - Weight / Reps
 
     func adjustWeight(by delta: Double) {
         currentWeight = max(0, currentWeight + delta)
@@ -332,7 +316,6 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     }
 
     func logFailedRep() {
-        // Subtract 0.5 to mark a failed rep
         if currentReps >= 0.5 {
             currentReps -= 0.5
         }
@@ -342,10 +325,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     // MARK: - HealthKit Workout Session
 
     private func startHealthKitSession() {
-        guard HKHealthStore.isHealthDataAvailable() else {
-            print("[BenLift/Watch] HealthKit not available")
-            return
-        }
+        guard HKHealthStore.isHealthDataAvailable() else { return }
 
         let config = HKWorkoutConfiguration()
         config.activityType = .traditionalStrengthTraining
@@ -354,7 +334,6 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         do {
             workoutSession = try HKWorkoutSession(healthStore: healthStore, configuration: config)
             workoutBuilder = workoutSession?.associatedWorkoutBuilder()
-
             workoutSession?.delegate = self
             workoutBuilder?.delegate = self
             workoutBuilder?.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: config)
@@ -375,20 +354,16 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     private func endHealthKitSession() {
         guard let session = workoutSession, let builder = workoutBuilder else { return }
-
         session.end()
-        builder.endCollection(withEnd: Date()) { success, error in
+        builder.endCollection(withEnd: Date()) { success, _ in
             if success {
-                builder.finishWorkout { workout, error in
+                builder.finishWorkout { workout, _ in
                     if let workout {
-                        print("[BenLift/Watch] ✅ HKWorkout saved: \(workout.duration.formattedDuration), \(Int(workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0)) cal")
-                    } else if let error {
-                        print("[BenLift/Watch] ❌ Failed to finish workout: \(error)")
+                        print("[BenLift/Watch] ✅ HKWorkout saved: \(workout.duration.formattedDuration)")
                     }
                 }
             }
         }
-
         workoutSession = nil
         workoutBuilder = nil
     }
@@ -405,9 +380,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     // MARK: - HKLiveWorkoutBuilderDelegate
 
-    func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {
-        // Workout events collected
-    }
+    func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {}
 
     func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
         for type in collectedTypes {
@@ -415,12 +388,11 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
             if quantityType == HKQuantityType.quantityType(forIdentifier: .heartRate) {
                 let stats = workoutBuilder.statistics(for: quantityType)
-                let heartRateUnit = HKUnit.count().unitDivided(by: .minute())
-
-                if let mostRecent = stats?.mostRecentQuantity()?.doubleValue(for: heartRateUnit) {
+                let unit = HKUnit.count().unitDivided(by: .minute())
+                if let hr = stats?.mostRecentQuantity()?.doubleValue(for: unit) {
                     DispatchQueue.main.async {
-                        self.currentHeartRate = mostRecent
-                        self.heartRateSamples.append(mostRecent)
+                        self.currentHeartRate = hr
+                        self.heartRateSamples.append(hr)
                         self.averageHeartRate = self.heartRateSamples.reduce(0, +) / Double(self.heartRateSamples.count)
                     }
                 }
@@ -428,22 +400,20 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
             if quantityType == HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
                 let stats = workoutBuilder.statistics(for: quantityType)
-                if let total = stats?.sumQuantity()?.doubleValue(for: .kilocalorie()) {
-                    DispatchQueue.main.async {
-                        self.activeCalories = total
-                    }
+                if let cal = stats?.sumQuantity()?.doubleValue(for: .kilocalorie()) {
+                    DispatchQueue.main.async { self.activeCalories = cal }
                 }
             }
         }
     }
 }
 
-// MARK: - Watch Screen Enum
+// MARK: - Watch Screen
 
 enum WatchScreen: Equatable {
     case home
-    case exercise
+    case exerciseList  // the hub — pick any exercise
+    case exercise      // logging sets for a specific exercise
     case restTimer
-    case transition
     case summary
 }

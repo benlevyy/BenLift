@@ -5,7 +5,7 @@ struct ExerciseView: View {
     @State private var crownReps: Double = 0
 
     var body: some View {
-        let exercise = workoutVM.currentExercise
+        let exercise = workoutVM.activeExerciseInfo
 
         ScrollView {
             VStack(spacing: 10) {
@@ -17,7 +17,7 @@ struct ExerciseView: View {
                         .multilineTextAlignment(.center)
 
                     if workoutVM.isWarmupPhase {
-                        Text("Warm-up \(workoutVM.currentWarmupSetIndex + 1) of \(workoutVM.totalWarmupSets)")
+                        Text("Warm-up \(workoutVM.warmupSetIndex + 1) of \(workoutVM.totalWarmupSets)")
                             .font(.caption2)
                             .foregroundColor(.yellow)
                     } else {
@@ -27,7 +27,7 @@ struct ExerciseView: View {
                     }
                 }
 
-                // Weight with +/- buttons (no crown)
+                // Weight with +/- buttons
                 HStack(spacing: 12) {
                     Button {
                         workoutVM.adjustWeight(by: -workoutVM.weightIncrement)
@@ -105,17 +105,14 @@ struct ExerciseView: View {
                     workoutVM.currentReps = max(0, newValue)
                 }
 
-                // Heart rate (live)
+                // Heart rate
                 if workoutVM.currentHeartRate > 0 {
                     HStack(spacing: 4) {
                         Image(systemName: "heart.fill")
                             .foregroundColor(.red)
                             .font(.caption2)
-                        Text("\(Int(workoutVM.currentHeartRate))")
-                            .font(.caption.bold().monospacedDigit())
-                        Text("bpm")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                        Text("\(Int(workoutVM.currentHeartRate)) bpm")
+                            .font(.caption.monospacedDigit())
                     }
                 }
 
@@ -126,7 +123,7 @@ struct ExerciseView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // Log Set button
+                // Log Set
                 Button {
                     workoutVM.logSet()
                 } label: {
@@ -138,32 +135,18 @@ struct ExerciseView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(workoutVM.currentReps <= 0 && !workoutVM.isWarmupPhase)
 
-                // Skip / Next
-                HStack(spacing: 8) {
-                    Button {
-                        workoutVM.skipExercise()
-                    } label: {
-                        Text("Skip")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button {
-                        workoutVM.currentScreen = .transition
-                    } label: {
-                        Text("Next →")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(workoutVM.workingSetsCompleted == 0)
+                // Back to list
+                Button {
+                    workoutVM.backToList()
+                } label: {
+                    Text("← Back")
+                        .font(.caption2)
                 }
+                .buttonStyle(.bordered)
             }
             .padding(.horizontal, 4)
         }
         .onAppear {
-            crownReps = workoutVM.currentReps
-        }
-        .onChange(of: workoutVM.currentExerciseIndex) {
             crownReps = workoutVM.currentReps
         }
     }

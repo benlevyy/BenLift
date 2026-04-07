@@ -5,7 +5,6 @@ struct BenLift_Watch_Watch_AppApp: App {
     @StateObject private var workoutVM = WorkoutViewModel()
 
     init() {
-        // Activate WatchConnectivity
         WatchSyncService.shared.activate()
         print("[BenLift/Watch] App launched")
     }
@@ -17,7 +16,6 @@ struct BenLift_Watch_Watch_AppApp: App {
     }
 }
 
-/// Root view that switches screens based on WorkoutViewModel state
 struct WatchRootView: View {
     @ObservedObject var workoutVM: WorkoutViewModel
 
@@ -27,12 +25,12 @@ struct WatchRootView: View {
                 switch workoutVM.currentScreen {
                 case .home:
                     WatchHomeView(workoutVM: workoutVM)
+                case .exerciseList:
+                    ExerciseListHubView(workoutVM: workoutVM)
                 case .exercise:
                     ExerciseView(workoutVM: workoutVM)
                 case .restTimer:
                     RestTimerView(workoutVM: workoutVM)
-                case .transition:
-                    TransitionView(workoutVM: workoutVM)
                 case .summary:
                     WorkoutSummaryView(workoutVM: workoutVM)
                 }
