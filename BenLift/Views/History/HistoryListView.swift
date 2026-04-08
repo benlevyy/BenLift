@@ -5,26 +5,69 @@ struct HistoryListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
     @State private var showClearConfirm = false
+    @State private var activities: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = []
+
+    // Unified timeline item
+    private enum TimelineItem: Identifiable {
+        case workout(WorkoutSession)
+        case activity(index: Int, type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)
+
+        var id: String {
+            switch self {
+            case .workout(let s): return s.id.uuidString
+            case .activity(let i, _, let d, _, _, _): return "act-\(i)-\(d.timeIntervalSince1970)"
+            }
+        }
+
+        var date: Date {
+            switch self {
+            case .workout(let s): return s.date
+            case .activity(_, _, let d, _, _, _): return d
+            }
+        }
+    }
+
+    private var timeline: [TimelineItem] {
+        var items: [TimelineItem] = sessions.map { .workout($0) }
+        for (i, act) in activities.enumerated() {
+            items.append(.activity(index: i, type: act.type, date: act.date, duration: act.duration, calories: act.calories, source: act.source))
+        }
+        return items.sorted { $0.date > $1.date }
+    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if sessions.isEmpty {
+                if sessions.isEmpty && activities.isEmpty {
                     ContentUnavailableView(
-                        "No Workouts Yet",
+                        "No History Yet",
                         systemImage: "figure.strengthtraining.traditional",
                         description: Text("Start your first session from the Today tab.")
                     )
                 } else {
                     List {
-                        ForEach(sessions) { session in
-                            NavigationLink {
-                                SessionDetailView(session: session)
-                            } label: {
-                                sessionRow(session)
+                        ForEach(timeline) { item in
+                            switch item {
+                            case .workout(let session):
+                                NavigationLink {
+                                    SessionDetailView(session: session)
+                                } label: {
+                                    sessionRow(session)
+                                }
+                            case .activity(_, let type, let date, let duration, let calories, let source):
+                                activityRow(type: type, date: date, duration: duration, calories: calories, source: source)
                             }
                         }
-                        .onDelete(perform: deleteSessions)
+                        .onDelete { offsets in
+                            // Only delete workout sessions, not HealthKit activities
+                            let items = timeline
+                            for offset in offsets {
+                                if case .workout(let session) = items[offset] {
+                                    deleteSession(session)
+                                }
+                            }
+                            try? modelContext.save()
+                        }
                     }
                 }
             }
@@ -50,46 +93,63 @@ struct HistoryListView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will permanently delete all \(sessions.count) workout sessions and their AI analyses.")
+                Text("This will permanently delete all \(sessions.count) workout sessions and their AI analyses. HealthKit activities will remain.")
             }
+            .onAppear { loadActivities() }
         }
     }
 
-    // MARK: - Delete
+    // MARK: - Activity Row
 
-    private func deleteSessions(at offsets: IndexSet) {
-        for index in offsets {
-            deleteSession(sessions[index])
+    private func activityRow(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: activityIcon(type))
+                .font(.body)
+                .foregroundColor(.accentBlue)
+                .frame(width: 32, height: 32)
+                .background(Color.accentBlue.opacity(0.15))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(type.capitalized)
+                    .font(.body.bold())
+                Text(date.shortFormatted)
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
+
+                HStack(spacing: 8) {
+                    Text(duration.formattedDuration)
+                        .font(.caption)
+                        .foregroundColor(.secondaryText)
+                    if let cal = calories {
+                        Text("\(Int(cal)) cal")
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
+                    Text(source)
+                        .font(.caption2)
+                        .foregroundColor(.secondaryText)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.cardSurface)
+                        .cornerRadius(3)
+                }
+            }
+
+            Spacer()
+
+            // Label to distinguish from workouts
+            Text("Activity")
+                .font(.caption2)
+                .foregroundColor(.accentBlue)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.accentBlue.opacity(0.1))
+                .cornerRadius(4)
         }
-        try? modelContext.save()
     }
 
-    private func deleteSession(_ session: WorkoutSession) {
-        // Delete associated analysis
-        let sessionId = session.id
-        let analysisDescriptor = FetchDescriptor<PostWorkoutAnalysis>(
-            predicate: #Predicate { $0.sessionId == sessionId }
-        )
-        if let analyses = try? modelContext.fetch(analysisDescriptor) {
-            for analysis in analyses { modelContext.delete(analysis) }
-        }
-        // Delete child objects explicitly in case cascade doesn't fire
-        for entry in session.entries {
-            for set in entry.sets { modelContext.delete(set) }
-            modelContext.delete(entry)
-        }
-        modelContext.delete(session)
-    }
-
-    private func clearAllHistory() {
-        for session in sessions {
-            deleteSession(session)
-        }
-        try? modelContext.save()
-        print("[BenLift] Cleared all workout history")
-    }
-
-    // MARK: - Row
+    // MARK: - Workout Row
 
     private func sessionRow(_ session: WorkoutSession) -> some View {
         HStack(spacing: 12) {
@@ -147,6 +207,59 @@ struct HistoryListView: View {
                     .foregroundColor(analysis.overallRating.color)
                     .cornerRadius(6)
             }
+        }
+    }
+
+    // MARK: - Delete
+
+    private func deleteSessions(at offsets: IndexSet) {
+        for index in offsets {
+            deleteSession(sessions[index])
+        }
+        try? modelContext.save()
+    }
+
+    private func deleteSession(_ session: WorkoutSession) {
+        let sessionId = session.id
+        let analysisDescriptor = FetchDescriptor<PostWorkoutAnalysis>(
+            predicate: #Predicate { $0.sessionId == sessionId }
+        )
+        if let analyses = try? modelContext.fetch(analysisDescriptor) {
+            for analysis in analyses { modelContext.delete(analysis) }
+        }
+        for entry in session.entries {
+            for set in entry.sets { modelContext.delete(set) }
+            modelContext.delete(entry)
+        }
+        modelContext.delete(session)
+    }
+
+    private func clearAllHistory() {
+        for session in sessions {
+            deleteSession(session)
+        }
+        try? modelContext.save()
+        print("[BenLift] Cleared all workout history")
+    }
+
+    // MARK: - Activities
+
+    private func loadActivities() {
+        Task {
+            activities = await HealthKitService.shared.fetchRecentActivities(days: 30)
+        }
+    }
+
+    private func activityIcon(_ type: String) -> String {
+        switch type {
+        case "climbing": return "figure.climbing"
+        case "running": return "figure.run"
+        case "cycling": return "figure.outdoor.cycle"
+        case "swimming": return "figure.pool.swim"
+        case "yoga": return "figure.yoga"
+        case "hiking": return "figure.hiking"
+        case "hiit": return "figure.highintensity.intervaltraining"
+        default: return "figure.mixed.cardio"
         }
     }
 }
