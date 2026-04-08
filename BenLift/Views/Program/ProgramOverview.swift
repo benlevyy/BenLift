@@ -62,59 +62,118 @@ struct ProgramOverview: View {
 
     // MARK: - Muscle Status
 
+    @State private var overrides: [String: String] = [:]  // muscleGroup -> overridden status
+
     private var muscleStatusSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("MUSCLE STATUS")
-                .font(.caption.bold())
-                .foregroundColor(.secondaryText)
+            HStack {
+                Text("MUSCLE STATUS")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondaryText)
+                Spacer()
+                if !overrides.isEmpty {
+                    Button {
+                        overrides = [:]
+                    } label: {
+                        Text("Reset")
+                            .font(.caption2)
+                            .foregroundColor(.accentBlue)
+                    }
+                }
+            }
 
             if let rec = coachVM.recommendation {
-                // Show from latest AI recommendation
                 ForEach(rec.muscleGroupStatus) { mg in
-                    muscleStatusRow(name: mg.muscleGroup, status: mg.status, level: mg.statusLevel, note: mg.note)
+                    let effectiveStatus = overrides[mg.muscleGroup] ?? mg.status
+                    let effectiveLevel = statusLevel(effectiveStatus)
+                    tappableStatusRow(
+                        name: mg.muscleGroup,
+                        status: effectiveStatus,
+                        level: effectiveLevel,
+                        isOverridden: overrides[mg.muscleGroup] != nil
+                    )
                 }
-
-                Text("Based on check-in")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondaryText)
             } else {
-                // Compute from workout history (no AI yet)
                 ForEach(computedMuscleStatus(), id: \.name) { mg in
-                    muscleStatusRow(name: mg.name, status: mg.status, level: mg.level, note: nil)
+                    let effectiveStatus = overrides[mg.name] ?? mg.status
+                    let effectiveLevel = statusLevel(effectiveStatus)
+                    tappableStatusRow(
+                        name: mg.name,
+                        status: effectiveStatus,
+                        level: effectiveLevel,
+                        isOverridden: overrides[mg.name] != nil
+                    )
                 }
-
-                Text("Based on workout history — do a check-in on Today tab for AI-powered status")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondaryText)
             }
+
+            Text("Tap a muscle group to adjust")
+                .font(.system(size: 9))
+                .foregroundColor(.secondaryText)
         }
         .padding()
         .background(Color.cardSurface)
         .cornerRadius(12)
+        .onChange(of: overrides) { _, newOverrides in
+            // Feed overrides into coach concerns for next recommendation
+            if !newOverrides.isEmpty {
+                let soreGroups = newOverrides.filter { $0.value == "sore" }.map { $0.key.capitalized }
+                let recoveringGroups = newOverrides.filter { $0.value == "recovering" }.map { $0.key.capitalized }
+                var parts: [String] = []
+                if !soreGroups.isEmpty { parts.append("\(soreGroups.joined(separator: ", ")) sore") }
+                if !recoveringGroups.isEmpty { parts.append("\(recoveringGroups.joined(separator: ", ")) recovering") }
+                coachVM.concerns = parts.joined(separator: ". ")
+            }
+        }
     }
 
-    private func muscleStatusRow(name: String, status: String, level: Double, note: String?) -> some View {
-        HStack(spacing: 8) {
-            Text(name.capitalized)
-                .font(.caption)
-                .frame(width: 70, alignment: .trailing)
-                .foregroundColor(.secondaryText)
+    private let statusCycle = ["fresh", "ready", "recovering", "sore"]
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.gray.opacity(0.2))
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(statusColor(status))
-                        .frame(width: geo.size.width * level)
+    private func tappableStatusRow(name: String, status: String, level: Double, isOverridden: Bool) -> some View {
+        Button {
+            let currentIndex = statusCycle.firstIndex(of: status) ?? 0
+            let nextIndex = (currentIndex + 1) % statusCycle.count
+            overrides[name] = statusCycle[nextIndex]
+        } label: {
+            HStack(spacing: 8) {
+                HStack(spacing: 3) {
+                    if isOverridden {
+                        Circle()
+                            .fill(Color.accentBlue)
+                            .frame(width: 4, height: 4)
+                    }
+                    Text(name.capitalized)
+                        .font(.caption)
+                        .foregroundColor(isOverridden ? .primary : .secondaryText)
                 }
-            }
-            .frame(height: 10)
+                .frame(width: 75, alignment: .trailing)
 
-            Text(status)
-                .font(.caption2)
-                .foregroundColor(statusColor(status))
-                .frame(width: 60, alignment: .leading)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.gray.opacity(0.2))
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(statusColor(status))
+                            .frame(width: geo.size.width * level)
+                    }
+                }
+                .frame(height: 10)
+
+                Text(status)
+                    .font(.caption2)
+                    .foregroundColor(statusColor(status))
+                    .frame(width: 60, alignment: .leading)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func statusLevel(_ status: String) -> Double {
+        switch status {
+        case "fresh": return 1.0
+        case "ready": return 0.75
+        case "recovering": return 0.4
+        case "sore": return 0.15
+        default: return 0.5
         }
     }
 
