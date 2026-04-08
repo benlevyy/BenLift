@@ -45,6 +45,8 @@ struct TodayView: View {
                     // Exercise plan (if generated)
                     if !coachVM.editedExercises.isEmpty {
                         planSection
+                            .id(planRevision)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
 
                     // Adjust section — feeling + soreness + regenerate
@@ -219,61 +221,101 @@ struct TodayView: View {
     @State private var showAddExercise = false
     @State private var showWatchAlert = false
 
-    // MARK: - Adjust Section (feeling + soreness + regenerate)
+    // MARK: - Adjust Section
+
+    @State private var showAdjustSheet = false
+    @State private var adjustText = ""
+    @State private var planRevision = 0 // triggers animation on change
 
     private var adjustSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Feeling
-            HStack(spacing: 6) {
-                Text("Feeling")
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
-                ForEach(1...5, id: \.self) { level in
-                    Button {
-                        feeling = level
-                    } label: {
-                        Text("\(level)")
-                            .font(.caption.bold())
-                            .frame(width: 32, height: 32)
-                            .background(feeling == level ? feelingColor(level) : Color.cardSurface)
-                            .foregroundColor(feeling == level ? .white : .primary)
-                            .cornerRadius(8)
-                    }
-                }
+        Button {
+            showAdjustSheet = true
+        } label: {
+            HStack {
+                Image(systemName: "pencil.circle.fill")
+                Text("Adjust Plan")
             }
-
-            // Soreness + regenerate
-            HStack(spacing: 8) {
-                TextField("Anything sore? Adjust plan...", text: $sorenessText, axis: .vertical)
-                    .lineLimit(1...3)
-                    .font(.caption)
-                    .textFieldStyle(.roundedBorder)
-                    .submitLabel(.send)
-                    .onSubmit { regenerate() }
-
-                Button {
-                    regenerate()
-                } label: {
-                    Image(systemName: "arrow.clockwise.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(.accentBlue)
-                }
-                .disabled(coachVM.isLoadingRecommendation || coachVM.isGenerating)
-            }
+            .font(.subheadline)
+            .foregroundColor(.accentBlue)
+            .frame(maxWidth: .infinity)
+            .padding(12)
+            .background(Color.accentBlue.opacity(0.1))
+            .cornerRadius(10)
         }
-        .padding()
-        .background(Color.cardSurface)
-        .cornerRadius(12)
+        .sheet(isPresented: $showAdjustSheet) {
+            adjustSheetContent
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
     }
 
-    @State private var overrideText = ""
+    private var adjustSheetContent: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                // Feeling
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("How do you feel?")
+                        .font(.subheadline.bold())
+                    HStack(spacing: 8) {
+                        ForEach(1...5, id: \.self) { level in
+                            Button {
+                                feeling = level
+                            } label: {
+                                Text("\(level)")
+                                    .font(.headline)
+                                    .frame(width: 48, height: 48)
+                                    .background(feeling == level ? feelingColor(level) : Color.cardSurface)
+                                    .foregroundColor(feeling == level ? .white : .primary)
+                                    .cornerRadius(12)
+                            }
+                        }
+                    }
+                }
 
-    private func regenerate() {
-        coachVM.feeling = feeling
-        coachVM.concerns = sorenessText
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        Task {
-            await coachVM.getRecommendationAndPlan(modelContext: modelContext, program: programVM.currentProgram)
+                // What to change
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What should change?")
+                        .font(.subheadline.bold())
+                    TextField("e.g. legs sore, swap OHP for machine, more chest...", text: $adjustText, axis: .vertical)
+                        .lineLimit(2...5)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Spacer()
+
+                // Submit
+                Button {
+                    showAdjustSheet = false
+                    coachVM.feeling = feeling
+                    coachVM.concerns = adjustText
+                    adjustText = ""
+                    Task {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            planRevision += 1  // triggers fade-out
+                        }
+                        await coachVM.getRecommendationAndPlan(modelContext: modelContext, program: programVM.currentProgram)
+                        withAnimation(.easeIn(duration: 0.3)) {
+                            planRevision += 1  // triggers fade-in
+                        }
+                    }
+                } label: {
+                    Text("Regenerate Plan")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentBlue)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                }
+            }
+            .padding()
+            .navigationTitle("Adjust")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showAdjustSheet = false }
+                }
+            }
         }
     }
 
@@ -308,6 +350,16 @@ struct TodayView: View {
     }
 
     // MARK: - Helpers
+
+    private func intentColor(_ intent: String?) -> Color {
+        switch intent {
+        case "primary compound": return .accentBlue
+        case "secondary compound": return .pushBlue
+        case "isolation": return .secondaryText
+        case "finisher": return .legsOrange
+        default: return .secondaryText
+        }
+    }
 
     private func feelingColor(_ level: Int) -> Color {
         switch level {
