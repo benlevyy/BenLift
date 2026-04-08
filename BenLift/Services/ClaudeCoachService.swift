@@ -133,7 +133,7 @@ actor ClaudeCoachService: CoachServiceProtocol {
 
     func analyzePostWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> PostWorkoutAnalysisResponse {
         print("[BenLift/API] analyzePostWorkout called with model: \(model)")
-        return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 4096, label: "analyzePostWorkout")
+        return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 1024, label: "analyzePostWorkout")
     }
 
     func generateWeeklyReview(systemPrompt: String, userPrompt: String, model: String) async throws -> WeeklyReviewResponse {

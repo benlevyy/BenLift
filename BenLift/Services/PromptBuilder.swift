@@ -243,8 +243,9 @@ struct PromptBuilder {
         var system = sharedSystemPrefix(program: program, healthContext: healthContext)
         system += """
 
-        Analyze this workout. Respond ONLY in JSON:
-        {"summary":"string","performanceVsplan":{"adherence":double,"notes":"string"}?,"progressionEvents":[{"exercise":"string","type":"rep_pr|weight_pr|plateau|regression","detail":"string","recommendation":"string"}],"volumeAnalysis":{"muscleGroup":{"actual":int,"weeklyTarget":int,"weeklyActual":int,"status":"string"}}?,"recoveryNotes":"string?","overallRating":"pr_day|good|average|recovery","coachNote":"string"}
+        Analyze this workout. Be CONCISE — one short paragraph for coachNote, one line per progression event.
+        Respond ONLY in JSON:
+        {"summary":"one sentence headline","progressionEvents":[{"exercise":"string","type":"rep_pr|weight_pr|plateau|regression","detail":"one line","recommendation":"one line"}],"overallRating":"pr_day|good|average|recovery","coachNote":"2-3 sentences max, actionable"}
         """
 
         var user = "Analyze this workout session:\n\n"

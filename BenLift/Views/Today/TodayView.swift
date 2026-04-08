@@ -83,8 +83,7 @@ struct TodayView: View {
                     PostWorkoutSheet(
                         result: result,
                         analysisVM: analysisVM,
-                        programVM: programVM,
-                        modelContext: modelContext
+                        programVM: programVM
                     )
                 }
             }
@@ -976,7 +975,7 @@ struct PostWorkoutSheet: View {
     let result: WatchWorkoutResult
     @Bindable var analysisVM: AnalysisViewModel
     @Bindable var programVM: ProgramViewModel
-    let modelContext: ModelContext
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
