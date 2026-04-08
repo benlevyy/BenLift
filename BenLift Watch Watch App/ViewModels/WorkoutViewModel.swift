@@ -143,6 +143,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         print("[BenLift/Watch] Settings: rest=\(restTimerDuration)s, increment=\(weightIncrement)lbs")
 
         startHealthKitSession()
+        WatchSyncService.shared.sendWorkoutStarted()
         currentScreen = .exerciseList
         print("[BenLift/Watch] Started \(plan.category.displayName) workout: \(plan.exercises.count) exercises")
     }
@@ -162,7 +163,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         // Load defaults
         if state.isWarmupPhase && state.warmupSetsCompleted < state.totalWarmups {
             let warmup = state.info.warmupSets![state.warmupSetsCompleted]
-            currentWeight = warmup.weight
+            currentWeight = warmup.displayWeight
             currentReps = Double(warmup.reps)
         } else {
             currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
@@ -202,7 +203,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             } else {
                 // Next warmup
                 let nextWarmup = state.info.warmupSets![state.warmupSetsCompleted]
-                currentWeight = nextWarmup.weight
+                currentWeight = nextWarmup.displayWeight
                 currentReps = Double(nextWarmup.reps)
             }
             exerciseStates[idx] = state
@@ -212,7 +213,17 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         exerciseStates[idx] = state
 
-        // Start rest timer, then return to exercise list
+        // Set rest duration based on exercise intent
+        if let intent = state.info.intent {
+            switch intent {
+            case "primary compound": restTimerDuration = 180   // 3:00
+            case "secondary compound": restTimerDuration = 120 // 2:00
+            case "isolation": restTimerDuration = 75            // 1:15
+            case "finisher": restTimerDuration = 60             // 1:00
+            default: break // keep current setting
+            }
+        }
+
         startRestTimer()
     }
 
@@ -228,18 +239,25 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             guard let self else { return }
             DispatchQueue.main.async {
                 self.restTimerRemaining -= 1
+
+                // Buzz at 30s remaining
                 if self.restTimerRemaining <= 30 && self.restTimerRemaining > 29 {
                     WKInterfaceDevice.current().play(.click)
                 }
-                if self.restTimerRemaining <= 0 {
-                    self.finishRest()
+                // Buzz when timer hits 0 — but keep counting into negative
+                if self.restTimerRemaining <= 0 && self.restTimerRemaining > -1 {
                     WKInterfaceDevice.current().play(.notification)
                 }
+                // Timer keeps running — user taps "Go" when ready
             }
         }
     }
 
     func skipRest() { finishRest() }
+
+    func adjustRestTimer(by seconds: Double) {
+        restTimerRemaining += seconds
+    }
 
     private func finishRest() {
         restTimer?.invalidate()
@@ -320,6 +338,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         // Send result
         WatchSyncService.shared.sendWorkoutResult(result)
+        WatchSyncService.shared.sendWorkoutEnded()
 
         // Haptic
         WKInterfaceDevice.current().play(.success)
@@ -346,6 +365,35 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     func adjustReps(by delta: Double) {
         currentReps = max(0, currentReps + delta)
+    }
+
+    /// Toggle failed rep: 8 → 8.5 (failed) → 8 (unfailed)
+    func toggleFailedRep() {
+        if currentReps.truncatingRemainder(dividingBy: 1) != 0 {
+            // Already has .5 — remove it
+            currentReps = floor(currentReps)
+        } else {
+            // Add .5 to mark failed
+            currentReps += 0.5
+        }
+        WKInterfaceDevice.current().play(.failure)
+    }
+
+    /// Undo the last logged set for the current exercise
+    func undoLastSet() {
+        guard let idx = activeExerciseIndex,
+              !exerciseStates[idx].loggedSets.isEmpty else { return }
+
+        let removed = exerciseStates[idx].loggedSets.removeLast()
+        // Restore weight/reps from undone set
+        currentWeight = removed.weight
+        currentReps = removed.reps
+        // If we undid back into warmup phase
+        if removed.isWarmup {
+            exerciseStates[idx].isWarmupPhase = true
+        }
+        WKInterfaceDevice.current().play(.click)
+        print("[BenLift/Watch] Undid set: \(Int(removed.weight))×\(removed.reps.formattedReps)")
     }
 
     func logFailedRep() {

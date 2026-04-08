@@ -96,7 +96,7 @@ struct DailyPlanResponse: Codable {
     let deloadNote: String?
 }
 
-struct PlannedExercise: Codable, Identifiable {
+struct PlannedExercise: Identifiable {
     var id: String { name }
     let name: String
     let sets: Int
@@ -111,9 +111,39 @@ struct PlannedExercise: Codable, Identifiable {
     var weight: Double { suggestedWeight ?? 0 }
 }
 
+extension PlannedExercise: Codable {
+    enum CodingKeys: String, CodingKey {
+        case name, sets, targetReps, suggestedWeight, repScheme, warmupSets, notes, intent
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        sets = try container.decode(Int.self, forKey: .sets)
+        targetReps = try container.decode(String.self, forKey: .targetReps)
+        repScheme = try container.decodeIfPresent(String.self, forKey: .repScheme)
+        warmupSets = try container.decodeIfPresent([WarmupSet].self, forKey: .warmupSets)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        intent = try container.decodeIfPresent(String.self, forKey: .intent)
+
+        // Handle suggestedWeight as Double, String, or null
+        if let d = try? container.decodeIfPresent(Double.self, forKey: .suggestedWeight) {
+            suggestedWeight = d
+        } else if let s = try? container.decodeIfPresent(String.self, forKey: .suggestedWeight) {
+            // Try to extract number from strings like "Bodyweight + 0 lbs"
+            let digits = s.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+            suggestedWeight = Double(digits)
+        } else {
+            suggestedWeight = nil
+        }
+    }
+}
+
 struct WarmupSet: Codable {
-    let weight: Double
+    let weight: Double?
     let reps: Int
+
+    var displayWeight: Double { weight ?? 0 }
 }
 
 // MARK: - Touchpoint 3: Mid-Workout Adapt Response

@@ -91,10 +91,14 @@ private struct ClaudeAPIResponse: Decodable {
     struct Usage: Decodable {
         let inputTokens: Int
         let outputTokens: Int
+        let cacheCreationInputTokens: Int?
+        let cacheReadInputTokens: Int?
 
         enum CodingKeys: String, CodingKey {
             case inputTokens = "input_tokens"
             case outputTokens = "output_tokens"
+            case cacheCreationInputTokens = "cache_creation_input_tokens"
+            case cacheReadInputTokens = "cache_read_input_tokens"
         }
     }
 }
@@ -159,13 +163,14 @@ actor ClaudeCoachService: CoachServiceProtocol {
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        request.setValue("prompt-caching-2024-07-31", forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.timeoutInterval = 30
 
         let body = ClaudeRequest(
             model: model,
             maxTokens: maxTokens,
-            system: systemPrompt,
+            system: buildSystemBlocks(systemPrompt: systemPrompt),
             messages: [ClaudeMessage(role: "user", content: userPrompt)]
         )
         let encodedBody = try JSONEncoder().encode(body)
@@ -237,7 +242,14 @@ actor ClaudeCoachService: CoachServiceProtocol {
         }
 
         if let usage = apiResponse.usage {
-            print("[BenLift/API] ✓ Tokens: \(usage.inputTokens) in, \(usage.outputTokens) out")
+            var tokenLog = "[BenLift/API] ✓ Tokens: \(usage.inputTokens) in, \(usage.outputTokens) out"
+            if let cacheWrite = usage.cacheCreationInputTokens, cacheWrite > 0 {
+                tokenLog += " | cache WRITE: \(cacheWrite) tokens"
+            }
+            if let cacheRead = usage.cacheReadInputTokens, cacheRead > 0 {
+                tokenLog += " | cache HIT: \(cacheRead) tokens (90% savings)"
+            }
+            print(tokenLog)
         }
 
         // Clean up potential markdown wrapping

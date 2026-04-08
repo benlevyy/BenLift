@@ -10,6 +10,7 @@ class WatchSyncService: NSObject, WCSessionDelegate {
     var isReachable = false
     var isPaired = false
     var isWatchAppInstalled = false
+    var isWorkoutActive = false  // Set by Watch via message when workout starts/ends
 
     // iOS: received workout result from Watch
     var receivedWorkoutResult: WatchWorkoutResult? {
@@ -170,6 +171,39 @@ class WatchSyncService: NSObject, WCSessionDelegate {
         default:
             print("[BenLift/Sync] Unknown userInfo type: \(type)")
         }
+    }
+
+    // MARK: - Receive sendMessage (real-time)
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        if let type = message["type"] as? String {
+            switch type {
+            case "workoutStarted":
+                DispatchQueue.main.async {
+                    self.isWorkoutActive = true
+                    print("[BenLift/Sync] ← Watch workout started")
+                }
+            case "workoutEnded":
+                DispatchQueue.main.async {
+                    self.isWorkoutActive = false
+                    print("[BenLift/Sync] ← Watch workout ended")
+                }
+            default:
+                print("[BenLift/Sync] Unknown message type: \(type)")
+            }
+        }
+    }
+
+    // MARK: - Watch → iPhone: Send workout status (call from Watch side)
+
+    func sendWorkoutStarted() {
+        guard WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(["type": "workoutStarted"], replyHandler: nil, errorHandler: nil)
+    }
+
+    func sendWorkoutEnded() {
+        guard WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(["type": "workoutEnded"], replyHandler: nil, errorHandler: nil)
     }
 
     // MARK: - Receive applicationContext

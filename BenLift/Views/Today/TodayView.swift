@@ -14,8 +14,8 @@ struct TodayView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Workout in progress banner
-                    if WatchSyncService.shared.isReachable {
+                    // Workout in progress banner — only shows when Watch reports active workout
+                    if WatchSyncService.shared.isWorkoutActive {
                         workoutInProgressBanner
                     }
 

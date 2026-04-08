@@ -61,8 +61,8 @@ struct ExerciseView: View {
                     .buttonStyle(.plain)
                 }
 
-                // Reps — Digital Crown + buttons
-                HStack(spacing: 14) {
+                // Reps — Digital Crown + buttons + [F] for failed
+                HStack(spacing: 10) {
                     Button {
                         workoutVM.adjustReps(by: -1)
                         crownReps = workoutVM.currentReps
@@ -71,13 +71,6 @@ struct ExerciseView: View {
                             .font(.title2)
                     }
                     .buttonStyle(.plain)
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.5)
-                            .onEnded { _ in
-                                workoutVM.logFailedRep()
-                                crownReps = workoutVM.currentReps
-                            }
-                    )
 
                     Text(workoutVM.currentReps.formattedReps)
                         .font(.system(size: 34, weight: .bold, design: .rounded))
@@ -90,6 +83,20 @@ struct ExerciseView: View {
                     } label: {
                         Image(systemName: "plus.circle.fill")
                             .font(.title2)
+                    }
+                    .buttonStyle(.plain)
+
+                    // Failed rep toggle
+                    Button {
+                        workoutVM.toggleFailedRep()
+                        crownReps = workoutVM.currentReps
+                    } label: {
+                        Text("F")
+                            .font(.caption.bold())
+                            .foregroundColor(workoutVM.currentReps.truncatingRemainder(dividingBy: 1) != 0 ? .white : .red)
+                            .frame(width: 26, height: 26)
+                            .background(workoutVM.currentReps.truncatingRemainder(dividingBy: 1) != 0 ? Color.red : Color.red.opacity(0.2))
+                            .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -135,13 +142,26 @@ struct ExerciseView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(workoutVM.currentReps <= 0 && !workoutVM.isWarmupPhase)
 
-                // Skip warmup / Back
-                HStack(spacing: 8) {
+                // Undo / Skip Warmup / Back
+                HStack(spacing: 6) {
+                    // Undo last set
+                    if let ex = workoutVM.activeExercise, !ex.loggedSets.isEmpty {
+                        Button {
+                            workoutVM.undoLastSet()
+                            crownReps = workoutVM.currentReps
+                        } label: {
+                            Text("Undo")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    // Skip warmups
                     if workoutVM.isWarmupPhase {
                         Button {
                             workoutVM.skipWarmups()
                         } label: {
-                            Text("Skip Warm-ups")
+                            Text("Skip W")
                                 .font(.caption2)
                         }
                         .buttonStyle(.bordered)
