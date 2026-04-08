@@ -10,31 +10,34 @@ struct TodayView: View {
     @State private var workoutResult: WatchWorkoutResult?
     @State private var showPostWorkout = false
 
+    // Check-in state
+    @State private var feeling: Int = 3
+    @State private var sorenessText: String = ""
+    @State private var showPlanView = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
-                    // Workout in progress banner — only shows when Watch reports active workout
+                VStack(spacing: 16) {
+                    // Workout in progress banner
                     if WatchSyncService.shared.isWorkoutActive {
                         workoutInProgressBanner
                     }
 
-                    // Week status
-                    weekStatusBar
-
-                    // Category buttons
-                    categoryButtons
-
-                    // Active plan view
-                    if let category = selectedCategory {
-                        ActivePlanView(
-                            coachVM: coachVM,
-                            programVM: programVM,
-                            category: category,
-                            onDismiss: { selectedCategory = nil }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    // State machine: check-in → recommendation → plan
+                    if showPlanView && !coachVM.editedExercises.isEmpty {
+                        // Phase 3: Plan review
+                        planReviewSection
+                    } else if coachVM.recommendation != nil {
+                        // Phase 2: AI recommendation with muscle status
+                        recommendationSection
+                    } else {
+                        // Phase 1: Check-in
+                        checkInSection
                     }
+
+                    // Quick PPL fallback (collapsed)
+                    pplFallbackButtons
                 }
                 .padding()
             }
@@ -59,11 +62,256 @@ struct TodayView: View {
                     )
                 }
             }
-            .animation(.easeInOut(duration: 0.25), value: selectedCategory)
         }
     }
 
-    // MARK: - Week Status
+    // MARK: - Phase 1: Check-in
+
+    private var checkInSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("How do you feel?")
+                .font(.headline)
+
+            // Feeling selector
+            HStack(spacing: 8) {
+                ForEach(1...5, id: \.self) { level in
+                    Button {
+                        feeling = level
+                    } label: {
+                        Text("\(level)")
+                            .font(.headline)
+                            .frame(width: 44, height: 44)
+                            .background(feeling == level ? feelingColor(level) : Color.cardSurface)
+                            .foregroundColor(feeling == level ? .white : .primary)
+                            .cornerRadius(10)
+                    }
+                }
+            }
+
+            // Soreness input
+            TextField("Anything sore or off? (optional)", text: $sorenessText, axis: .vertical)
+                .lineLimit(1...3)
+                .textFieldStyle(.roundedBorder)
+                .font(.subheadline)
+
+            // Get recommendation button
+            Button {
+                coachVM.feeling = feeling
+                coachVM.concerns = sorenessText
+                Task {
+                    await coachVM.getRecommendation(modelContext: modelContext, program: programVM.currentProgram)
+                }
+            } label: {
+                HStack {
+                    if coachVM.isLoadingRecommendation {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text(coachVM.isLoadingRecommendation ? "Analyzing..." : "Get Recommendation")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.accentBlue)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            .disabled(coachVM.isLoadingRecommendation)
+
+            if let error = coachVM.planError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.failedRed)
+            }
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(16)
+    }
+
+    // MARK: - Phase 2: Recommendation
+
+    private var recommendationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let rec = coachVM.recommendation {
+                // Header
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Today's Focus")
+                            .font(.caption.bold())
+                            .foregroundColor(.secondaryText)
+                            .textCase(.uppercase)
+                        Text(rec.recommendedSessionName)
+                            .font(.title3.bold())
+                    }
+                    Spacer()
+                    Button {
+                        coachVM.recommendation = nil
+                        coachVM.planError = nil
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
+                }
+
+                // Reasoning
+                Text(rec.reasoning)
+                    .font(.subheadline)
+                    .foregroundColor(.secondaryText)
+
+                // Muscle group status bars
+                VStack(spacing: 6) {
+                    ForEach(rec.muscleGroupStatus) { mg in
+                        HStack(spacing: 8) {
+                            Text(mg.muscleGroup.capitalized)
+                                .font(.caption2)
+                                .frame(width: 65, alignment: .trailing)
+                                .foregroundColor(.secondaryText)
+
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(Color.gray.opacity(0.2))
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(statusColor(mg.status))
+                                        .frame(width: geo.size.width * mg.statusLevel)
+                                }
+                            }
+                            .frame(height: 8)
+
+                            Text(mg.status)
+                                .font(.system(size: 9))
+                                .foregroundColor(statusColor(mg.status))
+                                .frame(width: 55, alignment: .leading)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+
+                // Generate plan button
+                Button {
+                    showPlanView = true
+                    Task {
+                        await coachVM.generatePlan(modelContext: modelContext, program: programVM.currentProgram)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("Generate Plan")
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.accentBlue)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+
+                // Override with text
+                HStack(spacing: 8) {
+                    TextField("Want something different?", text: $overrideText, axis: .vertical)
+                        .lineLimit(1...3)
+                        .font(.caption)
+                        .textFieldStyle(.roundedBorder)
+                        .submitLabel(.send)
+                        .onSubmit { submitOverride() }
+
+                    if !overrideText.isEmpty {
+                        Button {
+                            submitOverride()
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.accentBlue)
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(16)
+    }
+
+    @State private var overrideText = ""
+
+    private func submitOverride() {
+        guard !overrideText.isEmpty else { return }
+        coachVM.concerns = overrideText
+        overrideText = ""
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        Task {
+            await coachVM.getRecommendation(modelContext: modelContext, program: programVM.currentProgram)
+        }
+    }
+
+    // MARK: - Phase 3: Plan Review
+
+    private var planReviewSection: some View {
+        ActivePlanView(
+            coachVM: coachVM,
+            programVM: programVM,
+            category: selectedCategory ?? .push,
+            onDismiss: {
+                showPlanView = false
+                coachVM.recommendation = nil
+            }
+        )
+    }
+
+    // MARK: - PPL Fallback Buttons
+
+    private var pplFallbackButtons: some View {
+        DisclosureGroup("Quick Start (Push / Pull / Legs)") {
+            HStack(spacing: 8) {
+                ForEach(WorkoutCategory.allCases) { category in
+                    Button {
+                        selectedCategory = category
+                        coachVM.selectedCategory = category
+                        coachVM.targetMuscleGroups = category.muscleGroups
+                        coachVM.currentSessionName = category.displayName
+                        coachVM.loadLastWeights(for: category, modelContext: modelContext)
+                        coachVM.loadDefaultTemplate(category: category, modelContext: modelContext)
+                        showPlanView = true
+                    } label: {
+                        Text(category.displayName)
+                            .font(.subheadline.bold())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(category.color.opacity(0.2))
+                            .foregroundColor(category.color)
+                            .cornerRadius(8)
+                    }
+                }
+            }
+        }
+        .font(.subheadline)
+        .foregroundColor(.secondaryText)
+    }
+
+    // MARK: - Helpers
+
+    private func feelingColor(_ level: Int) -> Color {
+        switch level {
+        case 1: return .failedRed
+        case 2: return .legsOrange
+        case 3: return .secondaryText
+        case 4: return .pushBlue
+        case 5: return .prGreen
+        default: return .secondaryText
+        }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status {
+        case "fresh": return .prGreen
+        case "ready": return .pushBlue
+        case "recovering": return .legsOrange
+        case "sore": return .failedRed
+        default: return .secondaryText
+        }
+    }
 
     // MARK: - Workout Result Handling
 
@@ -141,81 +389,6 @@ struct TodayView: View {
         .cornerRadius(10)
     }
 
-    private var weekStatusBar: some View {
-        let status = programVM.currentWeekStatus(modelContext: modelContext)
-        return HStack {
-            if status.planned > 0 {
-                Text("\(status.completed)/\(status.planned) sessions this week")
-                    .font(.subheadline)
-                    .foregroundColor(.secondaryText)
-            }
-            Spacer()
-            if let suggested = programVM.todaysSuggestedCategory() {
-                Text("Today: \(suggested.displayName)")
-                    .font(.subheadline.bold())
-                    .foregroundColor(suggested.color)
-            }
-        }
-    }
-
-    // MARK: - Category Buttons
-
-    private var categoryButtons: some View {
-        HStack(spacing: 12) {
-            ForEach(WorkoutCategory.allCases) { category in
-                categoryButton(category)
-            }
-        }
-    }
-
-    private func categoryButton(_ category: WorkoutCategory) -> some View {
-        let suggested = programVM.todaysSuggestedCategory()
-        let isSuggested = category == suggested
-        let isSelected = selectedCategory == category
-        let daysSince = coachVM.daysSinceLast[category]
-
-        return Button {
-            if selectedCategory == category {
-                selectedCategory = nil
-            } else {
-                // Save current plan if switching categories
-                coachVM.savePlanForCurrentCategory()
-
-                selectedCategory = category
-                coachVM.selectedCategory = category
-
-                // Try to restore a saved plan, else load defaults
-                if !coachVM.restorePlan(for: category) {
-                    coachVM.loadLastWeights(for: category, modelContext: modelContext)
-                    coachVM.loadDefaultTemplate(category: category, modelContext: modelContext)
-                }
-            }
-        } label: {
-            VStack(spacing: 6) {
-                Text(category.displayName)
-                    .font(.headline)
-                    .foregroundColor(isSelected ? .white : category.color)
-
-                if let days = daysSince {
-                    Text("\(days)d ago")
-                        .font(.caption)
-                        .foregroundColor(isSelected ? .white.opacity(0.7) : .secondaryText)
-                } else {
-                    Text("—")
-                        .font(.caption)
-                        .foregroundColor(.secondaryText)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
-            .background(isSelected ? category.color : category.color.opacity(0.15))
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSuggested && !isSelected ? category.color : Color.clear, lineWidth: 2)
-            )
-        }
-    }
 }
 
 // MARK: - Active Plan View

@@ -101,8 +101,11 @@ struct HistoryListView: View {
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 4) {
+                Text(session.displayName)
+                    .font(.body.bold())
                 Text(session.date.shortFormatted)
-                    .font(.body)
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
 
                 HStack(spacing: 8) {
                     if let duration = session.duration {
