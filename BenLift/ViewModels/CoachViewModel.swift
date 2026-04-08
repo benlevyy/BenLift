@@ -89,6 +89,18 @@ class CoachViewModel {
         isLoadingRecommendation = false
     }
 
+    // MARK: - One-Shot: Recommendation + Plan
+
+    @MainActor
+    func getRecommendationAndPlan(modelContext: ModelContext, program: TrainingProgram?) async {
+        // Step 1: Get recommendation (Sonnet)
+        await getRecommendation(modelContext: modelContext, program: program)
+
+        // Step 2: If recommendation succeeded, auto-generate plan (Haiku)
+        guard recommendation != nil, !targetMuscleGroups.isEmpty else { return }
+        await generatePlan(modelContext: modelContext, program: program)
+    }
+
     // MARK: - Step 2: Generate Plan (Haiku)
 
     @MainActor

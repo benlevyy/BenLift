@@ -24,16 +24,40 @@ struct TodayView: View {
                         workoutInProgressBanner
                     }
 
-                    // State machine: check-in → recommendation → plan
-                    if showPlanView && !coachVM.editedExercises.isEmpty {
-                        // Phase 3: Plan review
-                        planReviewSection
-                    } else if coachVM.recommendation != nil {
-                        // Phase 2: AI recommendation with muscle status
-                        recommendationSection
-                    } else {
-                        // Phase 1: Check-in
-                        checkInSection
+                    // Loading state
+                    if coachVM.isLoadingRecommendation || coachVM.isGenerating {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                            Text(coachVM.isLoadingRecommendation ? "Analyzing recovery..." : "Building plan...")
+                                .font(.subheadline)
+                                .foregroundColor(.secondaryText)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                    }
+
+                    // AI recommendation header (if available)
+                    if let rec = coachVM.recommendation {
+                        recommendationHeader(rec)
+                    }
+
+                    // Exercise plan (if generated)
+                    if !coachVM.editedExercises.isEmpty {
+                        planSection
+                    }
+
+                    // Adjust section — feeling + soreness + regenerate
+                    adjustSection
+
+                    // Error
+                    if let error = coachVM.planError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.failedRed)
+                            .padding(8)
+                            .background(Color.failedRed.opacity(0.1))
+                            .cornerRadius(6)
                     }
 
                     // Quick PPL fallback (collapsed)
@@ -65,199 +89,192 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Phase 1: Check-in
+    // MARK: - Recommendation Header
 
-    private var checkInSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("How do you feel?")
-                .font(.headline)
+    private func recommendationHeader(_ rec: RecoveryRecommendation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(rec.recommendedSessionName)
+                .font(.title3.bold())
 
-            // Feeling selector
+            Text(rec.reasoning)
+                .font(.caption)
+                .foregroundColor(.secondaryText)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cardSurface)
+        .cornerRadius(12)
+    }
+
+    // MARK: - Plan Section
+
+    @State private var isEditingPlan = false
+
+    private var planSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Strategy note
+            if let strategy = coachVM.currentPlan?.sessionStrategy {
+                Text(strategy)
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
+                    .padding(8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(6)
+            }
+
+            // Exercise list
+            List {
+                ForEach(Array(coachVM.editedExercises.enumerated()), id: \.element.name) { _, exercise in
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(intentColor(exercise.intent))
+                            .frame(width: 6, height: 6)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(exercise.name)
+                                .font(.subheadline.bold())
+                            HStack(spacing: 4) {
+                                Text("\(exercise.sets)×\(exercise.targetReps)")
+                                    .font(.caption.monospacedDigit())
+                                if exercise.weight > 0 {
+                                    Text("@ \(Int(exercise.weight)) lbs")
+                                        .font(.caption)
+                                        .foregroundColor(.accentBlue)
+                                }
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                }
+                .onMove { from, to in coachVM.moveExercise(from: from, to: to) }
+                .onDelete { offsets in
+                    for i in offsets { coachVM.removeExercise(at: i) }
+                }
+            }
+            .listStyle(.plain)
+            .frame(height: CGFloat(coachVM.editedExercises.count * 52 + 8))
+            .environment(\.editMode, .constant(isEditingPlan ? .active : .inactive))
+
+            // Actions
             HStack(spacing: 8) {
+                Button {
+                    isEditingPlan.toggle()
+                } label: {
+                    Text(isEditingPlan ? "Done" : "Edit")
+                        .font(.caption)
+                        .foregroundColor(.accentBlue)
+                }
+
+                Spacer()
+
+                Button {
+                    showAddExercise = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                        Text("Add")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.accentBlue)
+                }
+            }
+
+            // Send to Watch
+            Button {
+                if let plan = coachVM.buildWatchPlan() {
+                    WatchSyncService.shared.sendWorkoutPlan(plan)
+                    showWatchAlert = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "applewatch")
+                    Text("Send to Watch")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(coachVM.recommendation != nil ? Color.accentBlue : Color.pushBlue)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            .alert("Plan Sent", isPresented: $showWatchAlert) {
+                Button("OK") {}
+            } message: {
+                Text("Your workout plan has been sent to your Apple Watch.")
+            }
+        }
+        .sheet(isPresented: $showAddExercise) {
+            AddExerciseToPlanSheet(category: selectedCategory ?? .push) { exercise in
+                let newExercise = PlannedExercise(
+                    name: exercise.name, sets: 3, targetReps: "8-12",
+                    suggestedWeight: exercise.defaultWeight, repScheme: nil,
+                    warmupSets: nil, notes: nil, intent: "isolation"
+                )
+                coachVM.editedExercises.append(newExercise)
+            }
+        }
+    }
+
+    @State private var showAddExercise = false
+    @State private var showWatchAlert = false
+
+    // MARK: - Adjust Section (feeling + soreness + regenerate)
+
+    private var adjustSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Feeling
+            HStack(spacing: 6) {
+                Text("Feeling")
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
                 ForEach(1...5, id: \.self) { level in
                     Button {
                         feeling = level
                     } label: {
                         Text("\(level)")
-                            .font(.headline)
-                            .frame(width: 44, height: 44)
+                            .font(.caption.bold())
+                            .frame(width: 32, height: 32)
                             .background(feeling == level ? feelingColor(level) : Color.cardSurface)
                             .foregroundColor(feeling == level ? .white : .primary)
-                            .cornerRadius(10)
+                            .cornerRadius(8)
                     }
                 }
             }
 
-            // Soreness input
-            TextField("Anything sore or off? (optional)", text: $sorenessText, axis: .vertical)
-                .lineLimit(1...3)
-                .textFieldStyle(.roundedBorder)
-                .font(.subheadline)
-
-            // Get recommendation button
-            Button {
-                coachVM.feeling = feeling
-                coachVM.concerns = sorenessText
-                Task {
-                    await coachVM.getRecommendation(modelContext: modelContext, program: programVM.currentProgram)
-                }
-            } label: {
-                HStack {
-                    if coachVM.isLoadingRecommendation {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(coachVM.isLoadingRecommendation ? "Analyzing..." : "Get Recommendation")
-                        .font(.headline)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.accentBlue)
-                .foregroundColor(.white)
-                .cornerRadius(12)
-            }
-            .disabled(coachVM.isLoadingRecommendation)
-
-            if let error = coachVM.planError {
-                Text(error)
+            // Soreness + regenerate
+            HStack(spacing: 8) {
+                TextField("Anything sore? Adjust plan...", text: $sorenessText, axis: .vertical)
+                    .lineLimit(1...3)
                     .font(.caption)
-                    .foregroundColor(.failedRed)
-            }
-        }
-        .padding()
-        .background(Color.cardSurface)
-        .cornerRadius(16)
-    }
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.send)
+                    .onSubmit { regenerate() }
 
-    // MARK: - Phase 2: Recommendation
-
-    private var recommendationSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let rec = coachVM.recommendation {
-                // Header
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Today's Focus")
-                            .font(.caption.bold())
-                            .foregroundColor(.secondaryText)
-                            .textCase(.uppercase)
-                        Text(rec.recommendedSessionName)
-                            .font(.title3.bold())
-                    }
-                    Spacer()
-                    Button {
-                        coachVM.recommendation = nil
-                        coachVM.planError = nil
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.caption)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-
-                // Reasoning
-                Text(rec.reasoning)
-                    .font(.subheadline)
-                    .foregroundColor(.secondaryText)
-
-                // Muscle group status bars
-                VStack(spacing: 6) {
-                    ForEach(rec.muscleGroupStatus) { mg in
-                        HStack(spacing: 8) {
-                            Text(mg.muscleGroup.capitalized)
-                                .font(.caption2)
-                                .frame(width: 65, alignment: .trailing)
-                                .foregroundColor(.secondaryText)
-
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .fill(Color.gray.opacity(0.2))
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .fill(statusColor(mg.status))
-                                        .frame(width: geo.size.width * mg.statusLevel)
-                                }
-                            }
-                            .frame(height: 8)
-
-                            Text(mg.status)
-                                .font(.system(size: 9))
-                                .foregroundColor(statusColor(mg.status))
-                                .frame(width: 55, alignment: .leading)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-
-                // Generate plan button
                 Button {
-                    showPlanView = true
-                    Task {
-                        await coachVM.generatePlan(modelContext: modelContext, program: programVM.currentProgram)
-                    }
+                    regenerate()
                 } label: {
-                    HStack {
-                        Image(systemName: "sparkles")
-                        Text("Generate Plan")
-                    }
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.accentBlue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.accentBlue)
                 }
-
-                // Override with text
-                HStack(spacing: 8) {
-                    TextField("Want something different?", text: $overrideText, axis: .vertical)
-                        .lineLimit(1...3)
-                        .font(.caption)
-                        .textFieldStyle(.roundedBorder)
-                        .submitLabel(.send)
-                        .onSubmit { submitOverride() }
-
-                    if !overrideText.isEmpty {
-                        Button {
-                            submitOverride()
-                        } label: {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title3)
-                                .foregroundColor(.accentBlue)
-                        }
-                    }
-                }
+                .disabled(coachVM.isLoadingRecommendation || coachVM.isGenerating)
             }
         }
         .padding()
         .background(Color.cardSurface)
-        .cornerRadius(16)
+        .cornerRadius(12)
     }
 
     @State private var overrideText = ""
 
-    private func submitOverride() {
-        guard !overrideText.isEmpty else { return }
-        coachVM.concerns = overrideText
-        overrideText = ""
+    private func regenerate() {
+        coachVM.feeling = feeling
+        coachVM.concerns = sorenessText
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         Task {
-            await coachVM.getRecommendation(modelContext: modelContext, program: programVM.currentProgram)
+            await coachVM.getRecommendationAndPlan(modelContext: modelContext, program: programVM.currentProgram)
         }
-    }
-
-    // MARK: - Phase 3: Plan Review
-
-    private var planReviewSection: some View {
-        ActivePlanView(
-            coachVM: coachVM,
-            programVM: programVM,
-            category: selectedCategory ?? .push,
-            onDismiss: {
-                showPlanView = false
-                coachVM.recommendation = nil
-            }
-        )
     }
 
     // MARK: - PPL Fallback Buttons

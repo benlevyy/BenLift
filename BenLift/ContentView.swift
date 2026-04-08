@@ -31,11 +31,10 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             sharedProgramVM.loadCurrentProgram(modelContext: modelContext)
-            // Auto-fetch recommendation on app open for Recovery tab
-            // Uses default feeling (3/5) — user can refine on Today tab
-            if sharedCoachVM.recommendation == nil {
+            // Auto-fire recommendation → plan on app open
+            if sharedCoachVM.recommendation == nil && sharedCoachVM.editedExercises.isEmpty {
                 Task {
-                    await sharedCoachVM.getRecommendation(
+                    await sharedCoachVM.getRecommendationAndPlan(
                         modelContext: modelContext,
                         program: sharedProgramVM.currentProgram
                     )
