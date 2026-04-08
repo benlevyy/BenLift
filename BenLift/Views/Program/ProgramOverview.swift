@@ -26,9 +26,6 @@ struct ProgramOverview: View {
                     // Living profile (AI-maintained)
                     livingProfileSection
 
-                    // Coaching profile
-                    coachingProfileSection
-
                     // Exercise library link
                     NavigationLink {
                         ExerciseListView()
