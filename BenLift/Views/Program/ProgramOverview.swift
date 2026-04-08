@@ -73,11 +73,19 @@ struct ProgramOverview: View {
                 ForEach(rec.muscleGroupStatus) { mg in
                     muscleStatusRow(name: mg.muscleGroup, status: mg.status, level: mg.statusLevel, note: mg.note)
                 }
+
+                Text("Based on check-in")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondaryText)
             } else {
-                // Compute from workout history
+                // Compute from workout history (no AI yet)
                 ForEach(computedMuscleStatus(), id: \.name) { mg in
                     muscleStatusRow(name: mg.name, status: mg.status, level: mg.level, note: nil)
                 }
+
+                Text("Based on workout history — do a check-in on Today tab for AI-powered status")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondaryText)
             }
         }
         .padding()
@@ -150,28 +158,40 @@ struct ProgramOverview: View {
     private var weeklyVolumeSection: some View {
         let volumeByGroup = computeWeeklyVolume()
 
+        // Show ALL muscle groups, not just ones with data
+        let allGroups: [(String, Int)] = MuscleGroup.allCases.map { mg in
+            (mg.rawValue, volumeByGroup[mg.rawValue] ?? 0)
+        }
+
         return VStack(alignment: .leading, spacing: 8) {
             Text("WEEKLY VOLUME")
                 .font(.caption.bold())
                 .foregroundColor(.secondaryText)
 
-            ForEach(volumeByGroup.sorted(by: { $0.value > $1.value }), id: \.key) { group, sets in
+            ForEach(allGroups.sorted(by: { $0.1 > $1.1 }), id: \.0) { group, sets in
                 HStack {
                     Text(group.capitalized)
                         .font(.caption)
                         .frame(width: 70, alignment: .trailing)
-                        .foregroundColor(.secondaryText)
+                        .foregroundColor(sets > 0 ? .primary : .secondaryText.opacity(0.5))
 
                     GeometryReader { geo in
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.accentBlue)
-                            .frame(width: geo.size.width * min(Double(sets) / 20.0, 1.0))
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(Color.gray.opacity(0.15))
+                            if sets > 0 {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color.accentBlue)
+                                    .frame(width: geo.size.width * min(Double(sets) / 20.0, 1.0))
+                            }
+                        }
                     }
                     .frame(height: 10)
 
-                    Text("\(sets) sets")
+                    Text(sets > 0 ? "\(sets)" : "—")
                         .font(.caption2.monospacedDigit())
-                        .frame(width: 45, alignment: .leading)
+                        .foregroundColor(sets > 0 ? .primary : .secondaryText.opacity(0.4))
+                        .frame(width: 30, alignment: .leading)
                 }
             }
         }

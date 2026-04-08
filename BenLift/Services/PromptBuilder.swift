@@ -126,7 +126,7 @@ struct PromptBuilder {
         if !recentActivities.isEmpty {
             user += "\nOther activities (from Apple Health):\n\(recentActivities)\n"
         }
-        user += "\nToday is \(Date().weekdayName)."
+        user += "\nToday is \(Date().weekdayName), \(Date().shortFormatted). Use this date to calculate how many days ago each session and activity was."
 
         return (system: system, user: user)
     }
