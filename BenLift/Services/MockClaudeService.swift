@@ -4,6 +4,28 @@ import Foundation
 actor MockClaudeCoachService: CoachServiceProtocol {
     private let delay: UInt64 = 1_500_000_000 // 1.5 seconds
 
+    func recommendFocus(systemPrompt: String, userPrompt: String, model: String) async throws -> RecoveryRecommendation {
+        try await Task.sleep(nanoseconds: delay)
+        return RecoveryRecommendation(
+            muscleGroupStatus: [
+                MuscleGroupStatus(muscleGroup: "chest", status: "ready", daysSinceTraining: 3, weeklySetsDone: 8, note: nil),
+                MuscleGroupStatus(muscleGroup: "back", status: "sore", daysSinceTraining: 1, weeklySetsDone: 12, note: "climbed yesterday"),
+                MuscleGroupStatus(muscleGroup: "shoulders", status: "ready", daysSinceTraining: 3, weeklySetsDone: 6, note: nil),
+                MuscleGroupStatus(muscleGroup: "biceps", status: "recovering", daysSinceTraining: 1, weeklySetsDone: 4, note: "climbing fatigue"),
+                MuscleGroupStatus(muscleGroup: "triceps", status: "ready", daysSinceTraining: 3, weeklySetsDone: 4, note: nil),
+                MuscleGroupStatus(muscleGroup: "quads", status: "fresh", daysSinceTraining: 5, weeklySetsDone: 0, note: nil),
+                MuscleGroupStatus(muscleGroup: "hamstrings", status: "fresh", daysSinceTraining: 5, weeklySetsDone: 0, note: nil),
+                MuscleGroupStatus(muscleGroup: "glutes", status: "fresh", daysSinceTraining: 5, weeklySetsDone: 0, note: nil),
+                MuscleGroupStatus(muscleGroup: "calves", status: "fresh", daysSinceTraining: 7, weeklySetsDone: 0, note: nil),
+                MuscleGroupStatus(muscleGroup: "core", status: "ready", daysSinceTraining: 3, weeklySetsDone: 3, note: nil),
+                MuscleGroupStatus(muscleGroup: "forearms", status: "sore", daysSinceTraining: 1, weeklySetsDone: 0, note: "climbing grip fatigue"),
+            ],
+            recommendedFocus: ["quads", "hamstrings", "shoulders"],
+            recommendedSessionName: "Heavy Legs + Rear Delts",
+            reasoning: "Climbed yesterday — grip, back, and biceps need recovery. Quads and hamstrings haven't been trained in 5 days. Adding rear delts since they're ready and complement leg day."
+        )
+    }
+
     func generateProgram(systemPrompt: String, userPrompt: String, model: String) async throws -> ProgramResponse {
         try await Task.sleep(nanoseconds: delay)
         return ProgramResponse(program: ProgramData(

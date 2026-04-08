@@ -28,7 +28,7 @@ class CoachViewModel {
     func calculateDaysSinceLast(modelContext: ModelContext) {
         for category in WorkoutCategory.allCases {
             var descriptor = FetchDescriptor<WorkoutSession>(
-                predicate: #Predicate { $0.category == category },
+                predicate: #Predicate<WorkoutSession> { session in session.category == category },
                 sortBy: [SortDescriptor(\.date, order: .reverse)]
             )
             descriptor.fetchLimit = 1
@@ -42,17 +42,68 @@ class CoachViewModel {
         }
     }
 
+    // MARK: - Step 1: Get AI Recommendation (Sonnet)
+
+    var isLoadingRecommendation = false
+
+    @MainActor
+    func getRecommendation(modelContext: ModelContext, program: TrainingProgram?) async {
+        isLoadingRecommendation = true
+        planError = nil
+
+        let healthContext = await HealthKitService.shared.fetchHealthContext()
+        let activities = await HealthKitService.shared.fetchRecentActivities(days: 7)
+
+        // Summarize recent sessions
+        let recentSummary = ContextBuilder.summarizeAllRecentSessions(limit: 10, modelContext: modelContext)
+
+        // Format activities
+        let activitiesText = activities.map { act in
+            "\(act.date.shortFormatted): \(act.type) (\(TimeInterval(act.duration).formattedDuration), \(act.source))"
+        }.joined(separator: "\n")
+
+        let (system, user) = PromptBuilder.recommendFocusPrompt(
+            recentSessionsSummary: recentSummary,
+            recentActivities: activitiesText,
+            feeling: feeling,
+            soreness: concerns.isEmpty ? nil : concerns,
+            program: program,
+            healthContext: healthContext
+        )
+
+        let model = UserDefaults.standard.string(forKey: "modelRecommendFocus") ?? "claude-sonnet-4-5-20250514"
+
+        print("[BenLift/Coach] Getting AI recommendation, feeling=\(feeling), model=\(model)")
+
+        do {
+            let rec = try await coachService.recommendFocus(systemPrompt: system, userPrompt: user, model: model)
+            recommendation = rec
+            targetMuscleGroups = rec.recommendedFocus.compactMap { MuscleGroup(rawValue: $0) }
+            currentSessionName = rec.recommendedSessionName
+            print("[BenLift/Coach] ✅ Recommendation: \(rec.recommendedSessionName) — \(rec.recommendedFocus.joined(separator: ", "))")
+        } catch {
+            print("[BenLift/Coach] ❌ Recommendation failed: \(error)")
+            planError = "Recommendation failed: \(error.localizedDescription)"
+        }
+
+        isLoadingRecommendation = false
+    }
+
+    // MARK: - Step 2: Generate Plan (Haiku)
+
     @MainActor
     func generatePlan(modelContext: ModelContext, program: TrainingProgram?) async {
-        guard let category = selectedCategory else { return }
-
         isGenerating = true
         planError = nil
 
         let healthContext = await HealthKitService.shared.fetchHealthContext()
 
+        // Use category if set (legacy PPL), otherwise use target muscle groups
+        let category = selectedCategory
         let (system, user) = ContextBuilder.buildDailyPlanContext(
             category: category,
+            targetMuscleGroups: targetMuscleGroups,
+            sessionName: currentSessionName,
             feeling: feeling,
             availableTime: availableTime,
             concerns: concerns.isEmpty ? nil : concerns,
@@ -63,19 +114,20 @@ class CoachViewModel {
 
         let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5-20251001"
 
-        print("[BenLift/Coach] Generating plan for \(category.displayName), feeling=\(feeling), time=\(availableTime)min, model=\(model)")
-        print("[BenLift/Coach] Health context: sleep=\(healthContext.sleepHours.map { String(format: "%.1f", $0) } ?? "nil")h, rhr=\(healthContext.restingHR.map { "\(Int($0))" } ?? "nil")bpm")
+        print("[BenLift/Coach] Generating plan for \(currentSessionName ?? category?.displayName ?? "Custom"), feeling=\(feeling), time=\(availableTime)min")
 
         do {
             let plan = try await coachService.generateDailyPlan(systemPrompt: system, userPrompt: user, model: model)
             currentPlan = plan
             editedExercises = plan.exercises
-            savePlanForCurrentCategory()
+            if let cat = category { savePlanForCurrentCategory() }
             print("[BenLift/Coach] ✅ Plan generated: \(plan.exercises.count) exercises")
         } catch {
             print("[BenLift/Coach] ❌ Plan generation failed: \(error)")
             planError = error.localizedDescription
-            loadDefaultTemplate(category: category, modelContext: modelContext)
+            if let cat = category {
+                loadDefaultTemplate(category: cat, modelContext: modelContext)
+            }
         }
 
         isGenerating = false
@@ -168,7 +220,7 @@ class CoachViewModel {
     @MainActor
     func loadLastWeights(for category: WorkoutCategory, modelContext: ModelContext) {
         var descriptor = FetchDescriptor<WorkoutSession>(
-            predicate: #Predicate { $0.category == category },
+            predicate: #Predicate<WorkoutSession> { session in session.category == category },
             sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         descriptor.fetchLimit = 3
@@ -242,7 +294,7 @@ class CoachViewModel {
 
     /// Convert current plan to WatchWorkoutPlan for transfer
     func buildWatchPlan() -> WatchWorkoutPlan? {
-        guard let category = selectedCategory else { return nil }
+        guard !editedExercises.isEmpty else { return nil }
         let watchExercises = editedExercises.map { exercise in
             WatchExerciseInfo(
                 name: exercise.name,
@@ -260,11 +312,19 @@ class CoachViewModel {
         let increment = UserDefaults.standard.double(forKey: "weightIncrement")
 
         return WatchWorkoutPlan(
-            category: category,
+            sessionName: currentSessionName,
+            muscleGroups: targetMuscleGroups.map(\.rawValue),
+            category: selectedCategory,
             exercises: watchExercises,
             sessionStrategy: currentPlan?.sessionStrategy,
             restTimerDuration: restTimer > 0 ? restTimer : 150,
             weightIncrement: increment > 0 ? increment : 5.0
         )
     }
+
+    // MARK: - Dynamic Training Support
+
+    var recommendation: RecoveryRecommendation?
+    var targetMuscleGroups: [MuscleGroup] = []
+    var currentSessionName: String?
 }

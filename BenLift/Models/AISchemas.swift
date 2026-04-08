@@ -1,5 +1,43 @@
 import Foundation
 
+// MARK: - Recovery Recommendation (Touchpoint 0: What should I train today?)
+
+struct RecoveryRecommendation: Codable {
+    let muscleGroupStatus: [MuscleGroupStatus]
+    let recommendedFocus: [String]           // muscle group names to target
+    let recommendedSessionName: String        // "Heavy Legs + Rear Delts"
+    let reasoning: String                     // 2-3 sentence explanation
+}
+
+struct MuscleGroupStatus: Codable, Identifiable {
+    var id: String { muscleGroup }
+    let muscleGroup: String
+    let status: String                        // "fresh", "ready", "recovering", "sore"
+    let daysSinceTraining: Double?
+    let weeklySetsDone: Int?
+    let note: String?                         // "climbed yesterday - grip fatigued"
+
+    var statusColor: String {
+        switch status {
+        case "fresh": return "green"
+        case "ready": return "blue"
+        case "recovering": return "yellow"
+        case "sore": return "red"
+        default: return "gray"
+        }
+    }
+
+    var statusLevel: Double {
+        switch status {
+        case "fresh": return 1.0
+        case "ready": return 0.75
+        case "recovering": return 0.4
+        case "sore": return 0.15
+        default: return 0.5
+        }
+    }
+}
+
 // MARK: - Shared Sub-Schemas
 
 struct VolumeTarget: Codable {
@@ -193,11 +231,13 @@ struct WeekSummaryData: Codable {
 // MARK: - Watch Transfer Models
 
 struct WatchWorkoutPlan: Codable {
-    let category: WorkoutCategory
+    let sessionName: String?
+    let muscleGroups: [String]            // muscle group raw values
+    let category: WorkoutCategory?        // legacy, optional
     let exercises: [WatchExerciseInfo]
     let sessionStrategy: String?
-    var restTimerDuration: Double?     // seconds, from Settings
-    var weightIncrement: Double?       // lbs, from Settings
+    var restTimerDuration: Double?
+    var weightIncrement: Double?
 }
 
 struct WatchExerciseInfo: Codable, Identifiable {
@@ -211,11 +251,15 @@ struct WatchExerciseInfo: Codable, Identifiable {
     let intent: String?
     let lastWeight: Double?
     let lastReps: Double?
+
+    var weight: Double { suggestedWeight }
 }
 
 struct WatchWorkoutResult: Codable {
     let date: Date
-    let category: WorkoutCategory
+    let sessionName: String?
+    let muscleGroups: [String]?           // muscle group raw values
+    let category: WorkoutCategory?        // legacy, optional
     let duration: TimeInterval
     let feeling: Int?
     let concerns: String?

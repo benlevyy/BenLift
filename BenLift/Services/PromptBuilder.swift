@@ -77,6 +77,61 @@ struct PromptBuilder {
         return prompt
     }
 
+    // MARK: - Recommend Focus (Sonnet — "What should I train today?")
+
+    static func recommendFocusPrompt(
+        recentSessionsSummary: String,
+        recentActivities: String,
+        feeling: Int,
+        soreness: String?,
+        program: TrainingProgram?,
+        healthContext: HealthContext?
+    ) -> (system: String, user: String) {
+        var system = sharedSystemPrefix(program: program, healthContext: healthContext)
+        system += """
+
+        TASK: Recommend which muscle groups the user should train today.
+
+        Analyze their recovery status per muscle group based on:
+        - When each muscle was last trained and with how much volume
+        - Any non-lifting activities (climbing fatigues forearms, back, biceps, finger flexors)
+        - Sleep, HR, HRV data
+        - Their subjective feeling and soreness
+        - How many training days remain this week
+
+        Recovery guidelines:
+        - Compounds (squats, bench, rows): 48-72h recovery
+        - Isolation: 24-48h recovery
+        - Climbing: fatigues forearms (48h), back/biceps (24-36h), shoulders (24h)
+        - Cardio: minimal muscle fatigue unless high intensity
+        - Poor sleep (<6h) or low HRV: add 12-24h to all recovery estimates
+
+        Respond with this JSON:
+        {
+          "muscleGroupStatus": [
+            {"muscleGroup": "chest", "status": "fresh|ready|recovering|sore", "daysSinceTraining": 3.5, "weeklySetsDone": 8, "note": "optional context"},
+            ...for all: chest, back, shoulders, biceps, triceps, forearms, quads, hamstrings, glutes, calves, core
+          ],
+          "recommendedFocus": ["quads", "hamstrings", "shoulders"],
+          "recommendedSessionName": "Heavy Legs + Rear Delts",
+          "reasoning": "2-3 sentence explanation of why this focus makes sense today"
+        }
+        """
+
+        var user = "What should I train today?\n\n"
+        user += "How I feel: \(feeling)/5\n"
+        if let soreness = soreness, !soreness.isEmpty {
+            user += "Soreness/concerns: \(soreness)\n"
+        }
+        user += "\nRecent training (last 7 days):\n\(recentSessionsSummary)\n"
+        if !recentActivities.isEmpty {
+            user += "\nOther activities (from Apple Health):\n\(recentActivities)\n"
+        }
+        user += "\nToday is \(Date().weekdayName)."
+
+        return (system: system, user: user)
+    }
+
     // MARK: - Touchpoint 1: Goal Setting
 
     static func goalSettingPrompt(

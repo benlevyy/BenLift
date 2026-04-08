@@ -93,11 +93,11 @@ struct HistoryListView: View {
 
     private func sessionRow(_ session: WorkoutSession) -> some View {
         HStack(spacing: 12) {
-            Text(String(session.category.displayName.prefix(1)))
+            Text(String(session.displayName.prefix(1)))
                 .font(.caption.bold())
                 .foregroundColor(.white)
                 .frame(width: 32, height: 32)
-                .background(session.category.color)
+                .background(session.category?.color ?? .accentBlue)
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 4) {

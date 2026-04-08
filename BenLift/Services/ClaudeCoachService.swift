@@ -3,6 +3,7 @@ import Foundation
 // MARK: - Protocol
 
 protocol CoachServiceProtocol: Sendable {
+    func recommendFocus(systemPrompt: String, userPrompt: String, model: String) async throws -> RecoveryRecommendation
     func generateProgram(systemPrompt: String, userPrompt: String, model: String) async throws -> ProgramResponse
     func generateDailyPlan(systemPrompt: String, userPrompt: String, model: String) async throws -> DailyPlanResponse
     func adaptMidWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> MidWorkoutAdaptResponse
@@ -109,6 +110,11 @@ actor ClaudeCoachService: CoachServiceProtocol {
     private let baseURL = URL(string: "https://api.anthropic.com/v1/messages")!
     private let anthropicVersion = "2023-06-01"
     private let session = URLSession.shared
+
+    func recommendFocus(systemPrompt: String, userPrompt: String, model: String) async throws -> RecoveryRecommendation {
+        print("[BenLift/API] recommendFocus called with model: \(model)")
+        return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 2048, label: "recommendFocus")
+    }
 
     func generateProgram(systemPrompt: String, userPrompt: String, model: String) async throws -> ProgramResponse {
         print("[BenLift/API] generateProgram called with model: \(model)")

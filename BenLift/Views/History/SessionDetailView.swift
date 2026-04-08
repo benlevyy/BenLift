@@ -33,7 +33,7 @@ struct SessionDetailView: View {
             }
             .padding()
         }
-        .navigationTitle(session.category.displayName)
+        .navigationTitle(session.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadAnalysis() }
     }

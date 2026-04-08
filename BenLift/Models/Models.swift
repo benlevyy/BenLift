@@ -85,7 +85,9 @@ final class TemplateExercise {
 final class WorkoutSession {
     var id: UUID
     var date: Date
-    var category: WorkoutCategory
+    var category: WorkoutCategory?       // Legacy PPL — optional for new dynamic sessions
+    var sessionName: String?              // AI-generated: "Heavy Legs + Rear Delts"
+    var muscleGroupsData: Data?           // Encoded [MuscleGroup]
     var duration: Double?
     @Relationship(deleteRule: .cascade, inverse: \ExerciseEntry.session)
     var entries: [ExerciseEntry]
@@ -96,7 +98,9 @@ final class WorkoutSession {
     init(
         id: UUID = UUID(),
         date: Date = Date(),
-        category: WorkoutCategory,
+        category: WorkoutCategory? = nil,
+        sessionName: String? = nil,
+        muscleGroups: [MuscleGroup] = [],
         duration: Double? = nil,
         entries: [ExerciseEntry] = [],
         feeling: Int? = nil,
@@ -106,11 +110,27 @@ final class WorkoutSession {
         self.id = id
         self.date = date
         self.category = category
+        self.sessionName = sessionName
+        self.muscleGroupsData = Data.encodeJSON(muscleGroups)
         self.duration = duration
         self.entries = entries
         self.feeling = feeling
         self.concerns = concerns
         self.aiPlanUsed = aiPlanUsed
+    }
+
+    var muscleGroups: [MuscleGroup] {
+        get { muscleGroupsData?.decodeJSON([MuscleGroup].self) ?? [] }
+        set { muscleGroupsData = Data.encodeJSON(newValue) }
+    }
+
+    /// Display name: AI session name, or fallback to category, or muscle group list
+    var displayName: String {
+        if let name = sessionName, !name.isEmpty { return name }
+        if let cat = category { return cat.displayName }
+        let groups = muscleGroups
+        if groups.isEmpty { return "Workout" }
+        return groups.map(\.displayName).joined(separator: ", ")
     }
 
     var sortedEntries: [ExerciseEntry] {
@@ -371,5 +391,33 @@ final class WeeklyReview {
     var recoveryReport: RecoveryReport? {
         get { recoveryReportData?.decodeJSON(RecoveryReport.self) }
         set { recoveryReportData = newValue.flatMap { Data.encodeJSON($0) } }
+    }
+}
+
+// MARK: - Activity Log (non-lifting activities from HealthKit)
+
+@Model
+final class ActivityLog {
+    var id: UUID
+    var date: Date
+    var activityType: String   // "climbing", "running", "cycling", etc.
+    var duration: Double       // seconds
+    var calories: Double?
+    var source: String         // "HealthKit" or "manual"
+
+    init(
+        id: UUID = UUID(),
+        date: Date,
+        activityType: String,
+        duration: Double,
+        calories: Double? = nil,
+        source: String = "HealthKit"
+    ) {
+        self.id = id
+        self.date = date
+        self.activityType = activityType
+        self.duration = duration
+        self.calories = calories
+        self.source = source
     }
 }

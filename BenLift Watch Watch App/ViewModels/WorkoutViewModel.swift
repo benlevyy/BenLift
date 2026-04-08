@@ -145,11 +145,17 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         startHealthKitSession()
         WatchSyncService.shared.sendWorkoutStarted()
         currentScreen = .exerciseList
-        print("[BenLift/Watch] Started \(plan.category.displayName) workout: \(plan.exercises.count) exercises")
+        print("[BenLift/Watch] Started \(plan.sessionName ?? plan.category?.displayName ?? "Custom") workout: \(plan.exercises.count) exercises")
     }
 
     func startWorkoutFromLibrary(category: WorkoutCategory, exercises: [WatchExerciseInfo]) {
-        let plan = WatchWorkoutPlan(category: category, exercises: exercises, sessionStrategy: nil)
+        let plan = WatchWorkoutPlan(
+            sessionName: category.displayName,
+            muscleGroups: category.muscleGroups.map(\.rawValue),
+            category: category,
+            exercises: exercises,
+            sessionStrategy: nil
+        )
         startWorkout(with: plan)
     }
 
@@ -320,10 +326,12 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         let duration = workoutStartDate.map { Date().timeIntervalSince($0) } ?? 0
         let volume = exerciseStates.reduce(0.0) { $0 + $1.totalVolume }
-        let category = currentPlan?.category ?? .push
+        let category = currentPlan?.category
 
         let result = WatchWorkoutResult(
             date: workoutStartDate ?? Date(),
+            sessionName: currentPlan?.sessionName,
+            muscleGroups: currentPlan?.muscleGroups,
             category: category,
             duration: duration,
             feeling: nil,

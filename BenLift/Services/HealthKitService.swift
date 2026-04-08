@@ -16,7 +16,7 @@ class HealthKitService {
     // MARK: - Read Types
 
     private var readTypes: Set<HKObjectType> {
-        var types: Set<HKObjectType> = []
+        var types: Set<HKObjectType> = [HKWorkoutType.workoutType()] // Read other apps' workouts
         if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) { types.insert(sleep) }
         if let rhr = HKObjectType.quantityType(forIdentifier: .restingHeartRate) { types.insert(rhr) }
         if let hrv = HKObjectType.quantityType(forIdentifier: .heartRateVariabilitySDNN) { types.insert(hrv) }
@@ -138,6 +138,64 @@ class HealthKitService {
 
     func fetchVO2Max() async -> Double? {
         await fetchMostRecentQuantity(.vo2Max, unit: HKUnit(from: "mL/min·kg"), dayLimit: nil)
+    }
+
+    // MARK: - Recent Activities (climbing, cardio, etc. from other apps)
+
+    func fetchRecentActivities(days: Int = 7) async -> [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] {
+        let startDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: Date(), options: .strictStartDate)
+
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.workout(predicate)],
+            sortDescriptors: [SortDescriptor(\.startDate, order: .reverse)],
+            limit: 50
+        )
+
+        do {
+            let workouts = try await descriptor.result(for: healthStore)
+
+            return workouts.compactMap { workout in
+                // Skip our own strength training workouts
+                if workout.workoutActivityType == .traditionalStrengthTraining {
+                    // Check if it's from BenLift — skip those
+                    if workout.sourceRevision.source.bundleIdentifier.contains("BenLift") ||
+                       workout.sourceRevision.source.bundleIdentifier.contains("benlevy") {
+                        return nil
+                    }
+                }
+
+                let type = activityTypeName(workout.workoutActivityType)
+                let calories = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())
+                let source = workout.sourceRevision.source.name
+
+                return (type: type, date: workout.startDate, duration: workout.duration, calories: calories, source: source)
+            }
+        } catch {
+            print("[BenLift/HK] Fetch activities error: \(error)")
+            return []
+        }
+    }
+
+    private func activityTypeName(_ type: HKWorkoutActivityType) -> String {
+        switch type {
+        case .climbing: return "climbing"
+        case .running: return "running"
+        case .cycling: return "cycling"
+        case .swimming: return "swimming"
+        case .yoga: return "yoga"
+        case .hiking: return "hiking"
+        case .functionalStrengthTraining: return "functional_training"
+        case .traditionalStrengthTraining: return "strength_training"
+        case .highIntensityIntervalTraining: return "hiit"
+        case .rowing: return "rowing"
+        case .elliptical: return "elliptical"
+        case .stairClimbing: return "stair_climbing"
+        case .basketball: return "basketball"
+        case .soccer: return "soccer"
+        case .tennis: return "tennis"
+        default: return "other"
+        }
     }
 
     // MARK: - Generic Quantity Fetch

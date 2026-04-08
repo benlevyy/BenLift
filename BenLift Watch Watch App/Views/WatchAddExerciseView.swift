@@ -6,7 +6,7 @@ struct WatchAddExerciseView: View {
 
     private var availableExercises: [WatchExerciseInfo] {
         let alreadyInPlan = Set(workoutVM.exerciseStates.map(\.id))
-        let category = workoutVM.currentPlan?.category ?? .push
+        let category = workoutVM.currentPlan?.category ?? .push // fallback for exercise pool
         return Self.exercisePool(for: category).filter { !alreadyInPlan.contains($0.name) }
     }
 

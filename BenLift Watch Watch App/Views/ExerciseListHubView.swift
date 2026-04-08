@@ -83,7 +83,7 @@ struct ExerciseListHubView: View {
             }
             .padding(.horizontal, 4)
         }
-        .navigationTitle(workoutVM.currentPlan?.category.displayName ?? "Workout")
+        .navigationTitle(workoutVM.currentPlan?.sessionName ?? workoutVM.currentPlan?.category?.displayName ?? "Workout")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddExercise) {
             WatchAddExerciseView(workoutVM: workoutVM)

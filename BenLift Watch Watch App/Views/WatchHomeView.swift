@@ -7,7 +7,7 @@ struct WatchHomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                // Plan ready badge
+                // AI recommendation / plan ready
                 if let plan = receivedPlan {
                     Button {
                         workoutVM.startWorkout(with: plan)
@@ -15,23 +15,27 @@ struct WatchHomeView: View {
                         VStack(spacing: 4) {
                             HStack {
                                 Image(systemName: "sparkles")
-                                Text("\(plan.category.displayName) Plan Ready")
+                                Text("Plan Ready")
                             }
                             .font(.headline)
 
-                            Text("\(plan.exercises.count) exercises")
+                            Text(plan.sessionName ?? plan.category?.displayName ?? "Workout")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.white.opacity(0.8))
+
+                            Text("\(plan.exercises.count) exercises")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.6))
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(plan.category.color)
+                        .background(plan.category?.color ?? .accentBlue)
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
                 }
 
-                // Category buttons
+                // PPL quick-start buttons (fallback)
                 ForEach(WorkoutCategory.allCases) { category in
                     categoryButton(category)
                 }
@@ -48,33 +52,22 @@ struct WatchHomeView: View {
     }
 
     private func categoryButton(_ category: WorkoutCategory) -> some View {
-        let hasPlan = receivedPlan?.category == category
-
-        return Button {
-            if let plan = receivedPlan, plan.category == category {
-                workoutVM.startWorkout(with: plan)
-            } else {
-                let defaults = defaultExercises(for: category)
-                workoutVM.startWorkoutFromLibrary(category: category, exercises: defaults)
-            }
+        Button {
+            let defaults = defaultExercises(for: category)
+            workoutVM.startWorkoutFromLibrary(category: category, exercises: defaults)
         } label: {
             HStack {
                 Text(category.displayName)
-                    .font(.title3.bold())
+                    .font(.body.bold())
                 Spacer()
-                if hasPlan {
-                    Image(systemName: "sparkles")
-                        .font(.caption)
-                }
             }
             .padding()
-            .background(category.color.opacity(0.3))
+            .background(category.color.opacity(0.2))
             .cornerRadius(10)
         }
         .buttonStyle(.plain)
     }
 
-    /// Fallback exercises when no plan has been sent from iPhone
     private func defaultExercises(for category: WorkoutCategory) -> [WatchExerciseInfo] {
         let defs: [(String, Double, String)]
         switch category {
@@ -106,15 +99,10 @@ struct WatchHomeView: View {
 
         return defs.map { name, weight, intent in
             WatchExerciseInfo(
-                name: name,
-                sets: intent.contains("compound") ? 3 : 3,
+                name: name, sets: 3,
                 targetReps: intent.contains("compound") ? "6-8" : "10-15",
-                suggestedWeight: weight,
-                warmupSets: nil,
-                notes: nil,
-                intent: intent,
-                lastWeight: nil,
-                lastReps: nil
+                suggestedWeight: weight, warmupSets: nil, notes: nil,
+                intent: intent, lastWeight: nil, lastReps: nil
             )
         }
     }

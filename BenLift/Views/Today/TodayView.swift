@@ -69,12 +69,15 @@ struct TodayView: View {
 
     private func handleWorkoutResult(_ result: WatchWorkoutResult) {
         workoutResult = result
-        print("[BenLift] Received workout result: \(result.entries.count) exercises, \(result.category.displayName)")
+        print("[BenLift] Received workout result: \(result.entries.count) exercises, \(result.sessionName ?? result.category?.displayName ?? "Workout")")
 
         // Persist to SwiftData
+        let muscleGroups = (result.muscleGroups ?? []).compactMap { MuscleGroup(rawValue: $0) }
         let session = WorkoutSession(
             date: result.date,
             category: result.category,
+            sessionName: result.sessionName,
+            muscleGroups: muscleGroups,
             duration: result.duration,
             feeling: result.feeling,
             concerns: result.concerns,
@@ -744,7 +747,7 @@ struct PostWorkoutSheet: View {
                             .font(.system(size: 48))
                             .foregroundColor(.prGreen)
 
-                        Text("\(result.category.displayName) Complete")
+                        Text("\(result.sessionName ?? result.category?.displayName ?? "Workout") Complete")
                             .font(.title2.bold())
 
                         Text(result.date.shortFormatted)
