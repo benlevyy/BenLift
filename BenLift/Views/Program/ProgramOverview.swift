@@ -3,8 +3,8 @@ import SwiftData
 
 struct ProgramOverview: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var programVM = ProgramViewModel()
-    @State private var coachVM = CoachViewModel()
+    @Bindable var coachVM: CoachViewModel
+    @Bindable var programVM: ProgramViewModel
     @Query(sort: \WorkoutSession.date, order: .reverse) private var allSessions: [WorkoutSession]
 
     var body: some View {
@@ -224,12 +224,14 @@ struct ProgramOverview: View {
                     .font(.caption.bold())
                     .foregroundColor(.secondaryText)
                 Spacer()
-                NavigationLink {
-                    CoachingProfileView()
-                } label: {
-                    Text("Edit")
-                        .font(.caption)
-                        .foregroundColor(.accentBlue)
+                if let program = programVM.currentProgram {
+                    NavigationLink {
+                        CoachingProfileView(program: program)
+                    } label: {
+                        Text("Edit")
+                            .font(.caption)
+                            .foregroundColor(.accentBlue)
+                    }
                 }
             }
 
@@ -243,8 +245,6 @@ struct ProgramOverview: View {
                 Text("No profile set up yet")
                     .font(.subheadline)
                     .foregroundColor(.secondaryText)
-                NavigationLink("Set Up Profile", destination: CoachingProfileView())
-                    .font(.subheadline)
             }
         }
         .padding()

@@ -1,9 +1,14 @@
 import SwiftUI
+import SwiftData
 
 struct ContentView: View {
+    @Environment(\.modelContext) private var modelContext
+    @State private var sharedCoachVM = CoachViewModel()
+    @State private var sharedProgramVM = ProgramViewModel()
+
     var body: some View {
         TabView {
-            TodayView()
+            TodayView(coachVM: sharedCoachVM, programVM: sharedProgramVM)
                 .tabItem {
                     Label("Today", systemImage: "figure.strengthtraining.traditional")
                 }
@@ -13,7 +18,7 @@ struct ContentView: View {
                     Label("History", systemImage: "clock.arrow.circlepath")
                 }
 
-            ProgramOverview()
+            ProgramOverview(coachVM: sharedCoachVM, programVM: sharedProgramVM)
                 .tabItem {
                     Label("Recovery", systemImage: "heart.text.square")
                 }
@@ -24,5 +29,17 @@ struct ContentView: View {
                 }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            sharedProgramVM.loadCurrentProgram(modelContext: modelContext)
+            // Auto-fetch recommendation on app open (with default feeling)
+            if sharedCoachVM.recommendation == nil {
+                Task {
+                    await sharedCoachVM.getRecommendation(
+                        modelContext: modelContext,
+                        program: sharedProgramVM.currentProgram
+                    )
+                }
+            }
+        }
     }
 }

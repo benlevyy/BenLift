@@ -3,8 +3,8 @@ import SwiftData
 
 struct TodayView: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var coachVM = CoachViewModel()
-    @State private var programVM = ProgramViewModel()
+    @Bindable var coachVM: CoachViewModel
+    @Bindable var programVM: ProgramViewModel
     @State private var analysisVM = AnalysisViewModel()
     @State private var selectedCategory: WorkoutCategory?
     @State private var workoutResult: WatchWorkoutResult?
