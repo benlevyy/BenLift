@@ -8,15 +8,15 @@ class SettingsViewModel {
 
     // Model selections per touchpoint
     @ObservationIgnored
-    @AppStorage("modelDailyPlan") var modelDailyPlan: String = "claude-haiku-4-5-20251001"
+    @AppStorage("modelDailyPlan") var modelDailyPlan: String = "claude-haiku-4-5"
     @ObservationIgnored
-    @AppStorage("modelGoalSetting") var modelGoalSetting: String = "claude-haiku-4-5-20251001"
+    @AppStorage("modelGoalSetting") var modelGoalSetting: String = "claude-haiku-4-5"
     @ObservationIgnored
-    @AppStorage("modelMidWorkout") var modelMidWorkout: String = "claude-haiku-4-5-20251001"
+    @AppStorage("modelMidWorkout") var modelMidWorkout: String = "claude-haiku-4-5"
     @ObservationIgnored
-    @AppStorage("modelPostAnalysis") var modelPostAnalysis: String = "claude-haiku-4-5-20251001"
+    @AppStorage("modelPostAnalysis") var modelPostAnalysis: String = "claude-haiku-4-5"
     @ObservationIgnored
-    @AppStorage("modelWeeklyReview") var modelWeeklyReview: String = "claude-haiku-4-5-20251001"
+    @AppStorage("modelWeeklyReview") var modelWeeklyReview: String = "claude-haiku-4-5"
 
     // Workout preferences
     @ObservationIgnored
@@ -72,7 +72,7 @@ class SettingsViewModel {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
         let body: [String: Any] = [
-            "model": "claude-haiku-4-5-20251001",
+            "model": "claude-haiku-4-5",
             "max_tokens": 10,
             "messages": [["role": "user", "content": "Hi"]],
         ]

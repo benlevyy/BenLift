@@ -16,10 +16,7 @@ struct PromptBuilder {
             User profile:
             - Goal: \(program.goal)
             - Experience: \(program.experienceLevel)
-            - Current program: \(program.name)
             - Training days/week: \(program.daysPerWeek)
-            - Periodization: \(program.periodization), \(program.deloadFrequency)
-            - Current week: \(program.currentWeek)
 
             """
 
@@ -66,12 +63,14 @@ struct PromptBuilder {
 
         prompt += """
         Coaching principles:
-        - Progressive overload is king. Small, consistent weight increases beat random programming.
-        - Volume drives hypertrophy. Track weekly sets per muscle group.
-        - Recovery is non-negotiable. Adjust intensity based on sleep, HR, and subjective feel.
-        - Exercise variety matters but consistency matters more. Don't rotate for the sake of rotation.
-        - Failed reps (logged as X.5) mean the weight was at or near the limit. Don't increase weight until the user completes all target reps cleanly.
+        - Focus on LAST WEEK's data. What did the user actually do? What's recovering? What needs more volume?
+        - Progressive overload: small, consistent weight increases session to session. Compare to last time this exercise was done.
+        - Volume drives hypertrophy. Aim for adequate weekly sets per muscle group but don't enforce rigid targets.
+        - Recovery is non-negotiable. Adjust based on sleep, HR, subjective feel, and non-lifting activities.
+        - Failed reps (logged as X.5) mean the weight was at the limit. Don't increase until all target reps are clean.
         - When in doubt, be conservative. A slightly easy session beats an injury.
+        - DO NOT reference mesocycles, blocks, or periodization phases. Just program based on what happened last week and how the user feels today.
+        - Always suggest specific weights based on the user's recent history. Never return 0 for exercises they've done before.
         """
 
         return prompt

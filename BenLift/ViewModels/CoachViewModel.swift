@@ -71,7 +71,7 @@ class CoachViewModel {
             healthContext: healthContext
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelRecommendFocus") ?? "claude-sonnet-4-5-20250514"
+        let model = UserDefaults.standard.string(forKey: "modelRecommendFocus") ?? "claude-sonnet-4-5"
 
         print("[BenLift/Coach] Getting AI recommendation, feeling=\(feeling), model=\(model)")
 
@@ -96,6 +96,9 @@ class CoachViewModel {
         isGenerating = true
         planError = nil
 
+        // Load last weights from history so Claude can reference them
+        loadAllLastWeights(modelContext: modelContext)
+
         let healthContext = await HealthKitService.shared.fetchHealthContext()
 
         // Use category if set (legacy PPL), otherwise use target muscle groups
@@ -112,16 +115,26 @@ class CoachViewModel {
             healthContext: healthContext
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5-20251001"
+        let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
 
         print("[BenLift/Coach] Generating plan for \(currentSessionName ?? category?.displayName ?? "Custom"), feeling=\(feeling), time=\(availableTime)min")
 
         do {
             let plan = try await coachService.generateDailyPlan(systemPrompt: system, userPrompt: user, model: model)
             currentPlan = plan
-            editedExercises = plan.exercises
+            // Fill in weights from history for any exercises Claude returned as 0/null
+            editedExercises = plan.exercises.map { exercise in
+                if exercise.weight <= 0, let histWeight = _weightCache[exercise.name], histWeight > 0 {
+                    return PlannedExercise(
+                        name: exercise.name, sets: exercise.sets, targetReps: exercise.targetReps,
+                        suggestedWeight: histWeight, repScheme: exercise.repScheme,
+                        warmupSets: exercise.warmupSets, notes: exercise.notes, intent: exercise.intent
+                    )
+                }
+                return exercise
+            }
             if let cat = category { savePlanForCurrentCategory() }
-            print("[BenLift/Coach] ✅ Plan generated: \(plan.exercises.count) exercises")
+            print("[BenLift/Coach] ✅ Plan generated: \(editedExercises.count) exercises")
         } catch {
             print("[BenLift/Coach] ❌ Plan generation failed: \(error)")
             planError = error.localizedDescription
@@ -237,6 +250,28 @@ class CoachViewModel {
             }
         }
         print("[BenLift/Coach] Loaded last weights for \(_weightCache.count) exercises")
+    }
+
+    /// Load weights from ALL recent sessions (not category-specific) — for dynamic plans
+    @MainActor
+    func loadAllLastWeights(modelContext: ModelContext) {
+        var descriptor = FetchDescriptor<WorkoutSession>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = 10
+
+        guard let sessions = try? modelContext.fetch(descriptor) else { return }
+
+        for session in sessions {
+            for entry in session.entries {
+                if _weightCache[entry.exerciseName] == nil {
+                    if let topSet = StatsEngine.topSet(sets: entry.sets) {
+                        _weightCache[entry.exerciseName] = topSet.weight
+                    }
+                }
+            }
+        }
+        print("[BenLift/Coach] Loaded all last weights: \(_weightCache.count) exercises")
     }
 
     /// Only generate 1 warmup set for the first compound exercise. Keep it simple.

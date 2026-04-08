@@ -4,137 +4,228 @@ import SwiftData
 struct ProgramOverview: View {
     @Environment(\.modelContext) private var modelContext
     @State private var programVM = ProgramViewModel()
+    @State private var coachVM = CoachViewModel()
+    @Query(sort: \WorkoutSession.date, order: .reverse) private var allSessions: [WorkoutSession]
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if let program = programVM.currentProgram {
-                        coachingProfileCard(program)
-                        programCard(program)
-                        weeklySchedule(program)
-                        volumeTargets(program)
-                        navigationLinks
-                    } else {
-                        noProgramView
+                    // Muscle status section
+                    muscleStatusSection
+
+                    // This week summary
+                    thisWeekSection
+
+                    // Weekly volume by muscle group
+                    weeklyVolumeSection
+
+                    // Recent activities (climbing, cardio)
+                    recentActivitiesSection
+
+                    // Coaching profile
+                    coachingProfileSection
+
+                    // Exercise library link
+                    NavigationLink {
+                        ExerciseListView()
+                    } label: {
+                        HStack {
+                            Image(systemName: "dumbbell.fill")
+                            Text("Exercise Library")
+                            Spacer()
+                            Text("\(exerciseCount)")
+                                .foregroundColor(.secondaryText)
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondaryText)
+                        }
+                        .padding()
+                        .background(Color.cardSurface)
+                        .cornerRadius(12)
                     }
                 }
                 .padding()
             }
             .background(Color.appBackground)
-            .navigationTitle("Program")
+            .navigationTitle("Recovery")
             .onAppear {
                 programVM.loadCurrentProgram(modelContext: modelContext)
+                loadActivities()
             }
         }
     }
 
-    @State private var showCoachingProfile = false
+    // MARK: - Exercise count
 
-    private func coachingProfileCard(_ program: TrainingProgram) -> some View {
-        let hasProfile = [program.otherActivities, program.musclePriorities, program.ongoingConcerns, program.activitySchedule].contains(where: { $0 != nil && !($0?.isEmpty ?? true) })
+    @Query private var exercises: [Exercise]
+    private var exerciseCount: Int { exercises.count }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("Coaching Profile", systemImage: "brain.head.profile")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    showCoachingProfile = true
-                } label: {
-                    Text(hasProfile ? "Edit" : "Set Up")
-                        .font(.subheadline.bold())
-                        .foregroundColor(.accentBlue)
-                }
-            }
+    // MARK: - Muscle Status
 
-            if hasProfile {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let activities = program.otherActivities, !activities.isEmpty {
-                        profileRow(icon: "figure.climbing", text: activities)
-                    }
-                    if let schedule = program.activitySchedule, !schedule.isEmpty {
-                        profileRow(icon: "calendar.badge.clock", text: schedule)
-                    }
-                    if let priorities = program.musclePriorities, !priorities.isEmpty {
-                        profileRow(icon: "star.fill", text: priorities)
-                    }
-                    if let concerns = program.ongoingConcerns, !concerns.isEmpty {
-                        profileRow(icon: "bandage", text: concerns)
-                    }
+    private var muscleStatusSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("MUSCLE STATUS")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
+
+            if let rec = coachVM.recommendation {
+                // Show from latest AI recommendation
+                ForEach(rec.muscleGroupStatus) { mg in
+                    muscleStatusRow(name: mg.muscleGroup, status: mg.status, level: mg.statusLevel, note: mg.note)
                 }
             } else {
-                Text("Tell the AI about your lifestyle — other sports, schedule, priorities — so every plan accounts for your full week.")
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
+                // Compute from workout history
+                ForEach(computedMuscleStatus(), id: \.name) { mg in
+                    muscleStatusRow(name: mg.name, status: mg.status, level: mg.level, note: nil)
+                }
             }
         }
         .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.cardSurface)
         .cornerRadius(12)
-        .sheet(isPresented: $showCoachingProfile) {
-            CoachingProfileView(program: program)
-        }
     }
 
-    private func profileRow(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
+    private func muscleStatusRow(name: String, status: String, level: Double, note: String?) -> some View {
+        HStack(spacing: 8) {
+            Text(name.capitalized)
                 .font(.caption)
+                .frame(width: 70, alignment: .trailing)
                 .foregroundColor(.secondaryText)
-                .frame(width: 16)
-            Text(text)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.gray.opacity(0.2))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(statusColor(status))
+                        .frame(width: geo.size.width * level)
+                }
+            }
+            .frame(height: 10)
+
+            Text(status)
+                .font(.caption2)
+                .foregroundColor(statusColor(status))
+                .frame(width: 60, alignment: .leading)
         }
     }
 
-    private func programCard(_ program: TrainingProgram) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(program.name)
-                .font(.title2.bold())
+    // MARK: - This Week
 
-            HStack(spacing: 16) {
-                Label(program.goal, systemImage: "target")
-                Label("\(program.daysPerWeek) days/week", systemImage: "calendar")
-            }
-            .font(.subheadline)
-            .foregroundColor(.secondaryText)
-
-            HStack(spacing: 16) {
-                Label(program.periodization.capitalized, systemImage: "chart.line.uptrend.xyaxis")
-                Label("Week \(program.currentWeek)", systemImage: "number")
-            }
-            .font(.caption)
-            .foregroundColor(.secondaryText)
-
-            let status = programVM.currentWeekStatus(modelContext: modelContext)
-            Text("\(status.completed)/\(status.planned) sessions this week")
-                .font(.subheadline.bold())
-                .foregroundColor(.accentBlue)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cardSurface)
-        .cornerRadius(12)
-    }
-
-    @State private var showSplitEditor = false
-
-    private func weeklySchedule(_ program: TrainingProgram) -> some View {
-        let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        let split = program.split
+    private var thisWeekSection: some View {
+        let weekSessions = sessionsThisWeek
+        let liftingSessions = weekSessions.count
+        let totalVolume = weekSessions.reduce(0.0) { $0 + $1.totalVolume }
 
         return VStack(alignment: .leading, spacing: 8) {
+            Text("THIS WEEK")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
+
+            HStack(spacing: 16) {
+                statPill("\(liftingSessions)", "sessions")
+                statPill("\(Int(totalVolume))", "lbs volume")
+                if !recentActivityData.isEmpty {
+                    statPill("\(recentActivityData.count)", "activities")
+                }
+            }
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(12)
+    }
+
+    private func statPill(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.headline.monospacedDigit())
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondaryText)
+        }
+    }
+
+    // MARK: - Weekly Volume
+
+    private var weeklyVolumeSection: some View {
+        let volumeByGroup = computeWeeklyVolume()
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("WEEKLY VOLUME")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
+
+            ForEach(volumeByGroup.sorted(by: { $0.value > $1.value }), id: \.key) { group, sets in
+                HStack {
+                    Text(group.capitalized)
+                        .font(.caption)
+                        .frame(width: 70, alignment: .trailing)
+                        .foregroundColor(.secondaryText)
+
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.accentBlue)
+                            .frame(width: geo.size.width * min(Double(sets) / 20.0, 1.0))
+                    }
+                    .frame(height: 10)
+
+                    Text("\(sets) sets")
+                        .font(.caption2.monospacedDigit())
+                        .frame(width: 45, alignment: .leading)
+                }
+            }
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(12)
+    }
+
+    // MARK: - Recent Activities
+
+    @State private var recentActivityData: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = []
+
+    private var recentActivitiesSection: some View {
+        Group {
+            if !recentActivityData.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("RECENT ACTIVITIES")
+                        .font(.caption.bold())
+                        .foregroundColor(.secondaryText)
+
+                    ForEach(Array(recentActivityData.prefix(5).enumerated()), id: \.offset) { _, activity in
+                        HStack {
+                            Image(systemName: activityIcon(activity.type))
+                                .foregroundColor(.accentBlue)
+                                .frame(width: 20)
+                            VStack(alignment: .leading) {
+                                Text(activity.type.capitalized)
+                                    .font(.subheadline)
+                                Text("\(activity.date.shortFormatted) • \(TimeInterval(activity.duration).formattedDuration) • \(activity.source)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondaryText)
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.cardSurface)
+                .cornerRadius(12)
+            }
+        }
+    }
+
+    // MARK: - Coaching Profile
+
+    private var coachingProfileSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Weekly Split")
+                Text("COACHING PROFILE")
                     .font(.caption.bold())
                     .foregroundColor(.secondaryText)
-                    .textCase(.uppercase)
                 Spacer()
-                Button {
-                    showSplitEditor = true
+                NavigationLink {
+                    CoachingProfileView()
                 } label: {
                     Text("Edit")
                         .font(.caption)
@@ -142,52 +233,18 @@ struct ProgramOverview: View {
                 }
             }
 
-            HStack(spacing: 4) {
-                ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    let category = index < split.count ? WorkoutCategory(rawValue: split[index]) : nil
-                    VStack(spacing: 4) {
-                        Text(day)
-                            .font(.caption2)
-                            .foregroundColor(.secondaryText)
-                        Circle()
-                            .fill(category?.color ?? Color.secondaryText.opacity(0.3))
-                            .frame(width: 28, height: 28)
-                            .overlay(
-                                Text(category?.displayName.prefix(1) ?? "R")
-                                    .font(.caption2.bold())
-                                    .foregroundColor(.white)
-                            )
-                    }
-                    .frame(maxWidth: .infinity)
+            if let program = programVM.currentProgram {
+                HStack(spacing: 16) {
+                    profileItem("Goal", program.goal)
+                    profileItem("Experience", program.experienceLevel)
+                    profileItem("Days/week", "\(program.daysPerWeek)")
                 }
-            }
-        }
-        .padding()
-        .background(Color.cardSurface)
-        .cornerRadius(12)
-        .sheet(isPresented: $showSplitEditor) {
-            SplitEditorView(program: program)
-        }
-    }
-
-    private func volumeTargets(_ program: TrainingProgram) -> some View {
-        let targets = program.weeklyVolumeTargets
-
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Weekly Volume Targets")
-                .font(.caption.bold())
-                .foregroundColor(.secondaryText)
-                .textCase(.uppercase)
-
-            ForEach(targets.sorted(by: { $0.key < $1.key }), id: \.key) { group, target in
-                HStack {
-                    Text(group.capitalized)
-                        .font(.subheadline)
-                    Spacer()
-                    Text("\(target.sets) sets (\(target.repRange))")
-                        .font(.subheadline)
-                        .foregroundColor(.secondaryText)
-                }
+            } else {
+                Text("No profile set up yet")
+                    .font(.subheadline)
+                    .foregroundColor(.secondaryText)
+                NavigationLink("Set Up Profile", destination: CoachingProfileView())
+                    .font(.subheadline)
             }
         }
         .padding()
@@ -195,65 +252,102 @@ struct ProgramOverview: View {
         .cornerRadius(12)
     }
 
-    private var navigationLinks: some View {
-        VStack(spacing: 8) {
-            NavigationLink {
-                WeeklyReviewView()
-            } label: {
-                Label("Weekly Reviews", systemImage: "chart.bar.doc.horizontal")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color.cardSurface)
-                    .cornerRadius(8)
-            }
-
-            NavigationLink {
-                ExerciseListView()
-            } label: {
-                Label("Exercise Library", systemImage: "dumbbell")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color.cardSurface)
-                    .cornerRadius(8)
-            }
-
-            NavigationLink {
-                ProgressionView()
-            } label: {
-                Label("Progression Charts", systemImage: "chart.xyaxis.line")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color.cardSurface)
-                    .cornerRadius(8)
-            }
+    private func profileItem(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondaryText)
+            Text(value.capitalized)
+                .font(.subheadline.bold())
         }
     }
 
-    private var noProgramView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "figure.strengthtraining.traditional")
-                .font(.system(size: 48))
-                .foregroundColor(.secondaryText)
+    // MARK: - Helpers
 
-            Text("No Program Yet")
-                .font(.title2.bold())
+    private var sessionsThisWeek: [WorkoutSession] {
+        let startOfWeek = Date().startOfWeek
+        return allSessions.filter { $0.date >= startOfWeek }
+    }
 
-            Text("Set your goals and generate an AI training program.")
-                .foregroundColor(.secondaryText)
-                .multilineTextAlignment(.center)
+    private func computeWeeklyVolume() -> [String: Int] {
+        let lookup = DefaultExercises.buildMuscleGroupLookup(from: modelContext)
+        var result: [String: Int] = [:]
 
-            NavigationLink {
-                GoalSettingView(programVM: programVM, isOnboarding: false)
-            } label: {
-                Text("Create Program")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.accentBlue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
+        for session in sessionsThisWeek {
+            for entry in session.entries {
+                let group = lookup[entry.exerciseName]?.rawValue ?? "other"
+                let workingSets = entry.sets.filter { !$0.isWarmup }.count
+                result[group, default: 0] += workingSets
             }
         }
-        .padding(40)
+        return result
+    }
+
+    private struct ComputedStatus: Identifiable {
+        var id: String { name }
+        let name: String
+        let status: String
+        let level: Double
+    }
+
+    private func computedMuscleStatus() -> [ComputedStatus] {
+        let lookup = DefaultExercises.buildMuscleGroupLookup(from: modelContext)
+        var lastTrained: [String: Date] = [:]
+
+        for session in allSessions.prefix(20) {
+            for entry in session.entries {
+                let group = lookup[entry.exerciseName]?.rawValue ?? "other"
+                if lastTrained[group] == nil {
+                    lastTrained[group] = session.date
+                }
+            }
+        }
+
+        return MuscleGroup.allCases.map { mg in
+            let name = mg.rawValue
+            let daysSince = lastTrained[name].map { Date().daysSince($0) } ?? 99
+
+            let status: String
+            let level: Double
+            if daysSince >= 4 {
+                status = "fresh"; level = 1.0
+            } else if daysSince >= 3 {
+                status = "ready"; level = 0.75
+            } else if daysSince >= 2 {
+                status = "recovering"; level = 0.4
+            } else {
+                status = "sore"; level = 0.15
+            }
+
+            return ComputedStatus(name: name, status: status, level: level)
+        }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status {
+        case "fresh": return .prGreen
+        case "ready": return .pushBlue
+        case "recovering": return .legsOrange
+        case "sore": return .failedRed
+        default: return .secondaryText
+        }
+    }
+
+    private func activityIcon(_ type: String) -> String {
+        switch type {
+        case "climbing": return "figure.climbing"
+        case "running": return "figure.run"
+        case "cycling": return "figure.outdoor.cycle"
+        case "swimming": return "figure.pool.swim"
+        case "yoga": return "figure.yoga"
+        case "hiking": return "figure.hiking"
+        default: return "figure.mixed.cardio"
+        }
+    }
+
+    private func loadActivities() {
+        Task {
+            recentActivityData = await HealthKitService.shared.fetchRecentActivities(days: 7)
+        }
     }
 }

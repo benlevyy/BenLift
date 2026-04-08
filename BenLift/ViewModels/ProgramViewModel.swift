@@ -44,7 +44,7 @@ class ProgramViewModel {
             equipment: equipment
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelGoalSetting") ?? "claude-haiku-4-5-20251001"
+        let model = UserDefaults.standard.string(forKey: "modelGoalSetting") ?? "claude-haiku-4-5"
 
         print("[BenLift/Program] Generating program: goal=\(goal.displayName), days=\(daysPerWeek), exp=\(experience.displayName), model=\(model)")
 

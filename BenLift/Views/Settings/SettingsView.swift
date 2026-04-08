@@ -15,7 +15,7 @@ struct SettingsView: View {
     @AppStorage("weightUnit") private var weightUnitRaw: String = WeightUnit.lbs.rawValue
 
     private let modelOptions = [
-        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5",
         "claude-3-haiku-20240307",
     ]
 

@@ -15,7 +15,7 @@ struct ContentView: View {
 
             ProgramOverview()
                 .tabItem {
-                    Label("Program", systemImage: "chart.bar.fill")
+                    Label("Recovery", systemImage: "heart.text.square")
                 }
 
             SettingsView()
