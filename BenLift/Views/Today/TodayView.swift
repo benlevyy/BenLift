@@ -8,7 +8,6 @@ struct TodayView: View {
     @State private var analysisVM = AnalysisViewModel()
     @State private var selectedCategory: WorkoutCategory?
     @State private var workoutResult: WatchWorkoutResult?
-    @State private var showPostWorkout = false
 
     // Check-in state
     @State private var feeling: Int = 3
@@ -78,14 +77,12 @@ struct TodayView: View {
                     handleWorkoutResult(result)
                 }
             }
-            .sheet(isPresented: $showPostWorkout) {
-                if let result = workoutResult {
-                    PostWorkoutSheet(
-                        result: result,
-                        analysisVM: analysisVM,
-                        programVM: programVM
-                    )
-                }
+            .sheet(item: $workoutResult) { result in
+                PostWorkoutSheet(
+                    result: result,
+                    analysisVM: analysisVM,
+                    programVM: programVM
+                )
             }
         }
     }
@@ -422,8 +419,7 @@ struct TodayView: View {
         try? modelContext.save()
         print("[BenLift] Saved workout session to SwiftData")
 
-        // Show post-workout sheet
-        showPostWorkout = true
+        // workoutResult being set triggers the .sheet(item:) automatically
 
         // Trigger AI analysis
         Task {

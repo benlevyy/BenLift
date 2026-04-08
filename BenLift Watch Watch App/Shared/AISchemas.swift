@@ -255,7 +255,8 @@ struct WatchExerciseInfo: Codable, Identifiable {
     var weight: Double { suggestedWeight }
 }
 
-struct WatchWorkoutResult: Codable {
+struct WatchWorkoutResult: Codable, Identifiable {
+    var id: Date { date }
     let date: Date
     let sessionName: String?
     let muscleGroups: [String]?           // muscle group raw values
