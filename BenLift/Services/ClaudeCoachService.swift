@@ -258,12 +258,21 @@ actor ClaudeCoachService: CoachServiceProtocol {
             print(tokenLog)
         }
 
-        // Clean up potential markdown wrapping
-        let cleanedText = text
+        // Extract JSON object — strip markdown, trailing text, anything outside { }
+        let stripped = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Find the JSON object boundaries
+        let cleanedText: String
+        if let firstBrace = stripped.firstIndex(of: "{"),
+           let lastBrace = stripped.lastIndex(of: "}") {
+            cleanedText = String(stripped[firstBrace...lastBrace])
+        } else {
+            cleanedText = stripped
+        }
 
         print("[BenLift/API] Claude response (\(cleanedText.count) chars): \(cleanedText.prefix(300))...")
 
