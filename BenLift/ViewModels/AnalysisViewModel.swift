@@ -53,10 +53,42 @@ class AnalysisViewModel {
             try? modelContext.save()
             currentAnalysis = analysis
 
+            // Apply profile updates if any
+            if let updates = response.profileUpdates, !updates.isEmpty {
+                applyProfileUpdates(updates, modelContext: modelContext)
+            }
+
         } catch {
             analysisError = error.localizedDescription
         }
 
         isAnalyzing = false
+    }
+
+    // MARK: - Profile Updates
+
+    @MainActor
+    private func applyProfileUpdates(_ updates: [String], modelContext: ModelContext) {
+        let descriptor = FetchDescriptor<UserProfile>()
+        let profile: UserProfile
+        if let existing = try? modelContext.fetch(descriptor).first {
+            profile = existing
+        } else {
+            profile = UserProfile()
+            modelContext.insert(profile)
+        }
+
+        var lines = profile.profileText.components(separatedBy: "\n").filter { !$0.isEmpty }
+        for update in updates {
+            let trimmed = update.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !lines.contains(where: { $0.localizedCaseInsensitiveContains(trimmed) }) {
+                lines.append("• \(trimmed)")
+            }
+        }
+        profile.profileText = lines.joined(separator: "\n")
+        profile.lastUpdated = Date()
+        try? modelContext.save()
+
+        print("[BenLift/Profile] Auto-updated: \(updates)")
     }
 }

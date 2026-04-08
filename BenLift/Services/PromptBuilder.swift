@@ -84,7 +84,8 @@ struct PromptBuilder {
         feeling: Int,
         soreness: String?,
         program: TrainingProgram?,
-        healthContext: HealthContext?
+        healthContext: HealthContext?,
+        userProfile: String? = nil
     ) -> (system: String, user: String) {
         var system = sharedSystemPrefix(program: program, healthContext: healthContext)
         system += """
@@ -125,6 +126,9 @@ struct PromptBuilder {
         user += "\nRecent training (last 7 days):\n\(recentSessionsSummary)\n"
         if !recentActivities.isEmpty {
             user += "\nOther activities (from Apple Health):\n\(recentActivities)\n"
+        }
+        if let profile = userProfile, !profile.isEmpty {
+            user += "\n\nUser profile (learned preferences):\n\(profile)"
         }
         user += "\nToday is \(Date().weekdayName), \(Date().shortFormatted). Use this date to calculate how many days ago each session and activity was."
 
@@ -238,14 +242,23 @@ struct PromptBuilder {
         actualWorkout: String,
         recentSessionsSummary: String,
         program: TrainingProgram?,
-        healthContext: HealthContext?
+        healthContext: HealthContext?,
+        currentProfile: String?
     ) -> (system: String, user: String) {
         var system = sharedSystemPrefix(program: program, healthContext: healthContext)
         system += """
 
         Analyze this workout. Be CONCISE — one short paragraph for coachNote, one line per progression event.
+
+        Also suggest updates to the user's training profile based on what you observe. Profile updates should capture:
+        - Exercise preferences (what they consistently pick or avoid)
+        - Working weight ranges for exercises
+        - Recovery patterns
+        - Any stated preferences from their plan adjustments
+        Only suggest updates for things that are NEW or CHANGED. Don't repeat what's already in the profile.
+
         Respond ONLY in JSON:
-        {"summary":"one sentence headline","progressionEvents":[{"exercise":"string","type":"rep_pr|weight_pr|plateau|regression","detail":"one line","recommendation":"one line"}],"overallRating":"pr_day|good|average|recovery","coachNote":"2-3 sentences max, actionable"}
+        {"summary":"one sentence headline","progressionEvents":[{"exercise":"string","type":"rep_pr|weight_pr|plateau|regression","detail":"one line","recommendation":"one line"}],"overallRating":"pr_day|good|average|recovery","coachNote":"2-3 sentences max, actionable","profileUpdates":["update 1","update 2"]}
         """
 
         var user = "Analyze this workout session:\n\n"
@@ -254,6 +267,12 @@ struct PromptBuilder {
         }
         user += "Actual:\n\(actualWorkout)\n\n"
         user += "Recent history:\n\(recentSessionsSummary)"
+
+        if let profile = currentProfile, !profile.isEmpty {
+            user += "\n\nCurrent user profile:\n\(profile)"
+        } else {
+            user += "\n\nNo user profile yet — create initial observations."
+        }
 
         return (system, user)
     }

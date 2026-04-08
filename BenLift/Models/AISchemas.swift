@@ -201,6 +201,7 @@ struct PostWorkoutAnalysisResponse: Codable {
     let recoveryNotes: String?
     let overallRating: String
     let coachNote: String
+    let profileUpdates: [String]?  // AI-suggested updates to the living user profile
 }
 
 struct PerformanceVsPlan: Codable {

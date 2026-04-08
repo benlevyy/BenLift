@@ -113,12 +113,17 @@ struct ContextBuilder {
             recentSummary = "No category-specific history (dynamic session)"
         }
 
+        // Load current user profile
+        let profileDescriptor = FetchDescriptor<UserProfile>()
+        let profileText = (try? modelContext.fetch(profileDescriptor).first)?.profileText
+
         return PromptBuilder.postWorkoutAnalysisPrompt(
             planSummary: planSummary,
             actualWorkout: actualWorkout,
             recentSessionsSummary: recentSummary,
             program: program,
-            healthContext: healthContext
+            healthContext: healthContext,
+            currentProfile: profileText
         )
     }
 

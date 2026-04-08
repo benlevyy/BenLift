@@ -18,6 +18,7 @@ struct BenLiftApp: App {
             PostWorkoutAnalysis.self,
             WeeklyReview.self,
             ActivityLog.self,
+            UserProfile.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: false)
         container = try! ModelContainer(for: schema, configurations: config)

@@ -421,3 +421,22 @@ final class ActivityLog {
         self.source = source
     }
 }
+
+// MARK: - Living User Profile (AI-maintained)
+
+@Model
+final class UserProfile {
+    var id: UUID
+    var profileText: String    // Free-form text the AI reads and writes
+    var lastUpdated: Date
+
+    init(
+        id: UUID = UUID(),
+        profileText: String = "",
+        lastUpdated: Date = Date()
+    ) {
+        self.id = id
+        self.profileText = profileText
+        self.lastUpdated = lastUpdated
+    }
+}

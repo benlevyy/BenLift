@@ -62,13 +62,16 @@ class CoachViewModel {
             "\(act.date.shortFormatted): \(act.type) (\(TimeInterval(act.duration).formattedDuration), \(act.source))"
         }.joined(separator: "\n")
 
+        let profileText = loadProfile(modelContext: modelContext)
+
         let (system, user) = PromptBuilder.recommendFocusPrompt(
             recentSessionsSummary: recentSummary,
             recentActivities: activitiesText,
             feeling: feeling,
             soreness: concerns.isEmpty ? nil : concerns,
             program: program,
-            healthContext: healthContext
+            healthContext: healthContext,
+            userProfile: profileText
         )
 
         let model = UserDefaults.standard.string(forKey: "modelRecommendFocus") ?? "claude-sonnet-4-5"
@@ -374,4 +377,42 @@ class CoachViewModel {
     var recommendation: RecoveryRecommendation?
     var targetMuscleGroups: [MuscleGroup] = []
     var currentSessionName: String?
+
+    // MARK: - Living User Profile
+
+    @MainActor
+    func loadProfile(modelContext: ModelContext) -> String? {
+        let descriptor = FetchDescriptor<UserProfile>()
+        guard let profile = try? modelContext.fetch(descriptor).first else { return nil }
+        return profile.profileText.isEmpty ? nil : profile.profileText
+    }
+
+    @MainActor
+    func applyProfileUpdates(_ updates: [String], modelContext: ModelContext) {
+        guard !updates.isEmpty else { return }
+
+        let descriptor = FetchDescriptor<UserProfile>()
+        let profile: UserProfile
+        if let existing = try? modelContext.fetch(descriptor).first {
+            profile = existing
+        } else {
+            profile = UserProfile()
+            modelContext.insert(profile)
+        }
+
+        // Append new updates as bullet points
+        var lines = profile.profileText.components(separatedBy: "\n").filter { !$0.isEmpty }
+        for update in updates {
+            let trimmed = update.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Don't add duplicates
+            if !lines.contains(where: { $0.localizedCaseInsensitiveContains(trimmed) }) {
+                lines.append("• \(trimmed)")
+            }
+        }
+        profile.profileText = lines.joined(separator: "\n")
+        profile.lastUpdated = Date()
+        try? modelContext.save()
+
+        print("[BenLift/Profile] Updated: \(updates.count) new items, total \(lines.count) lines")
+    }
 }

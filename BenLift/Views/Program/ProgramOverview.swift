@@ -23,6 +23,9 @@ struct ProgramOverview: View {
                     // Recent activities (climbing, cardio)
                     recentActivitiesSection
 
+                    // Living profile (AI-maintained)
+                    livingProfileSection
+
                     // Coaching profile
                     coachingProfileSection
 
@@ -292,6 +295,75 @@ struct ProgramOverview: View {
                 .cornerRadius(12)
             }
         }
+    }
+
+    // MARK: - Living Profile (AI-maintained)
+
+    @Query private var userProfiles: [UserProfile]
+    @State private var isEditingProfile = false
+
+    private var livingProfileSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("YOUR PROFILE")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondaryText)
+                Spacer()
+                Text("AI-learned")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondaryText)
+            }
+
+            if let profile = userProfiles.first, !profile.profileText.isEmpty {
+                if isEditingProfile {
+                    TextEditor(text: Binding(
+                        get: { profile.profileText },
+                        set: { profile.profileText = $0; profile.lastUpdated = Date() }
+                    ))
+                    .font(.caption)
+                    .frame(minHeight: 100)
+                    .cornerRadius(6)
+
+                    HStack {
+                        Button("Done") {
+                            isEditingProfile = false
+                            try? modelContext.save()
+                        }
+                        .font(.caption.bold())
+
+                        Spacer()
+
+                        Button("Clear All", role: .destructive) {
+                            profile.profileText = ""
+                            isEditingProfile = false
+                            try? modelContext.save()
+                        }
+                        .font(.caption)
+                    }
+                } else {
+                    Text(profile.profileText)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+
+                    HStack {
+                        Text("Updated \(profile.lastUpdated.shortFormatted)")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondaryText)
+                        Spacer()
+                        Button("Edit") { isEditingProfile = true }
+                            .font(.caption)
+                            .foregroundColor(.accentBlue)
+                    }
+                }
+            } else {
+                Text("No profile yet — the AI will start learning your preferences after your first workout.")
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
+            }
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(12)
     }
 
     // MARK: - Coaching Profile
