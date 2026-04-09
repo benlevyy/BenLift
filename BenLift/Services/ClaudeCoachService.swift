@@ -9,6 +9,7 @@ protocol CoachServiceProtocol: Sendable {
     func adaptMidWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> MidWorkoutAdaptResponse
     func analyzePostWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> PostWorkoutAnalysisResponse
     func generateWeeklyReview(systemPrompt: String, userPrompt: String, model: String) async throws -> WeeklyReviewResponse
+    func refreshIntelligence(systemPrompt: String, userPrompt: String, model: String) async throws -> IntelligenceRefreshResponse
 }
 
 // MARK: - Errors
@@ -139,6 +140,11 @@ actor ClaudeCoachService: CoachServiceProtocol {
     func generateWeeklyReview(systemPrompt: String, userPrompt: String, model: String) async throws -> WeeklyReviewResponse {
         print("[BenLift/API] generateWeeklyReview called with model: \(model)")
         return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 4096, label: "generateWeeklyReview")
+    }
+
+    func refreshIntelligence(systemPrompt: String, userPrompt: String, model: String) async throws -> IntelligenceRefreshResponse {
+        print("[BenLift/API] refreshIntelligence called with model: \(model)")
+        return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 2048, label: "refreshIntelligence")
     }
 
     // MARK: - Core Request

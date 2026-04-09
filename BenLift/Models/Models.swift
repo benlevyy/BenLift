@@ -422,12 +422,12 @@ final class ActivityLog {
     }
 }
 
-// MARK: - Living User Profile (AI-maintained)
+// MARK: - Living User Profile (DEPRECATED — replaced by UserIntelligence)
 
 @Model
 final class UserProfile {
     var id: UUID
-    var profileText: String    // Free-form text the AI reads and writes
+    var profileText: String
     var lastUpdated: Date
 
     init(
@@ -438,5 +438,101 @@ final class UserProfile {
         self.id = id
         self.profileText = profileText
         self.lastUpdated = lastUpdated
+    }
+}
+
+// MARK: - User Intelligence (AI-generated from data)
+
+@Model
+final class UserIntelligence {
+    var id: UUID
+    var lastRefreshed: Date
+
+    // AI-generated structured sections (populated by Sonnet refresh)
+    var activityPatterns: String
+    var trainingPatterns: String
+    var strengthProfile: String
+    var recoveryProfile: String
+    var exercisePreferences: String
+    var notableObservations: String
+
+    // Accumulates between refreshes (written by Haiku post-workout)
+    var pendingObservations: String
+
+    // User-provided fields (minimal input)
+    var injuries: String
+    var userNotes: String
+
+    // Track staleness
+    var workoutsSinceRefresh: Int
+
+    init(
+        id: UUID = UUID(),
+        lastRefreshed: Date = .distantPast,
+        activityPatterns: String = "",
+        trainingPatterns: String = "",
+        strengthProfile: String = "",
+        recoveryProfile: String = "",
+        exercisePreferences: String = "",
+        notableObservations: String = "",
+        pendingObservations: String = "",
+        injuries: String = "",
+        userNotes: String = "",
+        workoutsSinceRefresh: Int = 0
+    ) {
+        self.id = id
+        self.lastRefreshed = lastRefreshed
+        self.activityPatterns = activityPatterns
+        self.trainingPatterns = trainingPatterns
+        self.strengthProfile = strengthProfile
+        self.recoveryProfile = recoveryProfile
+        self.exercisePreferences = exercisePreferences
+        self.notableObservations = notableObservations
+        self.pendingObservations = pendingObservations
+        self.injuries = injuries
+        self.userNotes = userNotes
+        self.workoutsSinceRefresh = workoutsSinceRefresh
+    }
+
+    var hasBeenRefreshed: Bool {
+        lastRefreshed != .distantPast
+    }
+
+    var isStale: Bool {
+        Date().daysSince(lastRefreshed) >= 7 || workoutsSinceRefresh >= 5
+    }
+
+    var formattedForPrompt: String {
+        var sections: [String] = []
+
+        if !activityPatterns.isEmpty {
+            sections.append("Activity patterns: \(activityPatterns)")
+        }
+        if !trainingPatterns.isEmpty {
+            sections.append("Training patterns: \(trainingPatterns)")
+        }
+        if !strengthProfile.isEmpty {
+            sections.append("Strength profile: \(strengthProfile)")
+        }
+        if !recoveryProfile.isEmpty {
+            sections.append("Recovery profile: \(recoveryProfile)")
+        }
+        if !exercisePreferences.isEmpty {
+            sections.append("Exercise preferences: \(exercisePreferences)")
+        }
+        if !notableObservations.isEmpty {
+            sections.append("Notable observations: \(notableObservations)")
+        }
+        if !pendingObservations.isEmpty {
+            sections.append("Recent observations (not yet synthesized): \(pendingObservations)")
+        }
+        if !injuries.isEmpty {
+            sections.append("INJURIES/CONCERNS (user-reported): \(injuries)")
+        }
+        if !userNotes.isEmpty {
+            sections.append("User notes: \(userNotes)")
+        }
+
+        return sections.joined(separator: "\n")
     }
 }

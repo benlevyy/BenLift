@@ -5,6 +5,7 @@ struct ProgramOverview: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var coachVM: CoachViewModel
     @Bindable var programVM: ProgramViewModel
+    var intelligenceVM: IntelligenceViewModel
     @Query(sort: \WorkoutSession.date, order: .reverse) private var allSessions: [WorkoutSession]
 
     var body: some View {
@@ -23,8 +24,8 @@ struct ProgramOverview: View {
                     // Recent activities (climbing, cardio)
                     recentActivitiesSection
 
-                    // Living profile (AI-maintained)
-                    livingProfileSection
+                    // Intelligence (AI-generated from data)
+                    intelligenceSection
 
                     // Exercise library link
                     NavigationLink {
@@ -294,105 +295,71 @@ struct ProgramOverview: View {
         }
     }
 
-    // MARK: - Living Profile (AI-maintained)
+    // MARK: - Intelligence
 
-    @Query private var userProfiles: [UserProfile]
-    @State private var isEditingProfile = false
-
-    private var livingProfileSection: some View {
+    private var intelligenceSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("YOUR PROFILE")
+                Text("INTELLIGENCE")
                     .font(.caption.bold())
                     .foregroundColor(.secondaryText)
                 Spacer()
-                Text("AI-learned")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondaryText)
+                NavigationLink {
+                    IntelligenceView(
+                        intelligenceVM: intelligenceVM,
+                        program: programVM.currentProgram
+                    )
+                } label: {
+                    Text("View / Refresh")
+                        .font(.caption)
+                        .foregroundColor(.accentBlue)
+                }
             }
 
-            if let profile = userProfiles.first, !profile.profileText.isEmpty {
-                if isEditingProfile {
-                    TextEditor(text: Binding(
-                        get: { profile.profileText },
-                        set: { profile.profileText = $0; profile.lastUpdated = Date() }
-                    ))
-                    .font(.caption)
-                    .frame(minHeight: 100)
-                    .cornerRadius(6)
-
-                    HStack {
-                        Button("Done") {
-                            isEditingProfile = false
-                            try? modelContext.save()
-                        }
-                        .font(.caption.bold())
-
-                        Spacer()
-
-                        Button("Clear All", role: .destructive) {
-                            profile.profileText = ""
-                            isEditingProfile = false
-                            try? modelContext.save()
-                        }
-                        .font(.caption)
-                    }
-                } else {
-                    Text(profile.profileText)
+            if let intel = intelligenceVM.intelligence, intel.hasBeenRefreshed {
+                // Show compact summary
+                if !intel.trainingPatterns.isEmpty && intel.trainingPatterns != "Insufficient data" {
+                    Text(intel.trainingPatterns)
                         .font(.caption)
                         .foregroundColor(.primary)
+                        .lineLimit(2)
+                }
+                if !intel.strengthProfile.isEmpty && intel.strengthProfile != "Insufficient data" {
+                    Text(intel.strengthProfile)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                }
 
-                    HStack {
-                        Text("Updated \(profile.lastUpdated.shortFormatted)")
+                HStack {
+                    Text("Refreshed \(intel.lastRefreshed.shortFormatted)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondaryText)
+                    if intel.isStale {
+                        Text("Stale")
+                            .font(.system(size: 9).bold())
+                            .foregroundColor(.orange)
+                    }
+                    if intel.workoutsSinceRefresh > 0 {
+                        Text("\(intel.workoutsSinceRefresh) new workouts")
                             .font(.system(size: 9))
                             .foregroundColor(.secondaryText)
-                        Spacer()
-                        Button("Edit") { isEditingProfile = true }
-                            .font(.caption)
-                            .foregroundColor(.accentBlue)
                     }
+                    Spacer()
                 }
             } else {
-                Text("No profile yet — the AI will start learning your preferences after your first workout.")
+                Text("Tap View / Refresh to analyze your training data.")
                     .font(.caption)
                     .foregroundColor(.secondaryText)
-            }
-        }
-        .padding()
-        .background(Color.cardSurface)
-        .cornerRadius(12)
-    }
-
-    // MARK: - Coaching Profile
-
-    private var coachingProfileSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("COACHING PROFILE")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                Spacer()
-                if let program = programVM.currentProgram {
-                    NavigationLink {
-                        CoachingProfileView(program: program)
-                    } label: {
-                        Text("Edit")
-                            .font(.caption)
-                            .foregroundColor(.accentBlue)
-                    }
-                }
             }
 
             if let program = programVM.currentProgram {
+                Divider()
                 HStack(spacing: 16) {
                     profileItem("Goal", program.goal)
                     profileItem("Experience", program.experienceLevel)
                     profileItem("Days/week", "\(program.daysPerWeek)")
                 }
-            } else {
-                Text("No profile set up yet")
-                    .font(.subheadline)
-                    .foregroundColor(.secondaryText)
             }
         }
         .padding()

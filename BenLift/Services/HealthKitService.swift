@@ -198,6 +198,98 @@ class HealthKitService {
         }
     }
 
+    // MARK: - Health Averages (for Intelligence Refresh)
+
+    struct HealthAverages {
+        var avgSleep: (average: Double, trend: String)?
+        var avgRHR: (average: Double, trend: String)?
+        var avgHRV: (average: Double, trend: String)?
+    }
+
+    func fetchHealthAverages(days: Int = 30) async -> HealthAverages {
+        guard HealthKitService.isAvailable else { return HealthAverages() }
+
+        async let sleepAvg = fetchSleepAverage(days: days)
+        async let rhrAvg = fetchQuantityAverage(.restingHeartRate, unit: HKUnit(from: "count/min"), days: days)
+        async let hrvAvg = fetchQuantityAverage(.heartRateVariabilitySDNN, unit: HKUnit.secondUnit(with: .milli), days: days)
+
+        return await HealthAverages(avgSleep: sleepAvg, avgRHR: rhrAvg, avgHRV: hrvAvg)
+    }
+
+    private func fetchSleepAverage(days: Int) async -> (average: Double, trend: String)? {
+        let calendar = Calendar.current
+        var nightly: [Double] = []
+
+        for dayOffset in 1...days {
+            guard let nightStart = calendar.date(byAdding: .day, value: -dayOffset, to: Date()),
+                  let pm9 = calendar.date(bySettingHour: 21, minute: 0, second: 0, of: nightStart),
+                  let nextDay = calendar.date(byAdding: .day, value: 1, to: nightStart),
+                  let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: nextDay) else { continue }
+
+            guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
+            let predicate = HKQuery.predicateForSamples(withStart: pm9, end: noon, options: .strictStartDate)
+            let descriptor = HKSampleQueryDescriptor(
+                predicates: [.categorySample(type: sleepType, predicate: predicate)],
+                sortDescriptors: [SortDescriptor(\.startDate)]
+            )
+
+            let asleepValues: Set<Int> = [
+                HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                HKCategoryValueSleepAnalysis.asleepREM.rawValue,
+                HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+            ]
+
+            if let samples = try? await descriptor.result(for: healthStore) {
+                let hours = samples
+                    .filter { asleepValues.contains($0.value) }
+                    .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) } / 3600.0
+                if hours > 0 { nightly.append(hours) }
+            }
+        }
+
+        guard !nightly.isEmpty else { return nil }
+        let avg = nightly.reduce(0, +) / Double(nightly.count)
+        let trend = computeTrend(nightly)
+        return (average: avg, trend: trend)
+    }
+
+    private func fetchQuantityAverage(
+        _ identifier: HKQuantityTypeIdentifier,
+        unit: HKUnit,
+        days: Int
+    ) async -> (average: Double, trend: String)? {
+        guard let quantityType = HKQuantityType.quantityType(forIdentifier: identifier) else { return nil }
+        let startDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: Date(), options: .strictStartDate)
+
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.quantitySample(type: quantityType, predicate: predicate)],
+            sortDescriptors: [SortDescriptor(\.startDate)],
+            limit: 500
+        )
+
+        guard let results = try? await descriptor.result(for: healthStore), !results.isEmpty else { return nil }
+        let values = results.map { $0.quantity.doubleValue(for: unit) }
+        let avg = values.reduce(0, +) / Double(values.count)
+        let trend = computeTrend(values)
+        return (average: avg, trend: trend)
+    }
+
+    private func computeTrend(_ values: [Double]) -> String {
+        guard values.count >= 4 else { return "stable" }
+        let mid = values.count / 2
+        let firstHalf = Array(values.prefix(mid))
+        let secondHalf = Array(values.suffix(mid))
+        let firstAvg = firstHalf.reduce(0, +) / Double(firstHalf.count)
+        let secondAvg = secondHalf.reduce(0, +) / Double(secondHalf.count)
+        guard firstAvg > 0 else { return "stable" }
+        let change = (secondAvg - firstAvg) / firstAvg
+        if change > 0.05 { return "rising" }
+        if change < -0.05 { return "declining" }
+        return "stable"
+    }
+
     // MARK: - Generic Quantity Fetch
 
     private func fetchMostRecentQuantity(

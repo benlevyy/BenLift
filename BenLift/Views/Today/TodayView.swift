@@ -942,18 +942,8 @@ struct AIAdjustSheet: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(program.goal) • \(program.daysPerWeek) days/week")
                     .font(.caption)
-                if let activities = program.otherActivities, !activities.isEmpty {
-                    Text(activities)
-                        .font(.caption)
-                        .foregroundColor(.secondaryText)
-                }
-                if let priorities = program.musclePriorities, !priorities.isEmpty {
-                    Text("Priority: \(priorities)")
-                        .font(.caption)
-                        .foregroundColor(.secondaryText)
-                }
-                if let concerns = program.ongoingConcerns, !concerns.isEmpty {
-                    Text(concerns)
+                if let intel = fetchIntelligence(), !intel.injuries.isEmpty {
+                    Text(intel.injuries)
                         .font(.caption)
                         .foregroundColor(.failedRed.opacity(0.8))
                 }
@@ -962,6 +952,11 @@ struct AIAdjustSheet: View {
         .padding(10)
         .background(Color.cardSurface)
         .cornerRadius(8)
+    }
+
+    private func fetchIntelligence() -> UserIntelligence? {
+        let descriptor = FetchDescriptor<UserIntelligence>()
+        return try? modelContext.fetch(descriptor).first
     }
 }
 

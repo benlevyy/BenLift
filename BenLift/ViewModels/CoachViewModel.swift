@@ -5,7 +5,7 @@ import SwiftData
 class CoachViewModel {
     var selectedCategory: WorkoutCategory?
     var feeling: Int = 3
-    var availableTime: Int = 60
+    var availableTime: Int? = nil
     var concerns: String = ""
 
     var currentPlan: DailyPlanResponse?
@@ -62,7 +62,9 @@ class CoachViewModel {
             "\(act.date.shortFormatted): \(act.type) (\(TimeInterval(act.duration).formattedDuration), \(act.source))"
         }.joined(separator: "\n")
 
-        let profileText = loadProfile(modelContext: modelContext)
+        // Load intelligence for prompt context
+        let intelDescriptor = FetchDescriptor<UserIntelligence>()
+        let intelligence = try? modelContext.fetch(intelDescriptor).first
 
         let (system, user) = PromptBuilder.recommendFocusPrompt(
             recentSessionsSummary: recentSummary,
@@ -71,7 +73,7 @@ class CoachViewModel {
             soreness: concerns.isEmpty ? nil : concerns,
             program: program,
             healthContext: healthContext,
-            userProfile: profileText
+            intelligence: intelligence
         )
 
         let model = UserDefaults.standard.string(forKey: "modelRecommendFocus") ?? "claude-sonnet-4-5"
@@ -132,7 +134,7 @@ class CoachViewModel {
 
         let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
 
-        print("[BenLift/Coach] Generating plan for \(currentSessionName ?? category?.displayName ?? "Custom"), feeling=\(feeling), time=\(availableTime)min")
+        print("[BenLift/Coach] Generating plan for \(currentSessionName ?? category?.displayName ?? "Custom"), feeling=\(feeling), time=\(availableTime.map { "\($0)min" } ?? "unset")")
 
         do {
             let plan = try await coachService.generateDailyPlan(systemPrompt: system, userPrompt: user, model: model)
@@ -378,41 +380,4 @@ class CoachViewModel {
     var targetMuscleGroups: [MuscleGroup] = []
     var currentSessionName: String?
 
-    // MARK: - Living User Profile
-
-    @MainActor
-    func loadProfile(modelContext: ModelContext) -> String? {
-        let descriptor = FetchDescriptor<UserProfile>()
-        guard let profile = try? modelContext.fetch(descriptor).first else { return nil }
-        return profile.profileText.isEmpty ? nil : profile.profileText
-    }
-
-    @MainActor
-    func applyProfileUpdates(_ updates: [String], modelContext: ModelContext) {
-        guard !updates.isEmpty else { return }
-
-        let descriptor = FetchDescriptor<UserProfile>()
-        let profile: UserProfile
-        if let existing = try? modelContext.fetch(descriptor).first {
-            profile = existing
-        } else {
-            profile = UserProfile()
-            modelContext.insert(profile)
-        }
-
-        // Append new updates as bullet points
-        var lines = profile.profileText.components(separatedBy: "\n").filter { !$0.isEmpty }
-        for update in updates {
-            let trimmed = update.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Don't add duplicates
-            if !lines.contains(where: { $0.localizedCaseInsensitiveContains(trimmed) }) {
-                lines.append("• \(trimmed)")
-            }
-        }
-        profile.profileText = lines.joined(separator: "\n")
-        profile.lastUpdated = Date()
-        try? modelContext.save()
-
-        print("[BenLift/Profile] Updated: \(updates.count) new items, total \(lines.count) lines")
-    }
 }

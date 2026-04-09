@@ -53,9 +53,9 @@ class AnalysisViewModel {
             try? modelContext.save()
             currentAnalysis = analysis
 
-            // Apply profile updates if any
-            if let updates = response.profileUpdates, !updates.isEmpty {
-                applyProfileUpdates(updates, modelContext: modelContext)
+            // Append observations to intelligence for next refresh
+            if let observations = response.observations, !observations.isEmpty {
+                appendObservations(observations, modelContext: modelContext)
             }
 
         } catch {
@@ -65,30 +65,28 @@ class AnalysisViewModel {
         isAnalyzing = false
     }
 
-    // MARK: - Profile Updates
+    // MARK: - Intelligence Observations
 
     @MainActor
-    private func applyProfileUpdates(_ updates: [String], modelContext: ModelContext) {
-        let descriptor = FetchDescriptor<UserProfile>()
-        let profile: UserProfile
+    private func appendObservations(_ observations: [String], modelContext: ModelContext) {
+        let descriptor = FetchDescriptor<UserIntelligence>()
+        let intel: UserIntelligence
         if let existing = try? modelContext.fetch(descriptor).first {
-            profile = existing
+            intel = existing
         } else {
-            profile = UserProfile()
-            modelContext.insert(profile)
+            intel = UserIntelligence()
+            modelContext.insert(intel)
         }
 
-        var lines = profile.profileText.components(separatedBy: "\n").filter { !$0.isEmpty }
-        for update in updates {
-            let trimmed = update.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !lines.contains(where: { $0.localizedCaseInsensitiveContains(trimmed) }) {
-                lines.append("• \(trimmed)")
-            }
+        let newText = observations.map { "• \($0)" }.joined(separator: "\n")
+        if intel.pendingObservations.isEmpty {
+            intel.pendingObservations = newText
+        } else {
+            intel.pendingObservations += "\n" + newText
         }
-        profile.profileText = lines.joined(separator: "\n")
-        profile.lastUpdated = Date()
+        intel.workoutsSinceRefresh += 1
         try? modelContext.save()
 
-        print("[BenLift/Profile] Auto-updated: \(updates)")
+        print("[BenLift/Intel] Observations appended: \(observations.count) items, \(intel.workoutsSinceRefresh) workouts since refresh")
     }
 }

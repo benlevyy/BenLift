@@ -201,7 +201,7 @@ struct PostWorkoutAnalysisResponse: Codable {
     let recoveryNotes: String?
     let overallRating: String
     let coachNote: String
-    let profileUpdates: [String]?  // AI-suggested updates to the living user profile
+    let observations: [String]?    // AI-observed patterns to accumulate for next intelligence refresh
 }
 
 struct PerformanceVsPlan: Codable {
@@ -323,4 +323,15 @@ struct CategoryStats: Codable {
     let sessionCount: Int
     let avgFeeling: Double?
     let lastSessionDate: Date?
+}
+
+// MARK: - Intelligence Refresh Response
+
+struct IntelligenceRefreshResponse: Codable {
+    let activityPatterns: String
+    let trainingPatterns: String
+    let strengthProfile: String
+    let recoveryProfile: String
+    let exercisePreferences: String
+    let notableObservations: String
 }

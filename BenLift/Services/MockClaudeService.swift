@@ -97,7 +97,19 @@ actor MockClaudeCoachService: CoachServiceProtocol {
             recoveryNotes: "Sleep was 6.1 hours. Prioritize rest tonight.",
             overallRating: "good",
             coachNote: "The failed rep on bench last session became a clean 5 today. Real progress. Nail 185x3x6 before moving up.",
-            profileUpdates: ["Bench working weight ~185", "Responds well to progressive overload on compounds"]
+            observations: ["Bench working weight ~185", "Responds well to progressive overload on compounds"]
+        )
+    }
+
+    func refreshIntelligence(systemPrompt: String, userPrompt: String, model: String) async throws -> IntelligenceRefreshResponse {
+        try await Task.sleep(nanoseconds: delay)
+        return IntelligenceRefreshResponse(
+            activityPatterns: "Climbs 2-3x/week, typically Wed evenings and weekend mornings. Occasional runs on Saturdays.",
+            trainingPatterns: "Lifts 4x/week on a push/pull/legs rotation. Average session ~50 minutes, 5-6 exercises. Most consistent Mon-Thu.",
+            strengthProfile: "Bench 185x6 (e1RM ~222), progressing ~5 lbs/month. Squat 225x5 (e1RM ~253). OHP 115x8 (e1RM ~145). Pull-ups BW+25x6.",
+            recoveryProfile: "Avg sleep 7.2h (stable). RHR 64 bpm (stable). HRV 52ms (stable). Needs 48h+ between heavy push sessions. Back recovers slower after climbing days.",
+            exercisePreferences: "Favors incline DB press over flat barbell. Consistently picks cable work for delts. Skips leg extensions. Prefers hammer curls over barbell curls.",
+            notableObservations: "Performance dips on sessions immediately after climbing. PRs tend to happen on Monday/Tuesday when well-rested. Grip sometimes limits heavy pulling after climb days."
         )
     }
 

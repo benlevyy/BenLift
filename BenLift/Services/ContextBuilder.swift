@@ -11,7 +11,7 @@ struct ContextBuilder {
         targetMuscleGroups: [MuscleGroup] = [],
         sessionName: String? = nil,
         feeling: Int,
-        availableTime: Int,
+        availableTime: Int?,
         concerns: String?,
         modelContext: ModelContext,
         program: TrainingProgram?,
@@ -43,7 +43,11 @@ struct ContextBuilder {
         // Weekly volume progress
         let volumeProgress = weeklyVolumeProgress(modelContext: modelContext, exerciseLookup: DefaultExercises.buildMuscleGroupLookup(from: modelContext))
 
-        var system = PromptBuilder.sharedSystemPrefix(program: program, healthContext: healthContext)
+        // Load intelligence for prompt context
+        let intelDescriptor = FetchDescriptor<UserIntelligence>()
+        let intelligence = try? modelContext.fetch(intelDescriptor).first
+
+        var system = PromptBuilder.sharedSystemPrefix(program: program, healthContext: healthContext, intelligence: intelligence)
         system += """
 
         Respond with this JSON schema:
@@ -60,8 +64,10 @@ struct ContextBuilder {
 
         Pre-workout check-in:
         - Feeling: \(feeling)/5
-        - Available time: \(availableTime) minutes
         """
+        if let time = availableTime {
+            user += "\n- Available time: \(time) minutes"
+        }
         if let concerns = concerns, !concerns.isEmpty {
             user += "\n- Concerns: \(concerns)"
         }
@@ -113,9 +119,9 @@ struct ContextBuilder {
             recentSummary = "No category-specific history (dynamic session)"
         }
 
-        // Load current user profile
-        let profileDescriptor = FetchDescriptor<UserProfile>()
-        let profileText = (try? modelContext.fetch(profileDescriptor).first)?.profileText
+        // Load pending observations from intelligence
+        let intelDescriptor = FetchDescriptor<UserIntelligence>()
+        let pendingObservations = (try? modelContext.fetch(intelDescriptor).first)?.pendingObservations
 
         return PromptBuilder.postWorkoutAnalysisPrompt(
             planSummary: planSummary,
@@ -123,7 +129,7 @@ struct ContextBuilder {
             recentSessionsSummary: recentSummary,
             program: program,
             healthContext: healthContext,
-            currentProfile: profileText
+            pendingObservations: pendingObservations
         )
     }
 

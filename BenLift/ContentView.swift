@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var sharedCoachVM = CoachViewModel()
     @State private var sharedProgramVM = ProgramViewModel()
+    @State private var sharedIntelligenceVM = IntelligenceViewModel()
 
     var body: some View {
         TabView {
@@ -18,7 +19,7 @@ struct ContentView: View {
                     Label("History", systemImage: "clock.arrow.circlepath")
                 }
 
-            ProgramOverview(coachVM: sharedCoachVM, programVM: sharedProgramVM)
+            ProgramOverview(coachVM: sharedCoachVM, programVM: sharedProgramVM, intelligenceVM: sharedIntelligenceVM)
                 .tabItem {
                     Label("Recovery", systemImage: "heart.text.square")
                 }
@@ -31,6 +32,7 @@ struct ContentView: View {
         .preferredColorScheme(.light)
         .onAppear {
             sharedProgramVM.loadCurrentProgram(modelContext: modelContext)
+            sharedIntelligenceVM.loadIntelligence(modelContext: modelContext)
             // Auto-fire recommendation → plan on app open
             if sharedCoachVM.recommendation == nil && sharedCoachVM.editedExercises.isEmpty {
                 Task {
