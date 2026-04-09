@@ -61,111 +61,74 @@ struct ProgramOverview: View {
     @Query private var exercises: [Exercise]
     private var exerciseCount: Int { exercises.count }
 
-    // MARK: - Muscle Status
-
-    @State private var overrides: [String: String] = [:]  // muscleGroup -> overridden status
+    // MARK: - Muscle Status (read-only)
 
     private var muscleStatusSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("MUSCLE STATUS")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                Spacer()
-                if !overrides.isEmpty {
-                    Button {
-                        overrides = [:]
-                    } label: {
-                        Text("Reset")
-                            .font(.caption2)
-                            .foregroundColor(.accentBlue)
-                    }
-                }
-            }
+            Text("MUSCLE STATUS")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
 
-            if let rec = coachVM.recommendation {
+            if coachVM.isLoadingRecommendation {
+                // Shimmer placeholders while AI is analyzing
+                ForEach(MuscleGroup.allCases) { mg in
+                    shimmerRow(name: mg.rawValue)
+                }
+            } else if let rec = coachVM.recommendation {
                 ForEach(rec.muscleGroupStatus) { mg in
-                    let effectiveStatus = overrides[mg.muscleGroup] ?? mg.status
-                    let effectiveLevel = statusLevel(effectiveStatus)
-                    tappableStatusRow(
-                        name: mg.muscleGroup,
-                        status: effectiveStatus,
-                        level: effectiveLevel,
-                        isOverridden: overrides[mg.muscleGroup] != nil
-                    )
+                    statusRow(name: mg.muscleGroup, status: mg.status, level: statusLevel(mg.status))
                 }
             } else {
                 ForEach(computedMuscleStatus(), id: \.name) { mg in
-                    let effectiveStatus = overrides[mg.name] ?? mg.status
-                    let effectiveLevel = statusLevel(effectiveStatus)
-                    tappableStatusRow(
-                        name: mg.name,
-                        status: effectiveStatus,
-                        level: effectiveLevel,
-                        isOverridden: overrides[mg.name] != nil
-                    )
+                    statusRow(name: mg.name, status: mg.status, level: mg.level)
                 }
             }
-
-            Text("Tap a muscle group to adjust")
-                .font(.system(size: 9))
-                .foregroundColor(.secondaryText)
         }
         .padding()
         .background(Color.cardSurface)
         .cornerRadius(12)
-        .onChange(of: overrides) { _, newOverrides in
-            // Feed overrides into coach concerns for next recommendation
-            if !newOverrides.isEmpty {
-                let soreGroups = newOverrides.filter { $0.value == "sore" }.map { $0.key.capitalized }
-                let recoveringGroups = newOverrides.filter { $0.value == "recovering" }.map { $0.key.capitalized }
-                var parts: [String] = []
-                if !soreGroups.isEmpty { parts.append("\(soreGroups.joined(separator: ", ")) sore") }
-                if !recoveringGroups.isEmpty { parts.append("\(recoveringGroups.joined(separator: ", ")) recovering") }
-                coachVM.concerns = parts.joined(separator: ". ")
-            }
+    }
+
+    private func shimmerRow(name: String) -> some View {
+        HStack(spacing: 8) {
+            Text(name.capitalized)
+                .font(.caption)
+                .foregroundColor(.secondaryText.opacity(0.4))
+                .frame(width: 75, alignment: .trailing)
+
+            ShimmerBar()
+                .frame(height: 10)
+
+            Text("...")
+                .font(.caption2)
+                .foregroundColor(.secondaryText.opacity(0.3))
+                .frame(width: 60, alignment: .leading)
         }
     }
 
-    private let statusCycle = ["fresh", "ready", "recovering", "sore"]
-
-    private func tappableStatusRow(name: String, status: String, level: Double, isOverridden: Bool) -> some View {
-        Button {
-            let currentIndex = statusCycle.firstIndex(of: status) ?? 0
-            let nextIndex = (currentIndex + 1) % statusCycle.count
-            overrides[name] = statusCycle[nextIndex]
-        } label: {
-            HStack(spacing: 8) {
-                HStack(spacing: 3) {
-                    if isOverridden {
-                        Circle()
-                            .fill(Color.accentBlue)
-                            .frame(width: 4, height: 4)
-                    }
-                    Text(name.capitalized)
-                        .font(.caption)
-                        .foregroundColor(isOverridden ? .primary : .secondaryText)
-                }
+    private func statusRow(name: String, status: String, level: Double) -> some View {
+        HStack(spacing: 8) {
+            Text(name.capitalized)
+                .font(.caption)
+                .foregroundColor(.secondaryText)
                 .frame(width: 75, alignment: .trailing)
 
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.gray.opacity(0.2))
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(statusColor(status))
-                            .frame(width: geo.size.width * level)
-                    }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.gray.opacity(0.2))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(statusColor(status))
+                        .frame(width: geo.size.width * level)
                 }
-                .frame(height: 10)
-
-                Text(status)
-                    .font(.caption2)
-                    .foregroundColor(statusColor(status))
-                    .frame(width: 60, alignment: .leading)
             }
+            .frame(height: 10)
+
+            Text(status)
+                .font(.caption2)
+                .foregroundColor(statusColor(status))
+                .frame(width: 60, alignment: .leading)
         }
-        .buttonStyle(.plain)
     }
 
     private func statusLevel(_ status: String) -> Double {
@@ -260,31 +223,94 @@ struct ProgramOverview: View {
         .cornerRadius(12)
     }
 
-    // MARK: - Recent Activities
+    // MARK: - Recent Activities (unified timeline)
 
     @State private var recentActivityData: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = []
 
+    private enum TimelineItem: Identifiable {
+        case workout(WorkoutSession)
+        case activity(index: Int, type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)
+
+        var id: String {
+            switch self {
+            case .workout(let s): return "w-\(s.id.uuidString)"
+            case .activity(let i, _, let d, _, _, _): return "a-\(i)-\(d.timeIntervalSince1970)"
+            }
+        }
+
+        var date: Date {
+            switch self {
+            case .workout(let s): return s.date
+            case .activity(_, _, let d, _, _, _): return d
+            }
+        }
+    }
+
+    private var recentTimeline: [TimelineItem] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+        var items: [TimelineItem] = allSessions
+            .filter { $0.date >= cutoff }
+            .map { .workout($0) }
+        for (i, act) in recentActivityData.enumerated() {
+            items.append(.activity(index: i, type: act.type, date: act.date, duration: act.duration, calories: act.calories, source: act.source))
+        }
+        return items.sorted { $0.date > $1.date }
+    }
+
     private var recentActivitiesSection: some View {
         Group {
-            if !recentActivityData.isEmpty {
+            if !recentTimeline.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("RECENT ACTIVITIES")
+                    Text("RECENT ACTIVITY")
                         .font(.caption.bold())
                         .foregroundColor(.secondaryText)
 
-                    ForEach(Array(recentActivityData.prefix(5).enumerated()), id: \.offset) { _, activity in
-                        HStack {
-                            Image(systemName: activityIcon(activity.type))
-                                .foregroundColor(.accentBlue)
-                                .frame(width: 20)
-                            VStack(alignment: .leading) {
-                                Text(activity.type.capitalized)
-                                    .font(.subheadline)
-                                Text("\(activity.date.shortFormatted) • \(TimeInterval(activity.duration).formattedDuration) • \(activity.source)")
+                    ForEach(Array(recentTimeline.prefix(8))) { item in
+                        switch item {
+                        case .workout(let session):
+                            HStack {
+                                Image(systemName: "figure.strengthtraining.traditional")
+                                    .foregroundColor(.accentBlue)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading) {
+                                    Text(session.displayName)
+                                        .font(.subheadline)
+                                    HStack(spacing: 4) {
+                                        Text(session.date.shortFormatted)
+                                        if let dur = session.duration {
+                                            Text("•")
+                                            Text(TimeInterval(dur).formattedDuration)
+                                        }
+                                        Text("•")
+                                        Text("\(session.entries.count) exercises")
+                                    }
                                     .font(.caption2)
                                     .foregroundColor(.secondaryText)
+                                }
+                                Spacer()
+                                Text("Lifting")
+                                    .font(.caption2)
+                                    .foregroundColor(.accentBlue)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.accentBlue.opacity(0.1))
+                                    .cornerRadius(4)
                             }
-                            Spacer()
+
+                        case .activity(_, let type, let date, let duration, _, let source):
+                            HStack {
+                                Image(systemName: activityIcon(type))
+                                    .foregroundColor(.legsOrange)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading) {
+                                    Text(type.capitalized)
+                                        .font(.subheadline)
+                                    Text("\(date.shortFormatted) • \(TimeInterval(duration).formattedDuration) • \(source)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondaryText)
+                                }
+                                Spacer()
+                            }
                         }
                     }
                 }
@@ -463,6 +489,32 @@ struct ProgramOverview: View {
     private func loadActivities() {
         Task {
             recentActivityData = await HealthKitService.shared.fetchRecentActivities(days: 7)
+        }
+    }
+}
+
+// MARK: - Shimmer Bar
+
+struct ShimmerBar: View {
+    @State private var offset: CGFloat = -1
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.15))
+
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.08))
+                    .frame(width: geo.size.width * 0.4)
+                    .offset(x: geo.size.width * offset)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                offset = 1.4
+            }
         }
     }
 }

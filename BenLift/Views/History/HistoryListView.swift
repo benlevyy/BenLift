@@ -5,6 +5,7 @@ struct HistoryListView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
     @State private var showClearConfirm = false
+    @State private var showManualEntry = false
     @State private var activities: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = []
 
     // Unified timeline item
@@ -73,19 +74,30 @@ struct HistoryListView: View {
             }
             .navigationTitle("History")
             .toolbar {
-                if !sessions.isEmpty {
-                    ToolbarItem(placement: .primaryAction) {
-                        Menu {
-                            Button(role: .destructive) {
-                                showClearConfirm = true
-                            } label: {
-                                Label("Clear All History", systemImage: "trash")
-                            }
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 12) {
+                        Button {
+                            showManualEntry = true
                         } label: {
-                            Image(systemName: "ellipsis.circle")
+                            Image(systemName: "plus")
+                        }
+
+                        if !sessions.isEmpty {
+                            Menu {
+                                Button(role: .destructive) {
+                                    showClearConfirm = true
+                                } label: {
+                                    Label("Clear All History", systemImage: "trash")
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis.circle")
+                            }
                         }
                     }
                 }
+            }
+            .sheet(isPresented: $showManualEntry) {
+                ManualWorkoutEntryView()
             }
             .alert("Clear All History?", isPresented: $showClearConfirm) {
                 Button("Delete All", role: .destructive) {

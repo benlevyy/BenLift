@@ -7,7 +7,7 @@ struct TodayView: View {
     @Bindable var programVM: ProgramViewModel
     @State private var analysisVM = AnalysisViewModel()
     @State private var selectedCategory: WorkoutCategory?
-    @State private var workoutResult: WatchWorkoutResult?
+    @State private var savedSession: WorkoutSession?
 
     // Check-in state
     @State private var feeling: Int = 3
@@ -23,29 +23,23 @@ struct TodayView: View {
                         workoutInProgressBanner
                     }
 
-                    // Loading state
-                    if coachVM.isLoadingRecommendation || coachVM.isGenerating {
-                        VStack(spacing: 12) {
-                            ProgressView()
-                                .scaleEffect(1.2)
-                            Text(coachVM.isLoadingRecommendation ? "Analyzing recovery..." : "Building plan...")
-                                .font(.subheadline)
-                                .foregroundColor(.secondaryText)
+                    // Loading / content — use ZStack so loading doesn't shift layout
+                    let isLoading = coachVM.isLoadingRecommendation || coachVM.isGenerating
+
+                    if isLoading {
+                        ThinkingView(
+                            phase: coachVM.isLoadingRecommendation ? .analyzing : .building
+                        )
+                    } else {
+                        // AI recommendation header
+                        if let rec = coachVM.recommendation {
+                            recommendationHeader(rec)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                    }
 
-                    // AI recommendation header (if available)
-                    if let rec = coachVM.recommendation {
-                        recommendationHeader(rec)
-                    }
-
-                    // Exercise plan (if generated)
-                    if !coachVM.editedExercises.isEmpty {
-                        planSection
-                            .id(planRevision)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        // Exercise plan
+                        if !coachVM.editedExercises.isEmpty {
+                            planSection
+                        }
                     }
 
                     // Adjust section — feeling + soreness + regenerate
@@ -72,14 +66,30 @@ struct TodayView: View {
                 coachVM.calculateDaysSinceLast(modelContext: modelContext)
                 programVM.loadCurrentProgram(modelContext: modelContext)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .workoutResultReceived)) { _ in
-                if let result = WatchSyncService.shared.receivedWorkoutResult {
-                    handleWorkoutResult(result)
+            .onReceive(NotificationCenter.default.publisher(for: .workoutSessionSaved)) { notification in
+                if let sessionId = notification.object as? UUID {
+                    let descriptor = FetchDescriptor<WorkoutSession>(
+                        predicate: #Predicate { $0.id == sessionId }
+                    )
+                    if let session = try? modelContext.fetch(descriptor).first {
+                        savedSession = session
+                        // Trigger AI analysis
+                        Task {
+                            await analysisVM.analyzeWorkout(
+                                session: session,
+                                planSummary: coachVM.currentPlan?.sessionStrategy,
+                                modelContext: modelContext,
+                                program: programVM.currentProgram,
+                                healthContext: nil
+                            )
+                        }
+                        coachVM.calculateDaysSinceLast(modelContext: modelContext)
+                    }
                 }
             }
-            .sheet(item: $workoutResult) { result in
+            .sheet(item: $savedSession) { session in
                 PostWorkoutSheet(
-                    result: result,
+                    session: session,
                     analysisVM: analysisVM,
                     programVM: programVM
                 )
@@ -219,13 +229,12 @@ struct TodayView: View {
 
     // MARK: - Adjust Section
 
-    @State private var showAdjustSheet = false
+    @State private var showAdjust = false
     @State private var adjustText = ""
-    @State private var planRevision = 0 // triggers animation on change
 
     private var adjustSection: some View {
         Button {
-            showAdjustSheet = true
+            showAdjust = true
         } label: {
             HStack {
                 Image(systemName: "pencil.circle.fill")
@@ -238,80 +247,103 @@ struct TodayView: View {
             .background(Color.accentBlue.opacity(0.1))
             .cornerRadius(10)
         }
-        .sheet(isPresented: $showAdjustSheet) {
-            adjustSheetContent
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $showAdjust) {
+            adjustFullScreen
         }
     }
 
-    private var adjustSheetContent: some View {
+    private var adjustFullScreen: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                // Feeling
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("How do you feel?")
-                        .font(.subheadline.bold())
-                    HStack(spacing: 8) {
-                        ForEach(1...5, id: \.self) { level in
-                            Button {
-                                feeling = level
-                            } label: {
-                                Text("\(level)")
-                                    .font(.headline)
-                                    .frame(width: 48, height: 48)
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Feeling
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("How do you feel?")
+                            .font(.headline)
+                        HStack(spacing: 6) {
+                            ForEach(1...5, id: \.self) { level in
+                                Button {
+                                    feeling = level
+                                } label: {
+                                    VStack(spacing: 2) {
+                                        Text("\(level)")
+                                            .font(.headline)
+                                        Text(feelingLabel(level))
+                                            .font(.system(size: 9))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
                                     .background(feeling == level ? feelingColor(level) : Color.cardSurface)
                                     .foregroundColor(feeling == level ? .white : .primary)
-                                    .cornerRadius(12)
+                                    .cornerRadius(10)
+                                }
                             }
                         }
                     }
-                }
 
-                // What to change
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("What should change?")
-                        .font(.subheadline.bold())
-                    TextField("e.g. legs sore, swap OHP for machine, more chest...", text: $adjustText, axis: .vertical)
-                        .lineLimit(2...5)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                Spacer()
-
-                // Submit
-                Button {
-                    showAdjustSheet = false
-                    coachVM.feeling = feeling
-                    coachVM.concerns = adjustText
-                    adjustText = ""
-                    Task {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            planRevision += 1  // triggers fade-out
-                        }
-                        await coachVM.getRecommendationAndPlan(modelContext: modelContext, program: programVM.currentProgram)
-                        withAnimation(.easeIn(duration: 0.3)) {
-                            planRevision += 1  // triggers fade-in
-                        }
+                    // What to change
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("What should change?")
+                            .font(.headline)
+                        TextField("e.g. legs sore, swap OHP for machine, more chest...", text: $adjustText, axis: .vertical)
+                            .lineLimit(3...8)
+                            .padding(12)
+                            .background(Color.cardSurface)
+                            .cornerRadius(12)
                     }
-                } label: {
-                    Text("Regenerate Plan")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.accentBlue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
+
+                    // Submit
+                    Button {
+                        showAdjust = false
+                        coachVM.feeling = feeling
+                        coachVM.concerns = adjustText
+                        adjustText = ""
+
+                        // Clear old plan immediately
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            coachVM.editedExercises = []
+                            coachVM.currentPlan = nil
+                            coachVM.recommendation = nil
+                        }
+
+                        Task {
+                            await coachVM.getRecommendationAndPlan(
+                                modelContext: modelContext,
+                                program: programVM.currentProgram
+                            )
+                        }
+                    } label: {
+                        Text("Regenerate Plan")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.accentBlue)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                    }
+                    .padding(.top, 8)
                 }
+                .padding(20)
             }
-            .padding()
-            .navigationTitle("Adjust")
+            .background(Color.appBackground)
+            .navigationTitle("Adjust Plan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showAdjustSheet = false }
+                    Button("Cancel") { showAdjust = false }
                 }
             }
+        }
+    }
+
+    private func feelingLabel(_ level: Int) -> String {
+        switch level {
+        case 1: return "Beat"
+        case 2: return "Tired"
+        case 3: return "OK"
+        case 4: return "Good"
+        case 5: return "Great"
+        default: return ""
         }
     }
 
@@ -319,7 +351,7 @@ struct TodayView: View {
 
     private var pplFallbackButtons: some View {
         DisclosureGroup("Quick Start (Push / Pull / Legs)") {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(WorkoutCategory.allCases) { category in
                     Button {
                         selectedCategory = category
@@ -340,6 +372,7 @@ struct TodayView: View {
                     }
                 }
             }
+            .padding(.vertical, 4)
         }
         .font(.subheadline)
         .foregroundColor(.secondaryText)
@@ -378,63 +411,6 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Workout Result Handling
-
-    private func handleWorkoutResult(_ result: WatchWorkoutResult) {
-        workoutResult = result
-        print("[BenLift] Received workout result: \(result.entries.count) exercises, \(result.sessionName ?? result.category?.displayName ?? "Workout")")
-
-        // Persist to SwiftData
-        let muscleGroups = (result.muscleGroups ?? []).compactMap { MuscleGroup(rawValue: $0) }
-        let session = WorkoutSession(
-            date: result.date,
-            category: result.category,
-            sessionName: result.sessionName,
-            muscleGroups: muscleGroups,
-            duration: result.duration,
-            feeling: result.feeling,
-            concerns: result.concerns,
-            aiPlanUsed: coachVM.currentPlan != nil
-        )
-
-        for entry in result.entries {
-            let exerciseEntry = ExerciseEntry(
-                exerciseName: entry.exerciseName,
-                order: entry.order
-            )
-            for set in entry.sets {
-                let setLog = SetLog(
-                    setNumber: set.setNumber,
-                    weight: set.weight,
-                    reps: set.reps,
-                    timestamp: set.timestamp,
-                    isWarmup: set.isWarmup
-                )
-                exerciseEntry.sets.append(setLog)
-            }
-            session.entries.append(exerciseEntry)
-        }
-
-        modelContext.insert(session)
-        try? modelContext.save()
-        print("[BenLift] Saved workout session to SwiftData")
-
-        // workoutResult being set triggers the .sheet(item:) automatically
-
-        // Trigger AI analysis
-        Task {
-            await analysisVM.analyzeWorkout(
-                session: session,
-                planSummary: coachVM.currentPlan?.sessionStrategy,
-                modelContext: modelContext,
-                program: programVM.currentProgram,
-                healthContext: nil // TODO: HEALTHKIT
-            )
-        }
-
-        // Refresh days since last
-        coachVM.calculateDaysSinceLast(modelContext: modelContext)
-    }
 
     private var workoutInProgressBanner: some View {
         HStack(spacing: 8) {
@@ -963,7 +939,7 @@ struct AIAdjustSheet: View {
 // MARK: - Post-Workout Sheet
 
 struct PostWorkoutSheet: View {
-    let result: WatchWorkoutResult
+    let session: WorkoutSession
     @Bindable var analysisVM: AnalysisViewModel
     @Bindable var programVM: ProgramViewModel
     @Environment(\.modelContext) private var modelContext
@@ -979,20 +955,22 @@ struct PostWorkoutSheet: View {
                             .font(.system(size: 48))
                             .foregroundColor(.prGreen)
 
-                        Text("\(result.sessionName ?? result.category?.displayName ?? "Workout") Complete")
+                        Text("\(session.displayName) Complete")
                             .font(.title2.bold())
 
-                        Text(result.date.shortFormatted)
+                        Text(session.date.shortFormatted)
                             .font(.subheadline)
                             .foregroundColor(.secondaryText)
                     }
 
                     // Stats
                     HStack(spacing: 20) {
-                        statItem("\(result.entries.count)", label: "Exercises")
+                        statItem("\(session.entries.count)", label: "Exercises")
                         statItem("\(totalSets)", label: "Sets")
                         statItem("\(Int(totalVolume))", label: "Volume (lbs)")
-                        statItem(TimeInterval(result.duration).formattedDuration, label: "Duration")
+                        if let duration = session.duration {
+                            statItem(TimeInterval(duration).formattedDuration, label: "Duration")
+                        }
                     }
                     .padding()
                     .background(Color.cardSurface)
@@ -1063,14 +1041,14 @@ struct PostWorkoutSheet: View {
                             .font(.caption.bold())
                             .foregroundColor(.secondaryText)
 
-                        ForEach(result.entries, id: \.exerciseName) { entry in
+                        ForEach(session.sortedEntries) { entry in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.exerciseName)
                                     .font(.subheadline.bold())
-                                ForEach(entry.sets.filter { !$0.isWarmup }, id: \.setNumber) { set in
+                                ForEach(entry.workingSets) { set in
                                     Text("  \(Int(set.weight)) × \(set.reps.formattedReps)")
                                         .font(.caption.monospacedDigit())
-                                        .foregroundColor(set.reps.truncatingRemainder(dividingBy: 1) != 0 ? .failedRed : .primary)
+                                        .foregroundColor(set.isFailed ? .failedRed : .primary)
                                 }
                             }
                         }
@@ -1092,13 +1070,11 @@ struct PostWorkoutSheet: View {
     }
 
     private var totalSets: Int {
-        result.entries.reduce(0) { $0 + $1.sets.filter { !$0.isWarmup }.count }
+        session.entries.reduce(0) { $0 + $1.workingSets.count }
     }
 
     private var totalVolume: Double {
-        result.entries.reduce(0.0) { total, entry in
-            total + entry.sets.filter { !$0.isWarmup }.reduce(0.0) { $0 + $1.weight * floor($1.reps) }
-        }
+        session.totalVolume
     }
 
     private func statItem(_ value: String, label: String) -> some View {

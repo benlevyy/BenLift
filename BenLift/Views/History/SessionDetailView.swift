@@ -6,12 +6,35 @@ struct SessionDetailView: View {
     @Environment(\.modelContext) private var modelContext
     let session: WorkoutSession
     @State private var analysis: PostWorkoutAnalysis?
+    @State private var isEditing = false
+    @State private var analysisVM = AnalysisViewModel()
+    @State private var showAddExercise = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Header
                 headerSection
+
+                // AI analysis status
+                if analysisVM.isAnalyzing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Reanalyzing workout...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondaryText)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.cardSurface)
+                    .cornerRadius(12)
+                }
+
+                if let error = analysisVM.analysisError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.failedRed)
+                }
 
                 // Coach note
                 if let analysis {
@@ -24,7 +47,11 @@ struct SessionDetailView: View {
                 }
 
                 // Exercises
-                exercisesSection
+                if isEditing {
+                    editableExercisesSection
+                } else {
+                    exercisesSection
+                }
 
                 // Pre-workout notes
                 if session.feeling != nil || session.concerns != nil {
@@ -35,8 +62,33 @@ struct SessionDetailView: View {
         }
         .navigationTitle(session.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if isEditing {
+                    Button("Done") {
+                        saveEdits()
+                    }
+                    .bold()
+                } else {
+                    Button("Edit") {
+                        isEditing = true
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showAddExercise) {
+            AllExercisePickerSheet { exercise in
+                let order = session.entries.count
+                let entry = ExerciseEntry(exerciseName: exercise.name, order: order)
+                let set = SetLog(setNumber: 1, weight: exercise.defaultWeight ?? 0, reps: 0)
+                entry.sets.append(set)
+                session.entries.append(entry)
+            }
+        }
         .onAppear { loadAnalysis() }
     }
+
+    // MARK: - Header
 
     private var headerSection: some View {
         HStack {
@@ -63,6 +115,8 @@ struct SessionDetailView: View {
         }
     }
 
+    // MARK: - Coach
+
     private func coachSection(_ analysis: PostWorkoutAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Coach Notes")
@@ -86,6 +140,8 @@ struct SessionDetailView: View {
         .cornerRadius(12)
     }
 
+    // MARK: - PRs
+
     private func prSection(_ events: [ProgressionEvent]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(events) { event in
@@ -106,6 +162,8 @@ struct SessionDetailView: View {
         .background(Color.prGreen.opacity(0.1))
         .cornerRadius(12)
     }
+
+    // MARK: - Read-Only Exercises
 
     private var exercisesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -151,6 +209,122 @@ struct SessionDetailView: View {
         }
     }
 
+    // MARK: - Editable Exercises
+
+    private var editableExercisesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Exercises")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondaryText)
+                    .textCase(.uppercase)
+                Spacer()
+                Button {
+                    showAddExercise = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                        Text("Add")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.accentBlue)
+                }
+            }
+
+            ForEach(session.sortedEntries) { entry in
+                editableExerciseCard(entry)
+            }
+        }
+    }
+
+    private func editableExerciseCard(_ entry: ExerciseEntry) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(entry.exerciseName)
+                    .font(.body.bold())
+                Spacer()
+                Button(role: .destructive) {
+                    deleteEntry(entry)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundColor(.failedRed)
+                }
+            }
+
+            ForEach(entry.sortedSets) { set in
+                editableSetRow(set, entry: entry)
+            }
+
+            // Add set button
+            Button {
+                addSet(to: entry)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus")
+                    Text("Add Set")
+                }
+                .font(.caption)
+                .foregroundColor(.accentBlue)
+            }
+            .padding(.top, 2)
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(8)
+    }
+
+    private func editableSetRow(_ set: SetLog, entry: ExerciseEntry) -> some View {
+        HStack(spacing: 12) {
+            Text("Set \(set.setNumber)")
+                .font(.caption)
+                .foregroundColor(.secondaryText)
+                .frame(width: 40)
+
+            HStack(spacing: 4) {
+                TextField("0", value: Binding(
+                    get: { set.weight },
+                    set: { set.weight = $0 }
+                ), format: .number)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 65)
+                    .multilineTextAlignment(.center)
+                Text("lbs")
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
+            }
+
+            HStack(spacing: 4) {
+                TextField("0", value: Binding(
+                    get: { set.reps },
+                    set: { set.reps = $0 }
+                ), format: .number)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 50)
+                    .multilineTextAlignment(.center)
+                Text("reps")
+                    .font(.caption)
+                    .foregroundColor(.secondaryText)
+            }
+
+            Spacer()
+
+            if entry.sets.count > 1 {
+                Button {
+                    deleteSet(set, from: entry)
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .font(.caption)
+                        .foregroundColor(.failedRed)
+                }
+            }
+        }
+    }
+
+    // MARK: - Pre-Workout
+
     private var preWorkoutSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Pre-Workout")
@@ -172,6 +346,71 @@ struct SessionDetailView: View {
         .background(Color.cardSurface)
         .cornerRadius(8)
     }
+
+    // MARK: - Edit Actions
+
+    private func addSet(to entry: ExerciseEntry) {
+        let lastSet = entry.sortedSets.last
+        let newSet = SetLog(
+            setNumber: (lastSet?.setNumber ?? 0) + 1,
+            weight: lastSet?.weight ?? 0,
+            reps: lastSet?.reps ?? 0,
+            timestamp: session.date
+        )
+        entry.sets.append(newSet)
+    }
+
+    private func deleteSet(_ set: SetLog, from entry: ExerciseEntry) {
+        entry.sets.removeAll { $0.id == set.id }
+        // Renumber
+        for (i, s) in entry.sortedSets.enumerated() {
+            s.setNumber = i + 1
+        }
+    }
+
+    private func deleteEntry(_ entry: ExerciseEntry) {
+        for set in entry.sets { modelContext.delete(set) }
+        session.entries.removeAll { $0.id == entry.id }
+        modelContext.delete(entry)
+    }
+
+    // MARK: - Save & Reanalyze
+
+    private func saveEdits() {
+        guard isEditing else { return }
+        isEditing = false
+
+        // Remove empty entries
+        let emptyEntries = session.entries.filter { $0.sets.isEmpty }
+        for entry in emptyEntries {
+            session.entries.removeAll { $0.id == entry.id }
+            modelContext.delete(entry)
+        }
+
+        try? modelContext.save()
+        print("[BenLift] Saved session edits: \(session.entries.count) exercises")
+
+        // Delete old analysis and regenerate
+        if let oldAnalysis = analysis {
+            modelContext.delete(oldAnalysis)
+            try? modelContext.save()
+            analysis = nil
+        }
+
+        Task {
+            await analysisVM.analyzeWorkout(
+                session: session,
+                planSummary: nil,
+                modelContext: modelContext,
+                program: nil,
+                healthContext: nil
+            )
+            // Pick up the new analysis
+            loadAnalysis()
+        }
+    }
+
+    // MARK: - Load Analysis
 
     private func loadAnalysis() {
         let sessionId = session.id

@@ -197,7 +197,17 @@ struct IntelligenceView: View {
     private func pendingSection(_ intel: UserIntelligence) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             let count = intel.pendingObservations.components(separatedBy: "\n").filter { !$0.isEmpty }.count
-            sectionHeader("PENDING OBSERVATIONS", subtitle: "\(count) items waiting for next refresh")
+            HStack {
+                sectionHeader("PENDING OBSERVATIONS", subtitle: "\(count) items waiting for next refresh")
+                Button {
+                    intel.pendingObservations = ""
+                    try? modelContext.save()
+                } label: {
+                    Text("Clear")
+                        .font(.caption)
+                        .foregroundColor(.failedRed)
+                }
+            }
 
             Text(intel.pendingObservations)
                 .font(.caption)

@@ -173,7 +173,8 @@ struct ContextBuilder {
             for entry in session.sortedEntries {
                 guard let top = StatsEngine.topSet(sets: entry.sets) else { continue }
                 let e1rm = StatsEngine.estimatedOneRepMax(weight: top.weight, reps: top.reps)
-                summary += "  \(entry.exerciseName): top set \(Int(top.weight))x\(top.reps.formattedReps), e1RM: \(Int(e1rm))\n"
+                let topWeightStr = top.weight == 0 ? "BW" : "\(Int(top.weight)) lbs"
+                summary += "  \(entry.exerciseName): top set \(topWeightStr) x \(top.reps.formattedReps), e1RM: \(Int(e1rm))\n"
             }
             summary += "  Total volume: \(Int(session.totalVolume)) lbs"
             return summary
@@ -211,7 +212,8 @@ struct ContextBuilder {
             result += "  \(entry.exerciseName):\n"
             for set in entry.sortedSets {
                 let warmup = set.isWarmup ? " (warmup)" : ""
-                result += "    Set \(set.setNumber): \(Int(set.weight)) x \(set.reps.formattedReps)\(warmup)\n"
+                let weightStr = set.weight == 0 ? "BW" : "\(Int(set.weight)) lbs"
+                result += "    Set \(set.setNumber): \(weightStr) x \(set.reps.formattedReps)\(warmup)\n"
             }
         }
         return result

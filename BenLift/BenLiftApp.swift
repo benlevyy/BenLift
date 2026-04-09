@@ -4,6 +4,7 @@ import SwiftData
 @main
 struct BenLiftApp: App {
     let container: ModelContainer
+    let syncManager: WorkoutSyncManager
 
     init() {
         print("[BenLift] App launching...")
@@ -61,6 +62,10 @@ struct BenLiftApp: App {
 
         // Activate WatchConnectivity
         WatchSyncService.shared.activate()
+
+        // Start background sync manager — persists Watch results to SwiftData
+        // regardless of which view is active
+        syncManager = WorkoutSyncManager(container: container)
     }
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
