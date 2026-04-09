@@ -96,7 +96,8 @@ actor MockClaudeCoachService: CoachServiceProtocol {
             ],
             recoveryNotes: "Sleep was 6.1 hours. Prioritize rest tonight.",
             overallRating: "good",
-            coachNote: "The failed rep on bench last session became a clean 5 today. Real progress. Nail 185x3x6 before moving up."
+            coachNote: "The failed rep on bench last session became a clean 5 today. Real progress. Nail 185x3x6 before moving up.",
+            profileUpdates: ["Bench working weight ~185", "Responds well to progressive overload on compounds"]
         )
     }
 

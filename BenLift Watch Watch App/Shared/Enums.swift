@@ -52,9 +52,9 @@ enum WorkoutCategory: String, Codable, CaseIterable, Identifiable {
 
     var color: Color {
         switch self {
-        case .push: return Color(hex: "B48EAD")  // mauve
-        case .pull: return Color(hex: "A3BE8C")  // sage
-        case .legs: return Color(hex: "D4956A")  // terracotta
+        case .push: return Color(hex: "2D5F2D")  // forest green
+        case .pull: return Color(hex: "6B8F5E")  // sage
+        case .legs: return Color(hex: "C49A6C")  // tan
         }
     }
 
@@ -98,10 +98,10 @@ enum OverallRating: String, Codable {
 
     var color: Color {
         switch self {
-        case .prDay: return Color(hex: "8FB87E")  // sage
-        case .good: return Color(hex: "B48EAD")   // mauve
-        case .average: return Color(hex: "9B8E82") // taupe
-        case .recovery: return Color(hex: "D4956A") // terracotta
+        case .prDay: return Color(hex: "4A7C3F")  // deep sage
+        case .good: return Color(hex: "2D5F2D")   // forest
+        case .average: return Color(hex: "8C7B6B") // warm brown
+        case .recovery: return Color(hex: "C49A6C") // tan
         }
     }
 }
