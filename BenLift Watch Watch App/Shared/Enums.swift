@@ -52,17 +52,17 @@ enum WorkoutCategory: String, Codable, CaseIterable, Identifiable {
 
     var color: Color {
         switch self {
-        case .push: return Color(hex: "4A90D9")
-        case .pull: return Color(hex: "4CAF50")
-        case .legs: return Color(hex: "FF9800")
+        case .push: return Color(hex: "B48EAD")  // mauve
+        case .pull: return Color(hex: "A3BE8C")  // sage
+        case .legs: return Color(hex: "D4956A")  // terracotta
         }
     }
 
     var muscleGroups: [MuscleGroup] {
         switch self {
-        case .push: return [.chest, .shoulders, .triceps]
-        case .pull: return [.back, .biceps, .forearms]
-        case .legs: return [.quads, .hamstrings, .glutes, .calves]
+        case .push: return [.chest, .shoulders, .triceps, .core]
+        case .pull: return [.back, .biceps, .forearms, .core]
+        case .legs: return [.quads, .hamstrings, .glutes, .calves, .core]
         }
     }
 }
@@ -98,10 +98,10 @@ enum OverallRating: String, Codable {
 
     var color: Color {
         switch self {
-        case .prDay: return Color(hex: "34C759")
-        case .good: return Color(hex: "4A90D9")
-        case .average: return Color(hex: "8E8E93")
-        case .recovery: return Color(hex: "FF9800")
+        case .prDay: return Color(hex: "8FB87E")  // sage
+        case .good: return Color(hex: "B48EAD")   // mauve
+        case .average: return Color(hex: "9B8E82") // taupe
+        case .recovery: return Color(hex: "D4956A") // terracotta
         }
     }
 }

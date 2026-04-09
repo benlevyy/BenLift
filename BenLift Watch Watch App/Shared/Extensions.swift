@@ -25,16 +25,16 @@ extension Color {
         )
     }
 
-    // App color palette
-    static let pushBlue = Color(hex: "4A90D9")
-    static let pullGreen = Color(hex: "4CAF50")
-    static let legsOrange = Color(hex: "FF9800")
-    static let cardSurface = Color(hex: "1C1C1E")
-    static let appBackground = Color(hex: "0A0A0A")
-    static let secondaryText = Color(hex: "8E8E93")
-    static let prGreen = Color(hex: "34C759")
-    static let failedRed = Color(hex: "FF3B30")
-    static let accentBlue = Color(hex: "007AFF")
+    // App color palette — cream & mauve, warm light
+    static let pushBlue = Color(hex: "B48EAD")      // mauve
+    static let pullGreen = Color(hex: "A3BE8C")     // sage
+    static let legsOrange = Color(hex: "D4956A")    // warm terracotta
+    static let cardSurface = Color(hex: "F5F0EB")   // warm cream card
+    static let appBackground = Color(hex: "FAF7F2")  // off-white
+    static let secondaryText = Color(hex: "9B8E82")  // warm taupe
+    static let prGreen = Color(hex: "8FB87E")        // muted sage
+    static let failedRed = Color(hex: "C75B5B")      // dusty rose-red
+    static let accentBlue = Color(hex: "B48EAD")     // mauve (primary accent)
 }
 
 // MARK: - Date Extensions

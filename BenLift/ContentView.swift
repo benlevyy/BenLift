@@ -28,7 +28,7 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gear")
                 }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .onAppear {
             sharedProgramVM.loadCurrentProgram(modelContext: modelContext)
             // Auto-fire recommendation → plan on app open
