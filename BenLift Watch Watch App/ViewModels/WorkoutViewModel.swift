@@ -33,10 +33,17 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     @Published var isResting: Bool = false
     @Published var restTimerRemaining: TimeInterval = 0
     @Published var restTimerDuration: TimeInterval = 150
+    /// Absolute end-time of the current rest. Source of truth for the snapshot.
+    /// `restTimerRemaining` is the local watch UI's countdown derived from this.
+    private var restEndsAt: Date?
     private var restTimer: Timer?
 
     // MARK: - Screen Navigation
     @Published var currentScreen: WatchScreen = .home
+
+    // MARK: - Snapshot Versioning
+    /// Monotonic counter that lets the phone discard out-of-order snapshots.
+    private var snapshotVersion: Int = 0
 
     // MARK: - Exercise State Tracking
 
@@ -66,6 +73,15 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     var activeExerciseInfo: WatchExerciseInfo? {
         activeExercise?.info
+    }
+
+    /// Cable exercises use 2.5 lb pin increments; everything else uses the user's
+    /// configured increment (default 5 lb plates).
+    var effectiveWeightIncrement: Double {
+        if let name = activeExerciseInfo?.name, name.localizedCaseInsensitiveContains("cable") {
+            return 2.5
+        }
+        return weightIncrement
     }
 
     var currentSetNumber: Int {
@@ -144,8 +160,11 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         startHealthKitSession()
         WatchSyncService.shared.sendWorkoutStarted()
+        listenForRemoteFinish()
         currentScreen = .exerciseList
         print("[BenLift/Watch] Started \(plan.sessionName ?? plan.category?.displayName ?? "Custom") workout: \(plan.exercises.count) exercises")
+        // Initial snapshot — phone mirror will receive on first connect
+        broadcastSnapshot()
     }
 
     func startWorkoutFromLibrary(category: WorkoutCategory, exercises: [WatchExerciseInfo]) {
@@ -177,6 +196,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         }
 
         currentScreen = .exercise
+
+        broadcastSnapshot()
     }
 
     // MARK: - Log Set
@@ -214,6 +235,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             }
             exerciseStates[idx] = state
             // No rest timer for warmups
+            broadcastSnapshot()
             return
         }
 
@@ -231,6 +253,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         }
 
         startRestTimer()
+        // startRestTimer broadcasts the snapshot for us
     }
 
     // MARK: - Rest Timer
@@ -238,6 +261,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     func startRestTimer() {
         isResting = true
         restTimerRemaining = restTimerDuration
+        restEndsAt = Date().addingTimeInterval(restTimerDuration)
         currentScreen = .restTimer
 
         restTimer?.invalidate()
@@ -257,12 +281,17 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                 // Timer keeps running — user taps "Go" when ready
             }
         }
+        broadcastSnapshot()
     }
 
     func skipRest() { finishRest() }
 
     func adjustRestTimer(by seconds: Double) {
         restTimerRemaining += seconds
+        if let current = restEndsAt {
+            restEndsAt = current.addingTimeInterval(seconds)
+        }
+        broadcastSnapshot()
     }
 
     private func finishRest() {
@@ -270,6 +299,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         restTimer = nil
         isResting = false
         restTimerRemaining = 0
+        restEndsAt = nil
 
         // If current exercise is complete (hit target sets), go back to list
         // Otherwise stay on the exercise to keep logging
@@ -278,6 +308,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         } else {
             currentScreen = .exercise
         }
+        broadcastSnapshot()
     }
 
     // MARK: - Skip Warmups
@@ -290,6 +321,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
         currentReps = 0
         print("[BenLift/Watch] Skipped warmups for \(state.info.name)")
+        broadcastSnapshot()
     }
 
     // MARK: - Add Exercise Mid-Workout
@@ -302,6 +334,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         )
         exerciseStates.append(state)
         print("[BenLift/Watch] Added exercise mid-workout: \(info.name)")
+        broadcastSnapshot()
     }
 
     // MARK: - Skip / Back
@@ -309,6 +342,23 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     func backToList() {
         activeExerciseIndex = nil
         currentScreen = .exerciseList
+    }
+
+    // MARK: - Remote Finish Listener
+
+    private var remoteFinishCancellable: AnyCancellable?
+
+    private func listenForRemoteFinish() {
+        remoteFinishCancellable = NotificationCenter.default
+            .publisher(for: .remoteFinishRequested)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.isWorkoutActive else { return }
+                print("[BenLift/Watch] Remote finish requested from iPhone")
+                self.finishWorkout()
+                // Phone is showing the post-workout sheet — dismiss the watch UI to home.
+                self.dismissSummary()
+            }
     }
 
     // MARK: - Finish Workout
@@ -342,9 +392,13 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         // Stop timer first
         restTimer?.invalidate()
         restTimer = nil
+        restEndsAt = nil
         isWorkoutActive = false
 
-        // Send result
+        // Final snapshot with isActive=false — phone mirror sees this and dismisses
+        broadcastSnapshot(active: false)
+
+        // Send result via WatchConnectivity for SwiftData persistence on phone
         WatchSyncService.shared.sendWorkoutResult(result)
         WatchSyncService.shared.sendWorkoutEnded()
 
@@ -402,6 +456,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         }
         WKInterfaceDevice.current().play(.click)
         print("[BenLift/Watch] Undid set: \(Int(removed.weight))×\(removed.reps.formattedReps)")
+
+        broadcastSnapshot()
     }
 
     func logFailedRep() {
@@ -429,9 +485,17 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
             let startDate = Date()
             workoutSession?.startActivity(with: startDate)
-            workoutBuilder?.beginCollection(withStart: startDate) { success, error in
+            workoutBuilder?.beginCollection(withStart: startDate) { [weak self] success, error in
                 if success {
                     print("[BenLift/Watch] HKWorkoutSession started — HR tracking active")
+                    // Start mirroring to companion iPhone
+                    self?.workoutSession?.startMirroringToCompanionDevice { mirrorSuccess, mirrorError in
+                        if mirrorSuccess {
+                            print("[BenLift/Watch] Mirroring started to companion device")
+                        } else if let mirrorError {
+                            print("[BenLift/Watch] Mirroring failed: \(mirrorError)")
+                        }
+                    }
                 } else if let error {
                     print("[BenLift/Watch] ❌ Failed to begin collection: \(error)")
                 }
@@ -457,6 +521,134 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         workoutBuilder = nil
     }
 
+    // MARK: - Mirroring: Send Messages to iPhone
+
+    private var lastHRSendTime: Date = .distantPast
+    private var isProcessingRemote = false  // Prevents echo loops
+
+    /// Build a fresh snapshot reflecting the current state. Called from broadcastSnapshot.
+    func buildSnapshot(active: Bool? = nil) -> WorkoutSnapshot {
+        snapshotVersion += 1
+        let snapshotExercises = exerciseStates.map { state in
+            SnapshotExercise(
+                name: state.info.name,
+                targetSets: state.info.sets,
+                targetReps: state.info.targetReps,
+                suggestedWeight: state.info.suggestedWeight,
+                warmupSets: state.info.warmupSets,
+                intent: state.info.intent,
+                notes: state.info.notes,
+                lastWeight: state.info.lastWeight,
+                lastReps: state.info.lastReps,
+                loggedSets: state.loggedSets,
+                isWarmupPhase: state.isWarmupPhase
+            )
+        }
+        return WorkoutSnapshot(
+            version: snapshotVersion,
+            isActive: active ?? isWorkoutActive,
+            workoutStartDate: workoutStartDate ?? Date(),
+            sessionName: currentPlan?.sessionName,
+            muscleGroups: currentPlan?.muscleGroups ?? [],
+            category: currentPlan?.category,
+            sessionStrategy: currentPlan?.sessionStrategy,
+            exercises: snapshotExercises,
+            activeExerciseIndex: activeExerciseIndex,
+            restEndsAt: restEndsAt,
+            restDuration: restTimerDuration,
+            currentHeartRate: currentHeartRate,
+            activeCalories: activeCalories
+        )
+    }
+
+    /// Build the latest snapshot and push it to the phone. Call this at the end of
+    /// EVERY state mutation (both local actions and processed commands).
+    func broadcastSnapshot(active: Bool? = nil) {
+        let snapshot = buildSnapshot(active: active)
+        sendMirroredMessage(.snapshot(snapshot))
+    }
+
+    func sendMirroredMessage(_ message: WorkoutMessage) {
+        guard let data = message.encoded() else { return }
+        workoutSession?.sendToRemoteWorkoutSession(data: data) { success, error in
+            if let error {
+                print("[BenLift/Watch] Mirror send error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func handleRemoteMessage(_ message: WorkoutMessage) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            switch message {
+            case .command(let cmd):
+                self.processCommand(cmd)
+            case .snapshot:
+                // Watch is the owner — never accepts snapshots from the mirror.
+                break
+            }
+        }
+    }
+
+    /// Process a command from the phone mirror. Each command maps to an existing
+    /// local action; broadcastSnapshot at the end ensures the phone re-renders.
+    private func processCommand(_ cmd: WorkoutCommand) {
+        switch cmd {
+        case .logSet(let idx, let weight, let reps, _):
+            guard idx < exerciseStates.count else { return }
+            // If the phone wants to log to a different exercise than the active one,
+            // switch the active first (per Q1: phone has independent navigation, but
+            // logging implicitly takes ownership of the exercise).
+            if activeExerciseIndex != idx {
+                selectExercise(at: idx)
+            }
+            currentWeight = weight
+            currentReps = reps
+            logSet()
+
+        case .undoSet(let idx):
+            if activeExerciseIndex != idx, idx < exerciseStates.count {
+                activeExerciseIndex = idx
+            }
+            undoLastSet()
+
+        case .selectExercise(let idx):
+            guard idx < exerciseStates.count else { return }
+            selectExercise(at: idx)
+
+        case .skipRest:
+            skipRest()
+
+        case .adjustRestTimer(let delta):
+            adjustRestTimer(by: Double(delta))
+
+        case .adaptExercise(let idx, let replacement):
+            guard idx < exerciseStates.count else { return }
+            exerciseStates[idx] = ExerciseState(
+                id: replacement.name,
+                info: replacement,
+                isWarmupPhase: (replacement.warmupSets?.count ?? 0) > 0
+            )
+            print("[BenLift/Watch] Exercise \(idx) replaced with \(replacement.name) via phone")
+            broadcastSnapshot()
+
+        case .addExercise(let info):
+            addExercise(info)
+            broadcastSnapshot()
+
+        case .end:
+            print("[BenLift/Watch] ← phone requested .end")
+            finishWorkout()
+            // User ended on phone — they're already seeing the post-workout sheet there.
+            // Skip the watch's local Summary screen and return straight to home.
+            dismissSummary()
+
+        case .requestSnapshot:
+            print("[BenLift/Watch] ← phone requested snapshot")
+            broadcastSnapshot()
+        }
+    }
+
     // MARK: - HKWorkoutSessionDelegate
 
     func workoutSession(_ workoutSession: HKWorkoutSession, didChangeTo toState: HKWorkoutSessionState, from fromState: HKWorkoutSessionState, date: Date) {
@@ -465,6 +657,18 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
         print("[BenLift/Watch] ❌ Workout session error: \(error)")
+    }
+
+    func workoutSession(_ workoutSession: HKWorkoutSession,
+                       didReceiveDataFromRemoteWorkoutSession data: [Data]) {
+        print("[BenLift/Watch] ← Mirrored data received: \(data.count) packet(s)")
+        for datum in data {
+            if let message = WorkoutMessage.decode(from: datum) {
+                handleRemoteMessage(message)
+            } else {
+                print("[BenLift/Watch] ⚠️ Failed to decode mirrored packet (\(datum.count) bytes)")
+            }
+        }
     }
 
     // MARK: - HKLiveWorkoutBuilderDelegate
@@ -483,6 +687,12 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                         self.currentHeartRate = hr
                         self.heartRateSamples.append(hr)
                         self.averageHeartRate = self.heartRateSamples.reduce(0, +) / Double(self.heartRateSamples.count)
+
+                        // Throttle HR snapshot broadcasts to every 5 seconds
+                        if Date().timeIntervalSince(self.lastHRSendTime) >= 5 {
+                            self.lastHRSendTime = Date()
+                            self.broadcastSnapshot()
+                        }
                     }
                 }
             }

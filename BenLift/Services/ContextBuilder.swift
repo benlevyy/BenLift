@@ -17,20 +17,22 @@ struct ContextBuilder {
         program: TrainingProgram?,
         healthContext: HealthContext? = nil
     ) -> (system: String, user: String) {
-        // Determine which muscle groups to use for exercise filtering
-        let muscleGroups: [MuscleGroup]
+        // Today's focus muscle groups — used as GUIDANCE, not as a filter.
+        // The AI sees the full library and picks the most efficient session for the focus.
+        let focusMuscleGroups: [MuscleGroup]
         if !targetMuscleGroups.isEmpty {
-            muscleGroups = targetMuscleGroups
+            focusMuscleGroups = targetMuscleGroups
         } else if let cat = category {
-            muscleGroups = cat.muscleGroups
+            focusMuscleGroups = cat.muscleGroups
         } else {
-            muscleGroups = MuscleGroup.allCases.map { $0 }
+            focusMuscleGroups = []  // No focus → AI picks freely from full library + weekly volume
         }
 
-        // Fetch available exercises for target muscle groups
+        // Full exercise library, grouped by primary muscle for token-efficient formatting.
+        // The AI may select ANY exercise — many compounds efficiently cover multiple muscles
+        // (bench → chest+triceps+front delts; weighted dips → chest+triceps; pull-ups → back+biceps).
         let allExercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
-        let filteredExercises = allExercises.filter { muscleGroups.contains($0.muscleGroup) }
-        let exerciseNames = filteredExercises.map(\.name)
+        let library = exerciseLibraryGrouped(allExercises)
 
         // Summarize recent sessions
         let recentSummary: String
@@ -50,17 +52,31 @@ struct ContextBuilder {
         var system = PromptBuilder.sharedSystemPrefix(program: program, healthContext: healthContext, intelligence: intelligence)
         system += """
 
+        EXERCISE SELECTION PRINCIPLES:
+        - You have access to the full exercise library — do NOT limit yourself to exercises tagged with the focus muscle groups. The "primary muscle" tag is a single-label simplification.
+        - Most compounds efficiently train multiple muscles. Bench press hits chest + triceps + front delts; weighted dips hit chest + triceps; pull-ups hit back + biceps; RDLs hit hamstrings + glutes + lower back; OHP hits shoulders + triceps. Use these to cover under-trained muscles incidentally.
+        - Prioritize stimulus-to-fatigue ratio: prefer one heavy compound that covers two muscle groups over two isolation exercises. Add isolation only when a muscle needs targeted volume that compounds don't provide (e.g., biceps after a pressing focus, rear delts after vertical pulls).
+        - Cross-reference today's focus against weekly volume progress. If a non-focus muscle is severely under-volume for the week, weave in an exercise that hits it as a secondary mover.
+        - Avoid redundancy: don't program two exercises that hit the exact same primary mover with the same equipment unless one is heavy/low-rep and the other is light/high-rep.
+
         Respond with this JSON schema:
         {"exercises":[{"name":"string","sets":int,"targetReps":"string","suggestedWeight":double_or_null,"repScheme":"string?","warmupSets":[{"weight":double_or_null,"reps":int}]?,"notes":"string?","intent":"primary compound|secondary compound|isolation|finisher"}],"sessionStrategy":"string","estimatedDuration":int,"deloadNote":"string?"}
 
-        IMPORTANT: For bodyweight exercises, set suggestedWeight to null or 0.
+        IMPORTANT: For bodyweight exercises, set suggestedWeight to null or 0. Exercise name MUST exactly match a name from the library below.
         """
 
-        let focusDesc = sessionName ?? category?.displayName ?? muscleGroups.map(\.displayName).joined(separator: " + ")
+        let focusDesc: String
+        if let sessionName, !sessionName.isEmpty {
+            focusDesc = sessionName
+        } else if !focusMuscleGroups.isEmpty {
+            focusDesc = focusMuscleGroups.map(\.displayName).joined(separator: " + ")
+        } else {
+            focusDesc = "AI's choice (no fixed focus — optimize for weekly volume gaps and recovery)"
+        }
+
         var user = """
         Generate today's workout plan.
-        Focus: \(focusDesc)
-        Target muscle groups: \(muscleGroups.map(\.displayName).joined(separator: ", "))
+        Recommended focus (guidance, not a hard filter): \(focusDesc)
 
         Pre-workout check-in:
         - Feeling: \(feeling)/5
@@ -72,11 +88,24 @@ struct ContextBuilder {
             user += "\n- Concerns: \(concerns)"
         }
 
-        user += "\n\nAvailable exercises: \(exerciseNames.joined(separator: ", "))"
+        user += "\n\nFull exercise library (grouped by primary muscle — pick from any group):\n\(library)"
         user += "\n\nRecent sessions:\n\(recentSummary)"
-        user += "\n\nWeekly volume progress:\n\(volumeProgress)"
+        user += "\n\nWeekly volume progress (use this to decide which non-focus muscles need incidental work):\n\(volumeProgress)"
 
         return (system, user)
+    }
+
+    /// Format the full exercise library grouped by primary muscle. Far fewer tokens
+    /// than tagging each exercise individually, and gives the AI a clear mental map.
+    private static func exerciseLibraryGrouped(_ exercises: [Exercise]) -> String {
+        let byGroup = Dictionary(grouping: exercises, by: \.muscleGroup)
+        return MuscleGroup.allCases.compactMap { group -> String? in
+            guard let items = byGroup[group], !items.isEmpty else { return nil }
+            let names = items.map { ex -> String in
+                ex.equipment == .bodyweight ? "\(ex.name) (BW)" : ex.name
+            }.joined(separator: ", ")
+            return "\(group.displayName): \(names)"
+        }.joined(separator: "\n")
     }
 
     // MARK: - Summarize All Recent Sessions (for recommendation)
@@ -182,7 +211,7 @@ struct ContextBuilder {
     }
 
     @MainActor
-    private static func weeklyVolumeProgress(modelContext: ModelContext, exerciseLookup: [String: MuscleGroup]) -> String {
+    static func weeklyVolumeProgress(modelContext: ModelContext, exerciseLookup: [String: MuscleGroup]) -> String {
         let weekStart = Date().startOfWeek
         let descriptor = FetchDescriptor<WorkoutSession>(
             predicate: #Predicate { $0.date >= weekStart }

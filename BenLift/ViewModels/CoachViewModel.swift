@@ -13,6 +13,11 @@ class CoachViewModel {
     var isGenerating: Bool = false
     var planError: String?
 
+    /// In-memory log of quick swaps the user has accepted on the current plan.
+    /// Cleared when a new plan is generated. Fed back into subsequent swap prompts
+    /// so the model can spot patterns (e.g., 3 pressing swaps -> likely shoulder issue).
+    var planAdjustments: [AdjustmentRecord] = []
+
     var daysSinceLast: [WorkoutCategory: Int] = [:]
 
     /// Cached plans per category — survives switching between tabs
@@ -22,6 +27,7 @@ class CoachViewModel {
 
     init(coachService: CoachServiceProtocol? = nil) {
         self.coachService = coachService ?? ClaudeCoachService()
+        loadCachedGeneration()
     }
 
     @MainActor
@@ -87,23 +93,139 @@ class CoachViewModel {
             currentSessionName = rec.recommendedSessionName
             print("[BenLift/Coach] ✅ Recommendation: \(rec.recommendedSessionName) — \(rec.recommendedFocus.joined(separator: ", "))")
         } catch {
-            print("[BenLift/Coach] ❌ Recommendation failed: \(error)")
-            planError = "Recommendation failed: \(error.localizedDescription)"
+            if Self.isCancellation(error) {
+                print("[BenLift/Coach] Recommendation cancelled (superseded by reload)")
+            } else {
+                print("[BenLift/Coach] ❌ Recommendation failed: \(error)")
+                planError = "Recommendation failed: \(error.localizedDescription)"
+            }
         }
 
         isLoadingRecommendation = false
     }
 
-    // MARK: - One-Shot: Recommendation + Plan
+    /// URLSession cancellation (NSURLErrorCancelled) and Swift `CancellationError`
+    /// both fire when a prior request is superseded by a reload/refresh. They're
+    /// expected outcomes, not user-facing errors.
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return true }
+        // ClaudeError.networkError wraps the underlying URLError
+        if let wrapped = (error as? ClaudeError) {
+            if case .networkError(let inner) = wrapped {
+                return isCancellation(inner)
+            }
+        }
+        return false
+    }
 
+    // MARK: - One-Shot: Recommendation + Plan (single LLM call)
+
+    /// Single round-trip that produces both the recovery recommendation and the
+    /// full daily plan. ~2.2x faster than the legacy two-step flow.
     @MainActor
     func getRecommendationAndPlan(modelContext: ModelContext, program: TrainingProgram?) async {
-        // Step 1: Get recommendation (Sonnet)
-        await getRecommendation(modelContext: modelContext, program: program)
+        isLoadingRecommendation = true
+        isGenerating = true
+        planError = nil
 
-        // Step 2: If recommendation succeeded, auto-generate plan (Haiku)
-        guard recommendation != nil, !targetMuscleGroups.isEmpty else { return }
-        await generatePlan(modelContext: modelContext, program: program)
+        // Run both HealthKit queries in parallel; each is independent.
+        async let healthContextTask = HealthKitService.shared.fetchHealthContext()
+        async let activitiesTask = HealthKitService.shared.fetchRecentActivities(days: 7)
+        let healthContext = await healthContextTask
+        let activities = await activitiesTask
+        let activitiesText = activities.map { act in
+            "\(act.date.shortFormatted): \(act.type) (\(TimeInterval(act.duration).formattedDuration), \(act.source))"
+        }.joined(separator: "\n")
+
+        // Shared recent-session summary (used to be re-computed in each stage).
+        let recentSummary = ContextBuilder.summarizeAllRecentSessions(limit: 10, modelContext: modelContext)
+
+        // Load weight cache + build library + weekly volume from SwiftData.
+        loadAllLastWeights(modelContext: modelContext)
+        let allExercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+        let library = MuscleGroup.allCases.compactMap { group -> String? in
+            let items = allExercises.filter { $0.muscleGroup == group }
+            guard !items.isEmpty else { return nil }
+            let names = items.map { $0.equipment == .bodyweight ? "\($0.name) (BW)" : $0.name }
+                .joined(separator: ", ")
+            return "\(group.displayName): \(names)"
+        }.joined(separator: "\n")
+        let volumeProgress = ContextBuilder.weeklyVolumeProgress(
+            modelContext: modelContext,
+            exerciseLookup: DefaultExercises.buildMuscleGroupLookup(from: modelContext)
+        )
+
+        // Intelligence
+        let intelDescriptor = FetchDescriptor<UserIntelligence>()
+        let intelligence = try? modelContext.fetch(intelDescriptor).first
+
+        let (system, user) = PromptBuilder.recommendAndPlanPrompt(
+            recentSessionsSummary: recentSummary,
+            recentActivities: activitiesText,
+            feeling: feeling,
+            availableTime: availableTime,
+            concerns: concerns.isEmpty ? nil : concerns,
+            exerciseLibrary: library,
+            weeklyVolumeProgress: volumeProgress,
+            program: program,
+            healthContext: healthContext,
+            intelligence: intelligence
+        )
+
+        // Single Haiku call replaces the prior Sonnet→Haiku pipeline.
+        let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
+        print("[BenLift/Coach] recommendAndPlan: feeling=\(feeling), model=\(model)")
+
+        do {
+            let response = try await coachService.recommendAndPlan(
+                systemPrompt: system,
+                userPrompt: user,
+                model: model
+            )
+
+            // Populate both halves of the view model atomically.
+            recommendation = response.asRecommendation
+            targetMuscleGroups = response.recommendedFocus.compactMap { MuscleGroup(rawValue: $0) }
+            currentSessionName = response.recommendedSessionName
+
+            let plan = response.asPlan
+            currentPlan = plan
+
+            // Fill suggested weights from history for any exercises returned as 0/nil.
+            editedExercises = plan.exercises.map { exercise in
+                if exercise.weight <= 0, let histWeight = _weightCache[exercise.name], histWeight > 0 {
+                    return PlannedExercise(
+                        name: exercise.name, sets: exercise.sets, targetReps: exercise.targetReps,
+                        suggestedWeight: histWeight, repScheme: exercise.repScheme,
+                        warmupSets: exercise.warmupSets, notes: exercise.notes, intent: exercise.intent
+                    )
+                }
+                return exercise
+            }
+
+            // Fresh plan → fresh adjustment history.
+            planAdjustments = []
+
+            if selectedCategory != nil { savePlanForCurrentCategory() }
+            markGenerated(modelContext: modelContext)
+            print("[BenLift/Coach] ✅ recommendAndPlan: \(response.recommendedSessionName) — \(editedExercises.count) exercises")
+        } catch {
+            if Self.isCancellation(error) {
+                print("[BenLift/Coach] recommendAndPlan cancelled (superseded by reload)")
+            } else {
+                print("[BenLift/Coach] ❌ recommendAndPlan failed: \(error)")
+                planError = "Couldn't generate today's plan: \(error.localizedDescription)"
+                // Legacy fallback to default template if a category is selected.
+                if let cat = selectedCategory {
+                    loadDefaultTemplate(category: cat, modelContext: modelContext)
+                }
+            }
+        }
+
+        isLoadingRecommendation = false
+        isGenerating = false
     }
 
     // MARK: - Step 2: Generate Plan (Haiku)
@@ -139,6 +261,8 @@ class CoachViewModel {
         do {
             let plan = try await coachService.generateDailyPlan(systemPrompt: system, userPrompt: user, model: model)
             currentPlan = plan
+            // New plan => fresh adjustment history
+            planAdjustments = []
             // Fill in weights from history for any exercises Claude returned as 0/null
             editedExercises = plan.exercises.map { exercise in
                 if exercise.weight <= 0, let histWeight = _weightCache[exercise.name], histWeight > 0 {
@@ -153,10 +277,14 @@ class CoachViewModel {
             if let cat = category { savePlanForCurrentCategory() }
             print("[BenLift/Coach] ✅ Plan generated: \(editedExercises.count) exercises")
         } catch {
-            print("[BenLift/Coach] ❌ Plan generation failed: \(error)")
-            planError = error.localizedDescription
-            if let cat = category {
-                loadDefaultTemplate(category: cat, modelContext: modelContext)
+            if Self.isCancellation(error) {
+                print("[BenLift/Coach] Plan generation cancelled (superseded by reload)")
+            } else {
+                print("[BenLift/Coach] ❌ Plan generation failed: \(error)")
+                planError = error.localizedDescription
+                if let cat = category {
+                    loadDefaultTemplate(category: cat, modelContext: modelContext)
+                }
             }
         }
 
@@ -380,4 +508,132 @@ class CoachViewModel {
     var targetMuscleGroups: [MuscleGroup] = []
     var currentSessionName: String?
 
+    // MARK: - Quick Swap (planning)
+
+    /// Index of the exercise currently being swapped — used by the UI to show a
+    /// per-row spinner. Nil when no swap is in flight. Only one swap at a time.
+    var swappingIndex: Int?
+
+    @MainActor
+    func quickSwap(at index: Int, modelContext: ModelContext) async {
+        guard index < editedExercises.count else { return }
+        let original = editedExercises[index]
+        swappingIndex = index
+        defer { swappingIndex = nil }
+
+        let allExercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+        let availableNames = allExercises.map(\.name).filter { $0 != original.name }
+
+        let (system, user) = PromptBuilder.quickSwapPrompt(
+            exerciseName: original.name,
+            sets: original.sets,
+            targetReps: original.targetReps,
+            intent: original.intent,
+            availableExercises: availableNames,
+            priorAdjustments: planAdjustments
+        )
+
+        let model = UserDefaults.standard.string(forKey: "modelMidWorkout") ?? "claude-haiku-4-5-20251001"
+        do {
+            let response = try await coachService.adaptMidWorkout(
+                systemPrompt: system,
+                userPrompt: user,
+                model: model
+            )
+            guard let replacement = response.exercises.first else {
+                print("[BenLift/Coach] quickSwap: no replacement returned")
+                return
+            }
+            // Re-check index — the user may have edited the list while we were waiting.
+            guard index < editedExercises.count, editedExercises[index].name == original.name else {
+                print("[BenLift/Coach] quickSwap: list changed during request, dropping result")
+                return
+            }
+            editedExercises[index] = PlannedExercise(
+                name: replacement.name,
+                sets: replacement.sets,
+                targetReps: replacement.targetReps,
+                suggestedWeight: replacement.suggestedWeight,
+                repScheme: original.repScheme,
+                warmupSets: replacement.warmupSets,
+                notes: replacement.notes ?? original.notes,
+                intent: replacement.intent ?? original.intent
+            )
+            planAdjustments.append(AdjustmentRecord(
+                kind: .swap,
+                summary: "Swapped \(original.name) -> \(replacement.name)"
+            ))
+            persistCachedGeneration()
+            print("[BenLift/Coach] ↔ Swapped \(original.name) → \(replacement.name)")
+        } catch {
+            if Self.isCancellation(error) { return }
+            print("[BenLift/Coach] ❌ quickSwap failed: \(error)")
+        }
+    }
+
+    // MARK: - Recommendation Cache
+
+    private var lastGeneratedSessionCount: Int?
+    private var lastGeneratedDate: Date?
+
+    /// Returns true if we should skip regeneration (nothing changed since last call)
+    @MainActor
+    func shouldSkipRegeneration(modelContext: ModelContext) -> Bool {
+        guard recommendation != nil, !editedExercises.isEmpty else { return false }
+        guard let cachedCount = lastGeneratedSessionCount,
+              let cachedDate = lastGeneratedDate else { return false }
+
+        // Skip if generated today and session count hasn't changed
+        let isToday = Calendar.current.isDateInToday(cachedDate)
+        let currentCount = (try? modelContext.fetchCount(FetchDescriptor<WorkoutSession>())) ?? 0
+
+        return isToday && currentCount == cachedCount
+    }
+
+    /// Call after successful generation to snapshot current state
+    @MainActor
+    func markGenerated(modelContext: ModelContext) {
+        lastGeneratedDate = Date()
+        lastGeneratedSessionCount = (try? modelContext.fetchCount(FetchDescriptor<WorkoutSession>())) ?? 0
+        persistCachedGeneration()
+    }
+
+    // MARK: - Persistent cache (so cold launches can skip regeneration)
+
+    private struct CachedGeneration: Codable {
+        let recommendation: RecoveryRecommendation
+        let currentPlan: DailyPlanResponse
+        let editedExercises: [PlannedExercise]
+        let sessionCount: Int
+        let generatedAt: Date
+    }
+
+    private static let cacheKey = "BenLift.coach.cachedGeneration"
+
+    private func persistCachedGeneration() {
+        guard let rec = recommendation,
+              let plan = currentPlan,
+              let date = lastGeneratedDate,
+              let count = lastGeneratedSessionCount else { return }
+        let snapshot = CachedGeneration(
+            recommendation: rec,
+            currentPlan: plan,
+            editedExercises: editedExercises,
+            sessionCount: count,
+            generatedAt: date
+        )
+        if let data = try? JSONEncoder().encode(snapshot) {
+            UserDefaults.standard.set(data, forKey: Self.cacheKey)
+        }
+    }
+
+    private func loadCachedGeneration() {
+        guard let data = UserDefaults.standard.data(forKey: Self.cacheKey),
+              let snapshot = try? JSONDecoder().decode(CachedGeneration.self, from: data) else { return }
+        recommendation = snapshot.recommendation
+        currentPlan = snapshot.currentPlan
+        editedExercises = snapshot.editedExercises
+        lastGeneratedDate = snapshot.generatedAt
+        lastGeneratedSessionCount = snapshot.sessionCount
+    }
 }

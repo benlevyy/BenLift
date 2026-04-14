@@ -6,6 +6,7 @@ protocol CoachServiceProtocol: Sendable {
     func recommendFocus(systemPrompt: String, userPrompt: String, model: String) async throws -> RecoveryRecommendation
     func generateProgram(systemPrompt: String, userPrompt: String, model: String) async throws -> ProgramResponse
     func generateDailyPlan(systemPrompt: String, userPrompt: String, model: String) async throws -> DailyPlanResponse
+    func recommendAndPlan(systemPrompt: String, userPrompt: String, model: String) async throws -> RecommendAndPlanResponse
     func adaptMidWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> MidWorkoutAdaptResponse
     func analyzePostWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> PostWorkoutAnalysisResponse
     func generateWeeklyReview(systemPrompt: String, userPrompt: String, model: String) async throws -> WeeklyReviewResponse
@@ -127,6 +128,11 @@ actor ClaudeCoachService: CoachServiceProtocol {
         return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 2048, label: "generateDailyPlan")
     }
 
+    func recommendAndPlan(systemPrompt: String, userPrompt: String, model: String) async throws -> RecommendAndPlanResponse {
+        print("[BenLift/API] recommendAndPlan called with model: \(model)")
+        return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 3072, label: "recommendAndPlan")
+    }
+
     func adaptMidWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> MidWorkoutAdaptResponse {
         print("[BenLift/API] adaptMidWorkout called with model: \(model)")
         return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 1024, label: "adaptMidWorkout")
@@ -190,7 +196,7 @@ actor ClaudeCoachService: CoachServiceProtocol {
 
         print("[BenLift/API] → \(label): model=\(model), maxTokens=\(maxTokens), bodySize=\(encodedBody.count) bytes")
         print("[BenLift/API] → System prompt (\(systemPrompt.count) chars): \(systemPrompt.prefix(200))...")
-        print("[BenLift/API] → User prompt (\(userPrompt.count) chars): \(userPrompt.prefix(200))...")
+        print("[BenLift/API] → User prompt (\(userPrompt.count) chars):\n\(userPrompt)")
 
         let data: Data
         let response: URLResponse

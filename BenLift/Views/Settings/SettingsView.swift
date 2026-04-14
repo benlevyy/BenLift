@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
@@ -13,6 +14,10 @@ struct SettingsView: View {
     @AppStorage("weeklyReviewDay") private var weeklyReviewDay: Int = 1
     @AppStorage("weeklyReviewEnabled") private var weeklyReviewEnabled: Bool = true
     @AppStorage("weightUnit") private var weightUnitRaw: String = WeightUnit.lbs.rawValue
+    @AppStorage("workoutNotificationsEnabled") private var workoutNotificationsEnabled: Bool = true
+    @AppStorage("dailyReminderEnabled") private var dailyReminderEnabled: Bool = false
+    @AppStorage("dailyReminderHour") private var dailyReminderHour: Int = 18
+    @AppStorage("dailyReminderMinute") private var dailyReminderMinute: Int = 0
 
     private let modelOptions = [
         "claude-haiku-4-5",
@@ -148,8 +153,54 @@ struct SettingsView: View {
         }
     }
 
+    private var dailyReminderTime: Binding<Date> {
+        Binding(
+            get: {
+                var comps = DateComponents()
+                comps.hour = dailyReminderHour
+                comps.minute = dailyReminderMinute
+                return Calendar.current.date(from: comps) ?? Date()
+            },
+            set: { newValue in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                dailyReminderHour = comps.hour ?? 18
+                dailyReminderMinute = comps.minute ?? 0
+                NotificationService.shared.rescheduleDailyFromSettings()
+            }
+        )
+    }
+
     private var notificationsSection: some View {
         Section("Notifications") {
+            Toggle("Workout Alerts", isOn: $workoutNotificationsEnabled)
+                .onChange(of: workoutNotificationsEnabled) { _, enabled in
+                    if enabled {
+                        Task { await NotificationService.shared.requestAuthorization() }
+                    } else {
+                        NotificationService.shared.cancelAbandonReminder()
+                    }
+                }
+
+            Toggle("Daily Reminder", isOn: $dailyReminderEnabled)
+                .onChange(of: dailyReminderEnabled) { _, enabled in
+                    if enabled {
+                        Task {
+                            await NotificationService.shared.requestAuthorization()
+                            NotificationService.shared.rescheduleDailyFromSettings()
+                        }
+                    } else {
+                        NotificationService.shared.cancelDailyReminder()
+                    }
+                }
+
+            if dailyReminderEnabled {
+                DatePicker(
+                    "Reminder Time",
+                    selection: dailyReminderTime,
+                    displayedComponents: .hourAndMinute
+                )
+            }
+
             Toggle("Weekly Review", isOn: $weeklyReviewEnabled)
 
             if weeklyReviewEnabled {
@@ -168,8 +219,32 @@ struct SettingsView: View {
 
     @State private var showClearAll = false
 
+    @State private var showExportShare = false
+    @State private var exportURL: URL?
+    @State private var showImportPicker = false
+    @State private var importMessage: String?
+    @State private var showImportResult = false
+
     private var dataSection: some View {
         Section("Data") {
+            Button {
+                exportData()
+            } label: {
+                HStack {
+                    Image(systemName: "square.and.arrow.up")
+                    Text("Export All Data")
+                }
+            }
+
+            Button {
+                showImportPicker = true
+            } label: {
+                HStack {
+                    Image(systemName: "square.and.arrow.down")
+                    Text("Import Data")
+                }
+            }
+
             Button("Reseed Exercise Library") {
                 DefaultExercises.reseed(in: modelContext)
             }
@@ -184,6 +259,60 @@ struct SettingsView: View {
                 Text("Deletes all workout sessions, analyses, weekly reviews, and your training program. Exercise library is kept.")
             }
         }
+        .sheet(isPresented: $showExportShare) {
+            if let url = exportURL {
+                ShareSheet(url: url)
+            }
+        }
+        .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url):
+                importData(from: url)
+            case .failure(let error):
+                importMessage = "Failed to open file: \(error.localizedDescription)"
+                showImportResult = true
+            }
+        }
+        .alert("Import", isPresented: $showImportResult) {
+            Button("OK") {}
+        } message: {
+            Text(importMessage ?? "")
+        }
+    }
+
+    private func exportData() {
+        do {
+            let data = try DataExportService.exportData(modelContext: modelContext)
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            let filename = "BenLift-backup-\(formatter.string(from: Date())).json"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+            try data.write(to: url)
+            exportURL = url
+            showExportShare = true
+        } catch {
+            importMessage = "Export failed: \(error.localizedDescription)"
+            showImportResult = true
+        }
+    }
+
+    private func importData(from url: URL) {
+        do {
+            guard url.startAccessingSecurityScopedResource() else {
+                importMessage = "Cannot access file"
+                showImportResult = true
+                return
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let data = try Data(contentsOf: url)
+            try DataExportService.importData(data, modelContext: modelContext)
+            importMessage = "Import successful"
+            showImportResult = true
+        } catch {
+            importMessage = "Import failed: \(error.localizedDescription)"
+            showImportResult = true
+        }
     }
 
     private func clearAllData() {
@@ -196,5 +325,17 @@ struct SettingsView: View {
         try? modelContext.save()
         print("[BenLift] Cleared ALL data")
     }
+}
+
+// MARK: - Share Sheet
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 

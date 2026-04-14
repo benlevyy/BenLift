@@ -1,9 +1,22 @@
 import SwiftUI
 import SwiftData
 
+/// Plain value-type snapshot of an analysis. Held by `AnalysisViewModel` instead of
+/// the SwiftData `@Model` directly — the @Model's backing data can be detached when
+/// its model context goes out of scope, which crashes any subsequent property access.
+struct AnalysisSnapshot {
+    let id: UUID
+    let summary: String
+    let overallRating: OverallRating
+    let recoveryNotes: String?
+    let coachNote: String
+    let progressionEvents: [ProgressionEvent]
+    let volumeAnalysis: [String: VolumeAnalysisEntry]
+}
+
 @Observable
 class AnalysisViewModel {
-    var currentAnalysis: PostWorkoutAnalysis?
+    var currentAnalysis: AnalysisSnapshot?
     var isAnalyzing: Bool = false
     var analysisError: String?
 
@@ -51,7 +64,18 @@ class AnalysisViewModel {
 
             modelContext.insert(analysis)
             try? modelContext.save()
-            currentAnalysis = analysis
+
+            // Hold a value-type snapshot, NOT the @Model — avoids backing-data
+            // detachment crashes when the source context goes out of scope.
+            currentAnalysis = AnalysisSnapshot(
+                id: analysis.id,
+                summary: analysis.summary,
+                overallRating: analysis.overallRating,
+                recoveryNotes: analysis.recoveryNotes,
+                coachNote: analysis.coachNote,
+                progressionEvents: analysis.progressionEvents,
+                volumeAnalysis: analysis.volumeAnalysis
+            )
 
             // Append observations to intelligence for next refresh
             if let observations = response.observations, !observations.isEmpty {

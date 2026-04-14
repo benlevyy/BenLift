@@ -154,8 +154,9 @@ class HealthKitService {
 
         do {
             let workouts = try await descriptor.result(for: healthStore)
+            print("[BenLift/HK] fetchRecentActivities: HealthKit returned \(workouts.count) raw workouts in last \(days)d")
 
-            return workouts.compactMap { workout in
+            let filtered: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = workouts.compactMap { workout in
                 // Skip our own strength training workouts
                 if workout.workoutActivityType == .traditionalStrengthTraining {
                     // Check if it's from BenLift — skip those
@@ -171,6 +172,12 @@ class HealthKitService {
 
                 return (type: type, date: workout.startDate, duration: workout.duration, calories: calories, source: source)
             }
+            if filtered.isEmpty {
+                print("[BenLift/HK] fetchRecentActivities: no non-BenLift activities — if you expected one, check Health app > Browse > Workouts, and confirm BenLift has read access in Settings > Health > Data Access & Devices.")
+            } else {
+                print("[BenLift/HK] fetchRecentActivities: \(filtered.count) activities -> \(filtered.map { "\($0.date.shortFormatted) \($0.type)" }.joined(separator: ", "))")
+            }
+            return filtered
         } catch {
             print("[BenLift/HK] Fetch activities error: \(error)")
             return []

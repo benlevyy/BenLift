@@ -30,7 +30,7 @@ struct ExerciseView: View {
                 // Weight with +/- buttons
                 HStack(spacing: 12) {
                     Button {
-                        workoutVM.adjustWeight(by: -workoutVM.weightIncrement)
+                        workoutVM.adjustWeight(by: -workoutVM.effectiveWeightIncrement)
                     } label: {
                         Image(systemName: "minus")
                             .font(.body.bold())
@@ -50,7 +50,7 @@ struct ExerciseView: View {
                     }
 
                     Button {
-                        workoutVM.adjustWeight(by: workoutVM.weightIncrement)
+                        workoutVM.adjustWeight(by: workoutVM.effectiveWeightIncrement)
                     } label: {
                         Image(systemName: "plus")
                             .font(.body.bold())
@@ -109,7 +109,10 @@ struct ExerciseView: View {
                     sensitivity: .low
                 )
                 .onChange(of: crownReps) { _, newValue in
-                    workoutVM.currentReps = max(0, newValue)
+                    // Crown produces fractional values mid-rotation; round so the rep
+                    // count stays integer. Fractional (failed) reps are only set via
+                    // the F button, never by scrolling.
+                    workoutVM.currentReps = max(0, newValue.rounded())
                 }
 
                 // Heart rate

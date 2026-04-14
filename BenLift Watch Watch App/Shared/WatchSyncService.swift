@@ -142,6 +142,21 @@ class WatchSyncService: NSObject, WCSessionDelegate {
     // MARK: - Receive transferUserInfo
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        // Lightweight signals (no payload)
+        if let type = userInfo["type"] as? String, userInfo["payload"] == nil {
+            DispatchQueue.main.async {
+                switch type {
+                case "workoutEnded":
+                    self.isWorkoutActive = false
+                    NotificationCenter.default.post(name: .remoteFinishRequested, object: nil)
+                    print("[BenLift/Sync] ← Workout ended (queued)")
+                default:
+                    print("[BenLift/Sync] Unknown signal userInfo: \(type)")
+                }
+            }
+            return
+        }
+
         guard let type = userInfo["type"] as? String,
               let payloadString = userInfo["payload"] as? String,
               let payloadData = Data(base64Encoded: payloadString) else {
@@ -186,7 +201,9 @@ class WatchSyncService: NSObject, WCSessionDelegate {
             case "workoutEnded":
                 DispatchQueue.main.async {
                     self.isWorkoutActive = false
-                    print("[BenLift/Sync] ← Watch workout ended")
+                    // Post notification so Watch WorkoutViewModel can finish if it came from phone
+                    NotificationCenter.default.post(name: .remoteFinishRequested, object: nil)
+                    print("[BenLift/Sync] ← Workout ended (remote)")
                 }
             default:
                 print("[BenLift/Sync] Unknown message type: \(type)")
@@ -202,8 +219,15 @@ class WatchSyncService: NSObject, WCSessionDelegate {
     }
 
     func sendWorkoutEnded() {
-        guard WCSession.default.isReachable else { return }
-        WCSession.default.sendMessage(["type": "workoutEnded"], replyHandler: nil, errorHandler: nil)
+        // Try real-time first (instant if reachable)
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(["type": "workoutEnded"], replyHandler: nil, errorHandler: { error in
+                print("[BenLift/Sync] sendMessage(workoutEnded) failed: \(error). Falling back to transferUserInfo")
+            })
+        }
+        // Always also queue via transferUserInfo so it survives reachability flaps
+        WCSession.default.transferUserInfo(["type": "workoutEnded"])
+        print("[BenLift/Sync] → Queued workoutEnded (reachable=\(WCSession.default.isReachable))")
     }
 
     // MARK: - Receive applicationContext
@@ -229,4 +253,5 @@ class WatchSyncService: NSObject, WCSessionDelegate {
 extension Notification.Name {
     static let workoutPlanReceived = Notification.Name("workoutPlanReceived")
     static let workoutResultReceived = Notification.Name("workoutResultReceived")
+    static let remoteFinishRequested = Notification.Name("remoteFinishRequested")
 }

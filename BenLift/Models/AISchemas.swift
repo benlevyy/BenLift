@@ -134,6 +134,43 @@ struct DailyPlanResponse: Codable {
     let deloadNote: String?
 }
 
+// MARK: - Touchpoint 0+2 Combined: Recommendation + Plan in one call
+
+/// One-shot response that returns both the recovery recommendation and the day's
+/// workout plan in a single LLM call. Replaces the prior split flow (Sonnet
+/// recommend -> Haiku plan) — ~2.2x faster, ~2.7x cheaper, equivalent quality.
+struct RecommendAndPlanResponse: Codable {
+    // Recommendation portion (mirrors RecoveryRecommendation)
+    let muscleGroupStatus: [MuscleGroupStatus]
+    let recommendedFocus: [String]
+    let recommendedSessionName: String
+    let reasoning: String
+
+    // Plan portion (mirrors DailyPlanResponse)
+    let exercises: [PlannedExercise]
+    let sessionStrategy: String?
+    let estimatedDuration: Int?
+    let deloadNote: String?
+
+    var asRecommendation: RecoveryRecommendation {
+        RecoveryRecommendation(
+            muscleGroupStatus: muscleGroupStatus,
+            recommendedFocus: recommendedFocus,
+            recommendedSessionName: recommendedSessionName,
+            reasoning: reasoning
+        )
+    }
+
+    var asPlan: DailyPlanResponse {
+        DailyPlanResponse(
+            exercises: exercises,
+            sessionStrategy: sessionStrategy,
+            estimatedDuration: estimatedDuration,
+            deloadNote: deloadNote
+        )
+    }
+}
+
 struct PlannedExercise: Identifiable {
     var id: String { name }
     let name: String

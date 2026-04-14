@@ -9,6 +9,7 @@ struct SessionDetailView: View {
     @State private var isEditing = false
     @State private var analysisVM = AnalysisViewModel()
     @State private var showAddExercise = false
+    @State private var editSnapshot = ""  // fingerprint of data when edit started
 
     var body: some View {
         ScrollView {
@@ -71,6 +72,7 @@ struct SessionDetailView: View {
                     .bold()
                 } else {
                     Button("Edit") {
+                        editSnapshot = sessionFingerprint()
                         isEditing = true
                     }
                 }
@@ -387,7 +389,17 @@ struct SessionDetailView: View {
             modelContext.delete(entry)
         }
 
+        // Check if anything actually changed
+        let currentFingerprint = sessionFingerprint()
+        let hasChanges = currentFingerprint != editSnapshot
+
         try? modelContext.save()
+
+        guard hasChanges else {
+            print("[BenLift] No changes detected, skipping re-analysis")
+            return
+        }
+
         print("[BenLift] Saved session edits: \(session.entries.count) exercises")
 
         // Delete old analysis and regenerate
@@ -405,9 +417,15 @@ struct SessionDetailView: View {
                 program: nil,
                 healthContext: nil
             )
-            // Pick up the new analysis
             loadAnalysis()
         }
+    }
+
+    private func sessionFingerprint() -> String {
+        session.sortedEntries.map { entry in
+            let sets = entry.sortedSets.map { "\($0.weight)-\($0.reps)-\($0.isWarmup)" }.joined(separator: "|")
+            return "\(entry.exerciseName):\(sets)"
+        }.joined(separator: ";")
     }
 
     // MARK: - Load Analysis

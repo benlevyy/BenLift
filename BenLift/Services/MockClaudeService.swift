@@ -72,6 +72,25 @@ actor MockClaudeCoachService: CoachServiceProtocol {
         )
     }
 
+    func recommendAndPlan(systemPrompt: String, userPrompt: String, model: String) async throws -> RecommendAndPlanResponse {
+        try await Task.sleep(nanoseconds: delay)
+        let plan = try await generateDailyPlan(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model)
+        return RecommendAndPlanResponse(
+            muscleGroupStatus: [
+                MuscleGroupStatus(muscleGroup: "chest", status: "fresh", daysSinceTraining: 5, weeklySetsDone: 0, note: nil),
+                MuscleGroupStatus(muscleGroup: "triceps", status: "fresh", daysSinceTraining: 5, weeklySetsDone: 0, note: nil),
+                MuscleGroupStatus(muscleGroup: "shoulders", status: "ready", daysSinceTraining: 3, weeklySetsDone: 6, note: nil),
+            ],
+            recommendedFocus: ["chest", "triceps", "shoulders"],
+            recommendedSessionName: "Heavy Push",
+            reasoning: "Chest and triceps are fresh (5 days). Shoulders ready. Solid recovery markers.",
+            exercises: plan.exercises,
+            sessionStrategy: plan.sessionStrategy,
+            estimatedDuration: plan.estimatedDuration,
+            deloadNote: plan.deloadNote
+        )
+    }
+
     func adaptMidWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> MidWorkoutAdaptResponse {
         try await Task.sleep(nanoseconds: delay)
         return MidWorkoutAdaptResponse(

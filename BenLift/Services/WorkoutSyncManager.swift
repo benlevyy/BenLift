@@ -40,6 +40,13 @@ class WorkoutSyncManager {
     }
 
     private func persistWorkout(_ result: WatchWorkoutResult, in context: ModelContext) {
+        // Don't save empty workouts (user ended without logging anything)
+        let nonEmptyEntries = result.entries.filter { !$0.sets.isEmpty }
+        if nonEmptyEntries.isEmpty {
+            print("[BenLift/SyncManager] Empty workout result (no sets logged), skipping")
+            return
+        }
+
         // Check for duplicate — don't save if a session with the same date already exists
         let resultDate = result.date
         let descriptor = FetchDescriptor<WorkoutSession>(
@@ -86,6 +93,11 @@ class WorkoutSyncManager {
         do {
             try context.save()
             print("[BenLift/SyncManager] Saved workout: \(result.entries.count) exercises, \(session.displayName)")
+
+            // Safety net — make sure any active Live Activity ends
+            DispatchQueue.main.async {
+                LiveActivityManager.shared.endAnyActivity()
+            }
 
             // Notify views that a session was saved
             NotificationCenter.default.post(

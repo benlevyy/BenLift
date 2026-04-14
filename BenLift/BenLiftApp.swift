@@ -5,6 +5,7 @@ import SwiftData
 struct BenLiftApp: App {
     let container: ModelContainer
     let syncManager: WorkoutSyncManager
+    let phoneMirroring: PhoneMirroringController
 
     init() {
         print("[BenLift] App launching...")
@@ -63,9 +64,19 @@ struct BenLiftApp: App {
         // Activate WatchConnectivity
         WatchSyncService.shared.activate()
 
+        // App-scoped mirroring controller — wires callbacks BEFORE registering with
+        // HealthKit, so no start/message event can be delivered into nil handlers.
+        phoneMirroring = PhoneMirroringController()
+
         // Start background sync manager — persists Watch results to SwiftData
         // regardless of which view is active
         syncManager = WorkoutSyncManager(container: container)
+
+        // Clean up any orphaned Live Activities from previous app runs
+        LiveActivityManager.shared.endAnyActivity()
+
+        // Install notification delegate + re-sync daily reminder from Settings
+        NotificationService.shared.bootstrap()
     }
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
@@ -73,7 +84,7 @@ struct BenLiftApp: App {
     var body: some Scene {
         WindowGroup {
             if hasCompletedOnboarding {
-                ContentView()
+                ContentView(phoneMirroring: phoneMirroring)
             } else {
                 OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
             }

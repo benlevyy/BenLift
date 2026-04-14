@@ -133,6 +133,101 @@ struct PromptBuilder {
         return (system: system, user: user)
     }
 
+    // MARK: - Combined: Recommend + Plan in one call (replaces split flow)
+
+    /// Single-call prompt that returns both the recovery recommendation and the
+    /// full workout plan. Replaces the prior two-step Sonnet→Haiku pipeline;
+    /// Haiku handles both stages in ~7s vs ~16s for the split flow.
+    ///
+    /// Includes three hard rules validated against adversarial scenarios:
+    ///   1. Low readiness → no heavy barbell compounds, cut sets 30-50%.
+    ///   2. Injury constraints → train AROUND the injury, not skip the muscle.
+    ///   3. Priority/lagging muscle → that muscle's primary exercise goes in slot 1.
+    @MainActor
+    static func recommendAndPlanPrompt(
+        recentSessionsSummary: String,
+        recentActivities: String,
+        feeling: Int,
+        availableTime: Int?,
+        concerns: String?,
+        exerciseLibrary: String,
+        weeklyVolumeProgress: String,
+        program: TrainingProgram?,
+        healthContext: HealthContext?,
+        intelligence: UserIntelligence? = nil
+    ) -> (system: String, user: String) {
+        var system = sharedSystemPrefix(program: program, healthContext: healthContext, intelligence: intelligence)
+        system += """
+
+
+        TASK: In ONE response, (a) analyze recovery per muscle group, (b) pick which muscle groups to train today, and (c) design the full workout.
+
+        Recovery analysis: score each muscle group on recency (days since trained), weekly volume, soreness, sleep/HRV, and non-lifting activities.
+        Default recovery estimates when intelligence data is unavailable: compounds 48-72h, isolation 24-48h. Poor sleep (<6h) or low HRV adds 12-24h. Use user's own recovery patterns (intelligence data) when present.
+
+        NON-LIFTING ACTIVITY IMPACT (apply when the activity appears in the last 48h):
+        - Climbing / bouldering → heavy fatigue on back, biceps, forearms, grip. Treat as ~80% of a pull session for recovery purposes. Do NOT program a pull-lead day the day after a long climb.
+        - Running / hiking → quads, calves, hip flexors fatigued. Avoid heavy squat/deadlift the next day.
+        - Cycling → quads, glutes moderately fatigued; upper body unaffected.
+        - Swimming → lats, shoulders moderately fatigued; low-impact overall.
+        - Rowing → back, biceps, legs fatigued (close to a pull+leg session).
+        - Yoga / stretching → recovery-friendly, no fatigue impact.
+        Ignore an activity's muscle impact only if duration is <20 minutes or intensity is clearly light. Always surface the activity in the reasoning field when it influenced the pick.
+
+        Exercise selection principles:
+        - You have access to the full exercise library. Don't limit yourself to the focus muscles' primary tag — most compounds efficiently train multiple muscles (bench → chest+triceps+front delts; pull-ups → back+biceps; RDLs → hams+glutes+lower back).
+        - Prefer high stimulus-to-fatigue: one heavy compound over two isolations. Add isolation only when a muscle needs targeted volume compounds don't provide.
+        - Cross-reference weekly volume — if a non-focus muscle is severely under-volume for the week, weave in an exercise that hits it incidentally.
+        - Avoid redundancy: don't program two exercises hitting the same primary mover with the same equipment unless one is heavy/low-rep and the other is light/high-rep.
+
+        HARD RULES (non-negotiable):
+        1. LOW READINESS — if feeling ≤ 2, OR (HRV > 1 SD below baseline AND sleep < 6h): do NOT program heavy barbell compounds (Back Squat, Front Squat, Deadlift, Romanian Deadlift, Overhead Press, heavy Bench). Prefer machines, cables, and isolation. Cut working sets 30-50% vs a normal session. Heavy compounds have the HIGHEST CNS demand — never rationalize them as "lower CNS."
+        2. INJURY CONSTRAINTS — when the user names an injury (shoulder, back, knee, wrist, etc.), train AROUND it rather than skipping the muscle group entirely. Shoulder impingement → keep shoulders but lateral/posterior only, no overhead. Only drop a muscle group when no safe exercise exists.
+        3. PRIORITY / LAGGING MUSCLE — if the user flags a muscle as lagging or asks to prioritize it, that muscle's primary exercise goes in slot 1 of the workout, even if it displaces the usual compound order (Nunes 2021 — exercise-order effect is real for the first lift).
+
+        Respond with this JSON:
+        {
+          "muscleGroupStatus":[
+            {"muscleGroup":"chest","status":"fresh|ready|recovering|sore","daysSinceTraining":3.5,"weeklySetsDone":8,"note":"optional"},
+            ... for: chest, back, shoulders, biceps, triceps, forearms, quads, hamstrings, glutes, calves, core
+          ],
+          "recommendedFocus":["quads","hamstrings"],
+          "recommendedSessionName":"Heavy Legs + Hamstrings",
+          "reasoning":"2-3 sentence rationale tying recovery state + HRV/sleep + recent training to the focus pick",
+          "exercises":[
+            {"name":"Back Squat","sets":3,"targetReps":"6-8","suggestedWeight":225,"repScheme":"straight","warmupSets":[{"weight":135,"reps":5}],"notes":"optional","intent":"primary compound|secondary compound|isolation|finisher"}
+          ],
+          "sessionStrategy":"one-line overview",
+          "estimatedDuration":55,
+          "deloadNote":"string or null"
+        }
+
+        IMPORTANT:
+        - Exercise name MUST match the library exactly.
+        - For bodyweight exercises set suggestedWeight to null.
+        - Sum sets across exercises should realistic for the session length (10-20 working sets typical).
+        """
+
+        var user = "What should I train today, and what's the full plan?\n\n"
+        user += "Pre-workout check-in:\n"
+        user += "- Feeling: \(feeling)/5\n"
+        if let time = availableTime {
+            user += "- Available time: \(time) minutes\n"
+        }
+        if let concerns = concerns, !concerns.isEmpty {
+            user += "- Concerns: \(concerns)\n"
+        }
+        user += "\nRecent training (last 7 days):\n\(recentSessionsSummary)\n"
+        if !recentActivities.isEmpty {
+            user += "\nOther activities (from Apple Health):\n\(recentActivities)\n"
+        }
+        user += "\nWeekly volume progress (use to weave in incidental work for under-volumed muscles):\n\(weeklyVolumeProgress)\n"
+        user += "\nFull exercise library (grouped by primary muscle — pick from any group):\n\(exerciseLibrary)\n"
+        user += "\nToday is \(Date().weekdayName), \(Date().shortFormatted)."
+
+        return (system: system, user: user)
+    }
+
     // MARK: - Touchpoint 1: Goal Setting
 
     static func goalSettingPrompt(
@@ -213,7 +308,8 @@ struct PromptBuilder {
         completedSoFar: String,
         remaining: String,
         reason: String,
-        details: String?
+        details: String?,
+        priorAdjustments: [AdjustmentRecord] = []
     ) -> (system: String, user: String) {
         let system = """
         You are a coach adjusting a workout mid-session. Respond ONLY in JSON:
@@ -231,7 +327,38 @@ struct PromptBuilder {
         if let details = details {
             user += "\nDetails: \(details)"
         }
+        user += AdjustmentRecord.promptBlock(priorAdjustments)
 
+        return (system, user)
+    }
+
+    // MARK: - Quick Swap (planning) — single-exercise replacement, no user input
+
+    static func quickSwapPrompt(
+        exerciseName: String,
+        sets: Int,
+        targetReps: String,
+        intent: String?,
+        availableExercises: [String],
+        priorAdjustments: [AdjustmentRecord] = []
+    ) -> (system: String, user: String) {
+        let system = """
+        You are a strength coach swapping one exercise during workout planning.
+        Respond ONLY in JSON:
+        {"exercises":[{"name":"string","sets":int,"targetReps":"string","suggestedWeight":double_or_null,"warmupSets":[{"weight":double,"reps":int}]?,"notes":"string?","intent":"string?"}],"rationale":"string"}
+
+        Return EXACTLY ONE exercise that:
+        - Targets the same primary muscle group as the original
+        - Has equivalent stimulus (compound for compound, isolation for isolation)
+        - Uses the same set/rep scheme as the original
+        - Is DIFFERENT from the original (don't suggest the same exercise back)
+        - Comes from the available exercise list — name must match exactly
+        - Is DIFFERENT from any replacement the user has already rejected in this session
+        """
+        var user = "Suggest one alternative for: \(exerciseName) — \(sets)x\(targetReps)"
+        if let intent { user += " (\(intent))" }
+        user += "\n\nAvailable exercises: \(availableExercises.joined(separator: ", "))"
+        user += AdjustmentRecord.promptBlock(priorAdjustments)
         return (system, user)
     }
 

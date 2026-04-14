@@ -5,6 +5,9 @@ struct TodayView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var coachVM: CoachViewModel
     @Bindable var programVM: ProgramViewModel
+    @Bindable var phoneWorkoutVM: PhoneWorkoutViewModel
+    @Binding var showPhoneWorkout: Bool
+
     @State private var analysisVM = AnalysisViewModel()
     @State private var selectedCategory: WorkoutCategory?
     @State private var savedSession: WorkoutSession?
@@ -14,13 +17,16 @@ struct TodayView: View {
     @State private var sorenessText: String = ""
     @State private var showPlanView = false
 
+    // Phone workout state (local UI only — VM + sheet are owned by ContentView)
+    @State private var sentToWatchWaiting = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    // Workout in progress banner
-                    if WatchSyncService.shared.isWorkoutActive {
-                        workoutInProgressBanner
+                    // Workout in progress banner (tap to resume)
+                    if phoneWorkoutVM.isWorkoutActive {
+                        phoneWorkoutBanner
                     }
 
                     // Loading / content — use ZStack so loading doesn't shift layout
@@ -61,10 +67,30 @@ struct TodayView: View {
                 .padding()
             }
             .background(Color.appBackground)
+            .refreshable {
+                // Pull-to-refresh: always regenerate
+                withAnimation(.easeOut(duration: 0.2)) {
+                    coachVM.editedExercises = []
+                    coachVM.currentPlan = nil
+                    coachVM.recommendation = nil
+                }
+                // Run in an unstructured Task so the request isn't cancelled if
+                // the refresh gesture is interrupted or the view scrolls away.
+                await Task {
+                    await coachVM.getRecommendationAndPlan(
+                        modelContext: modelContext,
+                        program: programVM.currentProgram
+                    )
+                }.value
+            }
             .navigationTitle("Today")
             .onAppear {
                 coachVM.calculateDaysSinceLast(modelContext: modelContext)
                 programVM.loadCurrentProgram(modelContext: modelContext)
+            }
+            // Reset the Send-to-Watch waiting UI when a workout actually starts/ends.
+            .onChange(of: phoneWorkoutVM.isWorkoutActive) { _, _ in
+                sentToWatchWaiting = false
             }
             .onReceive(NotificationCenter.default.publisher(for: .workoutSessionSaved)) { notification in
                 if let sessionId = notification.object as? UUID {
@@ -73,7 +99,6 @@ struct TodayView: View {
                     )
                     if let session = try? modelContext.fetch(descriptor).first {
                         savedSession = session
-                        // Trigger AI analysis
                         Task {
                             await analysisVM.analyzeWorkout(
                                 session: session,
@@ -132,7 +157,7 @@ struct TodayView: View {
 
             // Exercise list
             List {
-                ForEach(Array(coachVM.editedExercises.enumerated()), id: \.element.name) { _, exercise in
+                ForEach(Array(coachVM.editedExercises.enumerated()), id: \.element.name) { idx, exercise in
                     HStack(spacing: 8) {
                         Circle()
                             .fill(intentColor(exercise.intent))
@@ -152,6 +177,26 @@ struct TodayView: View {
                             }
                         }
                         Spacer()
+
+                        // Quick swap — AI picks a similar alternative, no user input.
+                        Button {
+                            Task { await coachVM.quickSwap(at: idx, modelContext: modelContext) }
+                        } label: {
+                            if coachVM.swappingIndex == idx {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 28, height: 28)
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.footnote)
+                                    .foregroundColor(.accentBlue)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.accentBlue.opacity(0.12))
+                                    .clipShape(Circle())
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(coachVM.swappingIndex != nil)
                     }
                     .padding(.vertical, 2)
                 }
@@ -188,28 +233,48 @@ struct TodayView: View {
                 }
             }
 
-            // Send to Watch
-            Button {
-                if let plan = coachVM.buildWatchPlan() {
-                    WatchSyncService.shared.sendWorkoutPlan(plan)
-                    showWatchAlert = true
+            if sentToWatchWaiting {
+                // Waiting for Watch to start
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Sent — open Watch to start")
+                            .font(.subheadline)
+                            .foregroundColor(.secondaryText)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.cardSurface)
+                    .cornerRadius(12)
+
+                    Button {
+                        sentToWatchWaiting = false
+                    } label: {
+                        Text("Cancel")
+                            .font(.caption.bold())
+                            .padding(10)
+                            .foregroundColor(.secondaryText)
+                    }
                 }
-            } label: {
-                HStack {
-                    Image(systemName: "applewatch")
-                    Text("Send to Watch")
+            } else {
+                // Send to Watch (the only way to start in v1 — phone is mirror-only)
+                Button {
+                    if let plan = coachVM.buildWatchPlan() {
+                        WatchSyncService.shared.sendWorkoutPlan(plan)
+                        sentToWatchWaiting = true
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "applewatch")
+                        Text("Start on Watch")
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.accentBlue)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
                 }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(coachVM.recommendation != nil ? Color.accentBlue : Color.pushBlue)
-                .foregroundColor(.white)
-                .cornerRadius(12)
-            }
-            .alert("Plan Sent", isPresented: $showWatchAlert) {
-                Button("OK") {}
-            } message: {
-                Text("Your workout plan has been sent to your Apple Watch.")
             }
         }
         .sheet(isPresented: $showAddExercise) {
@@ -412,21 +477,25 @@ struct TodayView: View {
     }
 
 
-    private var workoutInProgressBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "applewatch")
-                .foregroundColor(.prGreen)
-            Text("Workout active on Watch")
-                .font(.subheadline)
-                .foregroundColor(.prGreen)
-            Spacer()
-            Circle()
-                .fill(Color.prGreen)
-                .frame(width: 8, height: 8)
+    private var phoneWorkoutBanner: some View {
+        Button {
+            showPhoneWorkout = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "figure.strengthtraining.traditional")
+                    .foregroundColor(.accentBlue)
+                Text("Workout in progress")
+                    .font(.subheadline)
+                    .foregroundColor(.accentBlue)
+                Spacer()
+                Text("Resume")
+                    .font(.caption.bold())
+                    .foregroundColor(.accentBlue)
+            }
+            .padding(12)
+            .background(Color.accentBlue.opacity(0.1))
+            .cornerRadius(10)
         }
-        .padding(12)
-        .background(Color.prGreen.opacity(0.1))
-        .cornerRadius(10)
     }
 
 }
