@@ -3,7 +3,6 @@ import SwiftData
 
 @Observable
 class CoachViewModel {
-    var selectedCategory: WorkoutCategory?
     var feeling: Int = 3
     var availableTime: Int? = nil
     var concerns: String = ""
@@ -18,33 +17,108 @@ class CoachViewModel {
     /// so the model can spot patterns (e.g., 3 pressing swaps -> likely shoulder issue).
     var planAdjustments: [AdjustmentRecord] = []
 
-    var daysSinceLast: [WorkoutCategory: Int] = [:]
+    /// Snapshot of the user inputs (feeling, time, concerns, muscle
+    /// overrides) at the moment the currently-shown plan was generated.
+    /// Drives `isPlanStale` — when any of these drift from this snapshot,
+    /// the Today view surfaces the Refresh pill. Nil before the first plan
+    /// lands.
+    private var planInputSnapshot: InputSnapshot?
 
-    /// Cached plans per category — survives switching between tabs
-    private var savedPlans: [WorkoutCategory: (plan: DailyPlanResponse?, exercises: [PlannedExercise])] = [:]
+    struct InputSnapshot: Equatable {
+        let feeling: Int
+        let availableTime: Int?
+        let concerns: String
+        /// Muscle-group name → user-set status (fresh / ready / recovering
+        /// / sore). Empty dict when the user hasn't overridden anything;
+        /// the AI's own read governs.
+        let muscleOverrides: [String: String]
+    }
+
+    /// User-set muscle status overrides. The Training tab's muscle map
+    /// lets the user tap a row and force a status (e.g. "actually my
+    /// chest is sore today"). Backed by `MuscleOverrideStore` so they
+    /// survive app relaunches — stale overrides are valuable signal for
+    /// the AI ("user reported chest sore 2d ago"), losing them to a
+    /// relaunch would quietly drop that. Cleared when a new plan is
+    /// generated (the plan absorbed the override as context).
+    var muscleOverrides: [MuscleGroup: String] {
+        didSet { persistMuscleOverrides() }
+    }
+
+    private func persistMuscleOverrides() {
+        var dict: [String: String] = [:]
+        for (mg, status) in muscleOverrides { dict[mg.rawValue] = status }
+        // Write-through: on every mutation, rewrite the store so memory +
+        // disk stay in sync. Tiny dataset, cheap serialization.
+        var entries: [String: MuscleOverrideStore.Entry] = [:]
+        let existing = MuscleOverrideStore.load()
+        for (muscle, status) in dict {
+            // Preserve the original setAt if the status hasn't changed so
+            // the "reported 3d ago" line the AI sees doesn't reset on
+            // every incidental write.
+            if let prior = existing[muscle], prior.status == status {
+                entries[muscle] = prior
+            } else {
+                entries[muscle] = .init(status: status, setAt: Date())
+            }
+        }
+        MuscleOverrideStore.save(entries)
+    }
+
+    private static func loadMuscleOverrides() -> [MuscleGroup: String] {
+        let stored = MuscleOverrideStore.load()
+        var out: [MuscleGroup: String] = [:]
+        for (key, entry) in stored {
+            if let mg = MuscleGroup(rawValue: key) {
+                out[mg] = entry.status
+            }
+        }
+        return out
+    }
+
+    /// For `InputSnapshot` comparison — Dictionary with MuscleGroup keys
+    /// isn't Hashable-friendly inside an Equatable check, so we normalize
+    /// to raw-string keys.
+    private var muscleOverridesForSnapshot: [String: String] {
+        var out: [String: String] = [:]
+        for (mg, status) in muscleOverrides { out[mg.rawValue] = status }
+        return out
+    }
+
+    /// True when the user has changed any of the chip/concerns inputs since
+    /// the current plan was generated. Used by the Today view to show a
+    /// visible "Refresh plan" pill — replaces the previous debounced
+    /// auto-regenerate that fired on every tap and felt fidgety.
+    var isPlanStale: Bool {
+        guard !editedExercises.isEmpty, let snap = planInputSnapshot else { return false }
+        return snap != InputSnapshot(
+            feeling: feeling,
+            availableTime: availableTime,
+            concerns: concerns,
+            muscleOverrides: muscleOverridesForSnapshot
+        )
+    }
 
     private let coachService: CoachServiceProtocol
 
     init(coachService: CoachServiceProtocol? = nil) {
         self.coachService = coachService ?? ClaudeCoachService()
+        self.muscleOverrides = Self.loadMuscleOverrides()
         loadCachedGeneration()
     }
 
+    /// Cheap regenerate path for iteration. When the recommendation is
+    /// already in hand (muscle-group focus + session name), just re-plan via
+    /// `generatePlan` — skips the recommendation half of the combined call,
+    /// so it's noticeably faster than the full `getRecommendationAndPlan`.
+    /// Pull-to-refresh (which clears recommendation first) still takes the
+    /// full path when the user wants a totally fresh session.
     @MainActor
-    func calculateDaysSinceLast(modelContext: ModelContext) {
-        for category in WorkoutCategory.allCases {
-            var descriptor = FetchDescriptor<WorkoutSession>(
-                predicate: #Predicate<WorkoutSession> { session in session.category == category },
-                sortBy: [SortDescriptor(\.date, order: .reverse)]
-            )
-            descriptor.fetchLimit = 1
-
-            if let sessions = try? modelContext.fetch(descriptor),
-               let last = sessions.first {
-                daysSinceLast[category] = Date().daysSince(last.date)
-            } else {
-                daysSinceLast[category] = nil
-            }
+    func refreshPlan(modelContext: ModelContext, program: TrainingProgram?) async {
+        if recommendation != nil && !targetMuscleGroups.isEmpty {
+            await generatePlan(modelContext: modelContext, program: program)
+        } else {
+            await getRecommendationAndPlan(modelContext: modelContext, program: program)
         }
     }
 
@@ -142,8 +216,11 @@ class CoachViewModel {
         // Shared recent-session summary (used to be re-computed in each stage).
         let recentSummary = ContextBuilder.summarizeAllRecentSessions(limit: 10, modelContext: modelContext)
 
-        // Load weight cache + build library + weekly volume from SwiftData.
+        // Load weight cache + recent-exercise ranking + library + weekly
+        // volume from SwiftData. Recent ranking flows into the watch plan
+        // so the add-exercise picker can show a "Recent" section up top.
         loadAllLastWeights(modelContext: modelContext)
+        refreshRecentExerciseNames(modelContext: modelContext)
         let allExercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
         let library = MuscleGroup.allCases.compactMap { group -> String? in
             let items = allExercises.filter { $0.muscleGroup == group }
@@ -161,12 +238,36 @@ class CoachViewModel {
         let intelDescriptor = FetchDescriptor<UserIntelligence>()
         let intelligence = try? modelContext.fetch(intelDescriptor).first
 
+        // Fold user muscle-state overrides into concerns — they need to
+        // reach the AI's prompt. Prefixed so the model can recognize them
+        // as user-reported ground truth rather than just vague notes.
+        let concernsForPrompt = combinedConcerns()
+
+        // Build the structured UserState snapshot — the AI reads this
+        // instead of the old per-field text dump. Big token win + puts
+        // UserRules (the "never suggest X" layer) into every prompt.
+        let healthAverages = await HealthKitService.shared.fetchHealthAverages(days: 7)
+        let userState = UserState.current(
+            modelContext: modelContext,
+            program: program,
+            intelligence: intelligence,
+            checkIn: UserState.CheckInInput(
+                feeling: feeling,
+                availableTime: availableTime,
+                concerns: concernsForPrompt
+            ),
+            healthContext: healthContext,
+            healthAverages: healthAverages,
+            recentActivities: activities
+        )
+
         let (system, user) = PromptBuilder.recommendAndPlanPrompt(
+            userState: userState,
             recentSessionsSummary: recentSummary,
             recentActivities: activitiesText,
             feeling: feeling,
             availableTime: availableTime,
-            concerns: concerns.isEmpty ? nil : concerns,
+            concerns: concernsForPrompt.isEmpty ? nil : concernsForPrompt,
             exerciseLibrary: library,
             weeklyVolumeProgress: volumeProgress,
             program: program,
@@ -193,22 +294,29 @@ class CoachViewModel {
             let plan = response.asPlan
             currentPlan = plan
 
-            // Fill suggested weights from history for any exercises returned as 0/nil.
-            editedExercises = plan.exercises.map { exercise in
-                if exercise.weight <= 0, let histWeight = _weightCache[exercise.name], histWeight > 0 {
-                    return PlannedExercise(
-                        name: exercise.name, sets: exercise.sets, targetReps: exercise.targetReps,
-                        suggestedWeight: histWeight, repScheme: exercise.repScheme,
-                        warmupSets: exercise.warmupSets, notes: exercise.notes, intent: exercise.intent
-                    )
-                }
-                return exercise
-            }
+            // Starting weight: trust user history > sanitized LLM suggestion > library default.
+            // The LLM has hallucinated absurd weights (e.g. 15000 lb) in prior sessions;
+            // we never let those reach the watch.
+            editedExercises = plan.exercises.map(pickStartingWeight)
 
             // Fresh plan → fresh adjustment history.
             planAdjustments = []
 
-            if selectedCategory != nil { savePlanForCurrentCategory() }
+            // Capture the inputs that produced this plan. `isPlanStale`
+            // compares live values to this snapshot to decide whether to
+            // show the Refresh pill on Today.
+            planInputSnapshot = InputSnapshot(
+                feeling: feeling,
+                availableTime: availableTime,
+                concerns: concerns,
+                muscleOverrides: muscleOverridesForSnapshot
+            )
+
+            // Overrides have now been absorbed into the plan — clear them
+            // so tomorrow's plan isn't silently double-applying yesterday's
+            // "chest sore" report.
+            clearAllMuscleOverrides()
+
             markGenerated(modelContext: modelContext)
             print("[BenLift/Coach] ✅ recommendAndPlan: \(response.recommendedSessionName) — \(editedExercises.count) exercises")
         } catch {
@@ -217,10 +325,6 @@ class CoachViewModel {
             } else {
                 print("[BenLift/Coach] ❌ recommendAndPlan failed: \(error)")
                 planError = "Couldn't generate today's plan: \(error.localizedDescription)"
-                // Legacy fallback to default template if a category is selected.
-                if let cat = selectedCategory {
-                    loadDefaultTemplate(category: cat, modelContext: modelContext)
-                }
             }
         }
 
@@ -235,20 +339,44 @@ class CoachViewModel {
         isGenerating = true
         planError = nil
 
-        // Load last weights from history so Claude can reference them
+        // Load last weights + refresh recent-exercise ranking so the watch
+        // plan gets the up-to-date "Recent" list on iteration refreshes too.
         loadAllLastWeights(modelContext: modelContext)
+        refreshRecentExerciseNames(modelContext: modelContext)
 
         let healthContext = await HealthKitService.shared.fetchHealthContext()
+        let healthAverages = await HealthKitService.shared.fetchHealthAverages(days: 7)
+        let activities = await HealthKitService.shared.fetchRecentActivities(days: 7)
 
-        // Use category if set (legacy PPL), otherwise use target muscle groups
-        let category = selectedCategory
+        // Same prompt-folding of muscle overrides as the combined path —
+        // see `combinedConcerns()` for why we prefix them.
+        let concernsForPrompt = combinedConcerns()
+
+        // Build a UserState so iteration refreshes hit the same
+        // structured prompt as the full recommend-and-plan path.
+        let intelDescriptor = FetchDescriptor<UserIntelligence>()
+        let intelligence = try? modelContext.fetch(intelDescriptor).first
+        let userState = UserState.current(
+            modelContext: modelContext,
+            program: program,
+            intelligence: intelligence,
+            checkIn: UserState.CheckInInput(
+                feeling: feeling,
+                availableTime: availableTime,
+                concerns: concernsForPrompt
+            ),
+            healthContext: healthContext,
+            healthAverages: healthAverages,
+            recentActivities: activities
+        )
+
         let (system, user) = ContextBuilder.buildDailyPlanContext(
-            category: category,
+            userState: userState,
             targetMuscleGroups: targetMuscleGroups,
             sessionName: currentSessionName,
             feeling: feeling,
             availableTime: availableTime,
-            concerns: concerns.isEmpty ? nil : concerns,
+            concerns: concernsForPrompt.isEmpty ? nil : concernsForPrompt,
             modelContext: modelContext,
             program: program,
             healthContext: healthContext
@@ -256,25 +384,25 @@ class CoachViewModel {
 
         let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
 
-        print("[BenLift/Coach] Generating plan for \(currentSessionName ?? category?.displayName ?? "Custom"), feeling=\(feeling), time=\(availableTime.map { "\($0)min" } ?? "unset")")
+        print("[BenLift/Coach] Generating plan for \(currentSessionName ?? "Custom"), feeling=\(feeling), time=\(availableTime.map { "\($0)min" } ?? "unset")")
 
         do {
             let plan = try await coachService.generateDailyPlan(systemPrompt: system, userPrompt: user, model: model)
             currentPlan = plan
             // New plan => fresh adjustment history
             planAdjustments = []
-            // Fill in weights from history for any exercises Claude returned as 0/null
-            editedExercises = plan.exercises.map { exercise in
-                if exercise.weight <= 0, let histWeight = _weightCache[exercise.name], histWeight > 0 {
-                    return PlannedExercise(
-                        name: exercise.name, sets: exercise.sets, targetReps: exercise.targetReps,
-                        suggestedWeight: histWeight, repScheme: exercise.repScheme,
-                        warmupSets: exercise.warmupSets, notes: exercise.notes, intent: exercise.intent
-                    )
-                }
-                return exercise
-            }
-            if let cat = category { savePlanForCurrentCategory() }
+            // Starting weight: trust user history > sanitized LLM suggestion > library default.
+            editedExercises = plan.exercises.map(pickStartingWeight)
+            // Same snapshot dance as `getRecommendationAndPlan` so the
+            // Refresh pill clears after an iteration refresh too.
+            planInputSnapshot = InputSnapshot(
+                feeling: feeling,
+                availableTime: availableTime,
+                concerns: concerns,
+                muscleOverrides: muscleOverridesForSnapshot
+            )
+            // Plan absorbed the overrides — reset so tomorrow starts fresh.
+            clearAllMuscleOverrides()
             print("[BenLift/Coach] ✅ Plan generated: \(editedExercises.count) exercises")
         } catch {
             if Self.isCancellation(error) {
@@ -282,119 +410,101 @@ class CoachViewModel {
             } else {
                 print("[BenLift/Coach] ❌ Plan generation failed: \(error)")
                 planError = error.localizedDescription
-                if let cat = category {
-                    loadDefaultTemplate(category: cat, modelContext: modelContext)
-                }
             }
         }
 
         isGenerating = false
     }
 
-    /// Evidence-based default templates: 5 exercises per session
-    /// Based on Israetel (RP), Helms, Schoenfeld research (2023-2025)
-    /// Primary compound: 3-4 x 5-8 @ 2-3 RIR
-    /// Secondary compound: 3 x 8-12 @ 1-2 RIR
-    /// Isolation: 2-3 x 10-15 @ 0-1 RIR
-    @MainActor
-    func loadDefaultTemplate(category: WorkoutCategory, modelContext: ModelContext) {
-        let pool = DefaultExercises.exercises(for: category)
-        let corePool = DefaultExercises.core
-
-        switch category {
-        case .push:
-            // Chest (6 sets) + Side delts (3 sets) + Triceps (3 direct + overlap) + Core
-            editedExercises = [
-                exercise("Bench Press", from: pool, sets: 3, reps: "6-8", intent: "primary compound", warmup: true),
-                exercise("DB Incline Press", from: pool, sets: 3, reps: "8-12", intent: "secondary compound"),
-                exercise("DB Shoulder Press", from: pool, sets: 3, reps: "8-10", intent: "secondary compound"),
-                exercise("Lateral Raises", from: pool, sets: 3, reps: "12-15", intent: "isolation"),
-                exercise("Tricep Overhead Extension", from: pool, sets: 3, reps: "10-15", intent: "isolation"),
-                exercise("Hanging Leg Raise", from: corePool, sets: 3, reps: "10-15", intent: "finisher"),
-            ]
-
-        case .pull:
-            // Back (9 sets) + Rear delts (2-3 sets) + Biceps (2-3 direct, reduced for bouldering) + Core
-            editedExercises = [
-                exercise("Pull-ups", from: pool, sets: 3, reps: "6-10", intent: "primary compound"),
-                exercise("Chest Supported Row", from: pool, sets: 3, reps: "8-12", intent: "secondary compound"),
-                exercise("Seated Row", from: pool, sets: 3, reps: "10-12", intent: "secondary compound"),
-                exercise("Face Pulls", from: pool, sets: 3, reps: "12-15", intent: "isolation"),
-                exercise("Incline Hammer Curl", from: pool, sets: 2, reps: "10-15", intent: "isolation"),
-                exercise("Pallof Press", from: corePool, sets: 3, reps: "10-12", intent: "finisher"),
-            ]
-
-        case .legs:
-            // Quads (6-7 sets) + Hamstrings (6 sets) + Core
-            editedExercises = [
-                exercise("Squat", from: pool, sets: 3, reps: "5-8", intent: "primary compound", warmup: true),
-                exercise("Romanian Deadlift", from: pool, sets: 3, reps: "8-12", intent: "secondary compound"),
-                exercise("Split Squat", from: pool, sets: 3, reps: "8-12", intent: "secondary compound"),
-                exercise("Hamstring Curl", from: pool, sets: 3, reps: "10-15", intent: "isolation"),
-                exercise("Leg Extension", from: pool, sets: 3, reps: "10-15", intent: "isolation"),
-                exercise("Plank", from: corePool, sets: 3, reps: "30-60s", intent: "finisher"),
-            ]
-        }
-
-        print("[BenLift/Coach] Loaded default \(category.displayName) template: \(editedExercises.count) exercises (~\(editedExercises.reduce(0) { $0 + $1.sets }) working sets)")
-    }
-
-    /// Build a PlannedExercise, using last session's weight if available, else default.
-    private func exercise(
-        _ name: String,
-        from pool: [DefaultExercises.ExerciseDef],
-        sets: Int,
-        reps: String,
-        intent: String,
-        warmup: Bool = false
-    ) -> PlannedExercise {
-        let def = pool.first(where: { $0.name == name })
-        // Use last logged weight if we have history, otherwise default
-        let weight = lastWeight(for: name) ?? def?.defaultWeight ?? 0
-        return PlannedExercise(
-            name: name,
-            sets: sets,
-            targetReps: reps,
-            suggestedWeight: weight,
-            repScheme: nil,
-            warmupSets: warmup ? defaultWarmups(weight: weight, equipment: def?.equipment) : nil,
-            notes: nil,
-            intent: intent
-        )
-    }
-
     /// Look up the most recent working weight for an exercise from SwiftData history.
+    /// Populated by `loadAllLastWeights` and consumed by `pickStartingWeight`.
     private var _weightCache: [String: Double] = [:]
 
-    @MainActor
-    private func lastWeight(for exerciseName: String) -> Double? {
-        if let cached = _weightCache[exerciseName] { return cached }
-        // Can't query without modelContext — return nil, weights come from defaults
-        // This gets populated when loadDefaultTemplate is called with modelContext
-        return nil
-    }
+    /// Top ~10 exercise names from the user's last 30 days of sessions,
+    /// ranked by usage. Refreshed whenever we regenerate a plan and
+    /// piggybacked into `WatchWorkoutPlan.recentExercises` so the watch's
+    /// add-exercise picker can surface them in a "Recent" section without
+    /// needing its own SwiftData access.
+    private var _recentExerciseNames: [String] = []
 
-    /// Pre-load last weights from history for all exercises in a category.
+    /// Recompute the recent-exercise ranking from history. Cheap (bounded
+    /// scan) and only called during plan generation, so no need to
+    /// memoize beyond the single session.
     @MainActor
-    func loadLastWeights(for category: WorkoutCategory, modelContext: ModelContext) {
-        var descriptor = FetchDescriptor<WorkoutSession>(
-            predicate: #Predicate<WorkoutSession> { session in session.category == category },
-            sortBy: [SortDescriptor(\.date, order: .reverse)]
+    private func refreshRecentExerciseNames(modelContext: ModelContext) {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        let descriptor = FetchDescriptor<WorkoutSession>(
+            predicate: #Predicate { $0.date >= cutoff }
         )
-        descriptor.fetchLimit = 3
-
-        guard let sessions = try? modelContext.fetch(descriptor) else { return }
-
+        guard let sessions = try? modelContext.fetch(descriptor) else {
+            _recentExerciseNames = []
+            return
+        }
+        var counts: [String: Int] = [:]
         for session in sessions {
-            for entry in session.entries {
-                if _weightCache[entry.exerciseName] == nil {
-                    if let topSet = StatsEngine.topSet(sets: entry.sets) {
-                        _weightCache[entry.exerciseName] = topSet.weight
-                    }
-                }
+            for entry in session.entries where !entry.isSkipped {
+                counts[entry.exerciseName, default: 0] += 1
             }
         }
-        print("[BenLift/Coach] Loaded last weights for \(_weightCache.count) exercises")
+        _recentExerciseNames = counts
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                return lhs.key < rhs.key  // stable alpha tiebreak
+            }
+            .prefix(10)
+            .map { $0.key }
+    }
+
+    /// Decide a sane starting weight for a planned exercise.
+    ///
+    /// The LLM can't actually observe the user's strength — it only sees whatever
+    /// context we feed it, and has been known to hallucinate garbage values
+    /// (e.g. 15000 lb). The user's own recent working weight is a far better signal.
+    /// Priority: recent history > sanitized LLM suggestion > library default > 0.
+    @MainActor
+    private func pickStartingWeight(_ exercise: PlannedExercise) -> PlannedExercise {
+        let def = DefaultExercises.all.first { $0.name == exercise.name }
+        let llmWeight = exercise.weight
+        let sanitizedLLM = Self.plausibleWeight(llmWeight, for: def?.equipment)
+        let histWeight = _weightCache[exercise.name].flatMap {
+            Self.plausibleWeight($0, for: def?.equipment)
+        }
+
+        let finalWeight = histWeight ?? sanitizedLLM ?? def?.defaultWeight ?? 0
+
+        if finalWeight != llmWeight {
+            print("[BenLift/Coach] Start weight override for \(exercise.name): \(llmWeight) → \(finalWeight) (hist=\(histWeight.map { "\($0)" } ?? "nil"), llm=\(llmWeight), default=\(def?.defaultWeight.map { "\($0)" } ?? "nil"))")
+        }
+
+        return PlannedExercise(
+            name: exercise.name,
+            sets: exercise.sets,
+            targetReps: exercise.targetReps,
+            suggestedWeight: finalWeight,
+            repScheme: exercise.repScheme,
+            warmupSets: exercise.warmupSets,
+            notes: exercise.notes,
+            intent: exercise.intent
+        )
+    }
+
+    /// Returns the weight if it's within a sensible range for the given equipment;
+    /// otherwise nil so the caller can fall back to history or a library default.
+    /// Upper bounds are deliberately generous — they only catch clearly-nonsense
+    /// values (LLM hallucinations, unit mix-ups), not legitimately heavy loads.
+    private static func plausibleWeight(_ value: Double, for equipment: Equipment?) -> Double? {
+        guard value > 0 else { return nil }
+        let ceiling: Double
+        switch equipment {
+        case .barbell: ceiling = 1000   // beyond world-class
+        case .dumbbell: ceiling = 200   // heaviest commercial DBs
+        case .machine: ceiling = 500    // full plate/pin stacks
+        case .cable: ceiling = 300
+        case .kettlebell: ceiling = 150
+        case .bodyweight: ceiling = 300 // added load (vest/belt)
+        case .none: ceiling = 500       // unknown equipment: play safe
+        }
+        return value <= ceiling ? value : nil
     }
 
     /// Load weights from ALL recent sessions (not category-specific) — for dynamic plans
@@ -419,57 +529,41 @@ class CoachViewModel {
         print("[BenLift/Coach] Loaded all last weights: \(_weightCache.count) exercises")
     }
 
-    /// Only generate 1 warmup set for the first compound exercise. Keep it simple.
-    private func defaultWarmups(weight: Double, equipment: Equipment?) -> [WarmupSet]? {
-        guard weight >= 135, equipment == .barbell else { return nil }
-        // Single warmup: ~50% of working weight
-        return [
-            WarmupSet(weight: round(weight * 0.5 / 5) * 5, reps: 5),
-        ]
-    }
-
-    func removeExercise(at index: Int) {
+    /// Remove an exercise from the current plan. When `modelContext` is
+    /// provided, also records a durable `exerciseOut` UserRule so the AI
+    /// knows to exclude this exercise from subsequent plans until the
+    /// user adds it back. The modelContext arg is optional for back-
+    /// compat with call sites that don't have it handy; Today's plan
+    /// list passes it in, which is the user-facing removal path.
+    @MainActor
+    func removeExercise(at index: Int, modelContext: ModelContext? = nil) {
         guard index < editedExercises.count else { return }
+        let removed = editedExercises[index]
         editedExercises.remove(at: index)
+        if let modelContext {
+            UserRuleStore.addExerciseOut(
+                exerciseName: removed.name,
+                reason: "Removed from plan",
+                modelContext: modelContext
+            )
+        }
     }
 
     func moveExercise(from source: IndexSet, to destination: Int) {
         editedExercises.move(fromOffsets: source, toOffset: destination)
     }
 
-    /// Save current plan for this category before switching away
-    func savePlanForCurrentCategory() {
-        guard let category = selectedCategory, !editedExercises.isEmpty else { return }
-        savedPlans[category] = (plan: currentPlan, exercises: editedExercises)
-    }
-
-    /// Try to restore a previously saved plan for a category
-    func restorePlan(for category: WorkoutCategory) -> Bool {
-        if let saved = savedPlans[category], !saved.exercises.isEmpty {
-            currentPlan = saved.plan
-            editedExercises = saved.exercises
-            return true
-        }
-        return false
-    }
-
-    func resetPlan() {
-        // Save before clearing so we can restore later
-        savePlanForCurrentCategory()
-        currentPlan = nil
-        editedExercises = []
-        selectedCategory = nil
-        concerns = ""
-        planError = nil
-    }
-
-    func clearPlanEntirely() {
-        if let cat = selectedCategory { savedPlans.removeValue(forKey: cat) }
-        currentPlan = nil
-        editedExercises = []
-        selectedCategory = nil
-        concerns = ""
-        planError = nil
+    /// Add an exercise to the current plan. If a matching `exerciseOut`
+    /// rule exists, archive it — the user explicitly wanting the
+    /// exercise back is the strongest possible "never mind, suggest it
+    /// again" signal, cleaner than waiting for the rule to decay.
+    @MainActor
+    func addExerciseToPlan(_ exercise: PlannedExercise, modelContext: ModelContext) {
+        editedExercises.append(exercise)
+        UserRuleStore.archiveExerciseOutRule(
+            for: exercise.name,
+            modelContext: modelContext
+        )
     }
 
     /// Convert current plan to WatchWorkoutPlan for transfer
@@ -485,7 +579,8 @@ class CoachViewModel {
                 notes: exercise.notes,
                 intent: exercise.intent,
                 lastWeight: nil,
-                lastReps: nil
+                lastReps: nil,
+                equipment: DefaultExercises.all.first(where: { $0.name == exercise.name })?.equipment
             )
         }
         let restTimer = UserDefaults.standard.double(forKey: "restTimerDuration")
@@ -494,11 +589,13 @@ class CoachViewModel {
         return WatchWorkoutPlan(
             sessionName: currentSessionName,
             muscleGroups: targetMuscleGroups.map(\.rawValue),
-            category: selectedCategory,
+            category: nil,
             exercises: watchExercises,
             sessionStrategy: currentPlan?.sessionStrategy,
             restTimerDuration: restTimer > 0 ? restTimer : 150,
-            weightIncrement: increment > 0 ? increment : 5.0
+            weightIncrement: increment > 0 ? increment : 5.0,
+            aiPlanUsed: true,
+            recentExercises: _recentExerciseNames.isEmpty ? nil : _recentExerciseNames
         )
     }
 
@@ -635,5 +732,65 @@ class CoachViewModel {
         editedExercises = snapshot.editedExercises
         lastGeneratedDate = snapshot.generatedAt
         lastGeneratedSessionCount = snapshot.sessionCount
+        // Seed the input snapshot with the current VM inputs so the
+        // Refresh pill works on cold launches that skip regeneration.
+        // Without this, `isPlanStale` always returned false (snapshot=nil)
+        // and the pill never appeared — which is exactly what the user
+        // reported as "refresh is just not there physically."
+        planInputSnapshot = InputSnapshot(
+            feeling: feeling,
+            availableTime: availableTime,
+            concerns: concerns,
+            muscleOverrides: muscleOverridesForSnapshot
+        )
+    }
+
+    // MARK: - Muscle Overrides
+
+    /// Set or clear a user-reported muscle status override. Nil clears
+    /// the override and lets the AI / computed read govern again.
+    @MainActor
+    func setMuscleOverride(_ muscle: MuscleGroup, status: String?) {
+        if let status {
+            muscleOverrides[muscle] = status
+        } else {
+            muscleOverrides.removeValue(forKey: muscle)
+        }
+    }
+
+    @MainActor
+    func clearAllMuscleOverrides() {
+        muscleOverrides.removeAll()
+        MuscleOverrideStore.clearAll()
+    }
+
+    /// Render user overrides as a short string for the LLM prompt. Empty
+    /// when no overrides set so the caller can skip including a section.
+    func formattedMuscleOverridesForPrompt() -> String {
+        guard !muscleOverrides.isEmpty else { return "" }
+        return muscleOverrides
+            .sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { "\($0.key.displayName): \($0.value)" }
+            .joined(separator: ", ")
+    }
+
+    /// Compose the user's concerns text + any muscle-state overrides into
+    /// a single string to hand to the prompt layer. Overrides get a
+    /// prefix ("User-reported muscle state:") so the model can treat them
+    /// as ground truth rather than a vague aside. Returns empty string
+    /// when neither concerns nor overrides are set — caller passes nil.
+    func combinedConcerns() -> String {
+        let overrides = formattedMuscleOverridesForPrompt()
+        let concernsText = concerns.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (overrides.isEmpty, concernsText.isEmpty) {
+        case (true, true):
+            return ""
+        case (true, false):
+            return concernsText
+        case (false, true):
+            return "User-reported muscle state: \(overrides)"
+        case (false, false):
+            return "User-reported muscle state: \(overrides). \(concernsText)"
+        }
     }
 }

@@ -150,17 +150,24 @@ final class ExerciseEntry {
     @Relationship(deleteRule: .cascade, inverse: \SetLog.entry)
     var sets: [SetLog]
     var session: WorkoutSession?
+    /// True when the user explicitly skipped this exercise during the session
+    /// (as opposed to "never started" or "completed"). Lets history/analytics
+    /// distinguish a bail from an omission. Default false for safe migration
+    /// of rows written before this field existed.
+    var isSkipped: Bool = false
 
     init(
         id: UUID = UUID(),
         exerciseName: String,
         order: Int,
-        sets: [SetLog] = []
+        sets: [SetLog] = [],
+        isSkipped: Bool = false
     ) {
         self.id = id
         self.exerciseName = exerciseName
         self.order = order
         self.sets = sets
+        self.isSkipped = isSkipped
     }
 
     var sortedSets: [SetLog] {
@@ -535,4 +542,161 @@ final class UserIntelligence {
 
         return sections.joined(separator: "\n")
     }
+}
+
+// MARK: - UserRule (explicit user decisions the AI MUST respect)
+
+/// Durable assertion: "never suggest Split Squat," "always prefer DB
+/// shoulder press over barbell," etc. These are deterministic hard
+/// constraints, not probabilistic observations. A rule set today is
+/// respected in the very next plan call (no waiting for the AI to
+/// re-observe the pattern) and persists until explicitly archived —
+/// either by user action, by the user re-adding the excluded exercise,
+/// or by time-decay after 90 days without reinforcement.
+///
+/// Stored as `kindRaw` / `isActive` primitives so unknown future rule
+/// kinds round-trip without crashing, and soft-archive is a flag rather
+/// than a delete (history preserved for "Exercise Preferences" UI).
+@Model
+final class UserRule {
+    var id: UUID
+    var kindRaw: String
+    /// Exercise name, muscle group, or other target the rule applies to.
+    var subject: String
+    /// For relational rules like `preferOver` — the thing being
+    /// preferred instead of the subject. nil for unary rules.
+    var target: String?
+    /// Human-readable reason surfaced in the UI + passed to the AI. Can
+    /// be empty for auto-promoted rules.
+    var reason: String?
+    var createdAt: Date
+    /// Bumped every time the user's behavior re-confirms the rule —
+    /// e.g. another swap away from the excluded exercise. Drives the
+    /// 90-day decay check.
+    var lastReinforcedAt: Date
+    /// Soft-archive flag. Archived rules stay in the DB (for history /
+    /// audit) but are excluded from prompts and active-rule UI.
+    var isActive: Bool
+
+    init(
+        id: UUID = UUID(),
+        kind: UserRuleKind,
+        subject: String,
+        target: String? = nil,
+        reason: String? = nil,
+        createdAt: Date = Date(),
+        lastReinforcedAt: Date? = nil,
+        isActive: Bool = true
+    ) {
+        self.id = id
+        self.kindRaw = kind.rawValue
+        self.subject = subject
+        self.target = target
+        self.reason = reason
+        self.createdAt = createdAt
+        self.lastReinforcedAt = lastReinforcedAt ?? createdAt
+        self.isActive = isActive
+    }
+
+    var kind: UserRuleKind {
+        UserRuleKind(rawValue: kindRaw) ?? .unknown
+    }
+}
+
+/// Categories of durable user decisions. String rawValues so unknown
+/// future kinds decode cleanly as `.unknown` during migrations.
+enum UserRuleKind: String, Codable, CaseIterable {
+    /// Don't suggest this exercise until the user adds it back.
+    case exerciseOut
+    /// Prefer `target` over `subject` when both address the same slot.
+    case preferOver
+    /// Equipment restriction — "only cable/machine for this muscle"
+    /// carried as a free-form subject for now.
+    case equipment
+    /// Programming preference — "keep me in 3×8-12" etc., subject holds
+    /// the text. Unstructured for now; can split if frequency justifies.
+    case programming
+    case unknown
+}
+
+// MARK: - Observation (AI-discovered patterns — probabilistic)
+
+/// What the AI learned about the user through pattern-finding during an
+/// intelligence refresh. Unlike rules, these are probabilistic — the AI
+/// can weigh them but isn't required to obey them. They supersede on
+/// `(kind, subject)` match during subsequent refreshes (bumping
+/// `lastReinforcedAt`) and auto-archive after 90 days without being
+/// re-observed. Top 5 active ones ride in every plan prompt.
+///
+/// Named `UserObservation` (not bare `Observation`) to avoid collision
+/// with Apple's `Observation` module (which SwiftData types namespace
+/// themselves through).
+@Model
+final class UserObservation {
+    var id: UUID
+    var kindRaw: String
+    /// Scoped identifier so supersede can dedupe — usually an exercise
+    /// name, muscle group, or the literal string "global" for
+    /// cross-cutting findings.
+    var subject: String
+    /// The prose the AI produced. Short, declarative, passed into
+    /// prompts verbatim.
+    var text: String
+    var confidenceRaw: String
+    var createdAt: Date
+    var lastReinforcedAt: Date
+    var isActive: Bool
+
+    init(
+        id: UUID = UUID(),
+        kind: ObservationKind,
+        subject: String,
+        text: String,
+        confidence: ObservationConfidence = .medium,
+        createdAt: Date = Date(),
+        lastReinforcedAt: Date? = nil,
+        isActive: Bool = true
+    ) {
+        self.id = id
+        self.kindRaw = kind.rawValue
+        self.subject = subject
+        self.text = text
+        self.confidenceRaw = confidence.rawValue
+        self.createdAt = createdAt
+        self.lastReinforcedAt = lastReinforcedAt ?? createdAt
+        self.isActive = isActive
+    }
+
+    var kind: ObservationKind {
+        ObservationKind(rawValue: kindRaw) ?? .unknown
+    }
+
+    var confidence: ObservationConfidence {
+        ObservationConfidence(rawValue: confidenceRaw) ?? .medium
+    }
+
+    /// True when the observation hasn't been reinforced in 90 days —
+    /// the refresh job soft-archives these so the active set stays
+    /// current.
+    var isStale: Bool {
+        Date().timeIntervalSince(lastReinforcedAt) > 90 * 24 * 3600
+    }
+}
+
+enum ObservationKind: String, Codable, CaseIterable {
+    /// Correlation between two signals ("HRV dips after climbing").
+    case correlation
+    /// Recurring behavior pattern ("bench PRs cluster Mon/Tue").
+    case pattern
+    /// Programming insight ("user responds better to DB than barbell").
+    case programming
+    /// Recovery-specific finding.
+    case recovery
+    /// Cross-cutting note that doesn't fit the others.
+    case note
+    case unknown
+}
+
+enum ObservationConfidence: String, Codable, CaseIterable {
+    case low, medium, high
 }

@@ -175,37 +175,56 @@ struct SessionDetailView: View {
                 .textCase(.uppercase)
 
             ForEach(session.sortedEntries) { entry in
+                // Skipped entries: ghosted card + strikethrough name +
+                // "skipped" label. They're kept in the list (instead of
+                // filtered out) so the user can see what they bailed on —
+                // the data feeds the AI's patterns card.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(entry.exerciseName)
-                        .font(.body.bold())
-
-                    ForEach(entry.sortedSets) { set in
-                        HStack {
-                            Text("Set \(set.setNumber)")
-                                .font(.caption)
+                    HStack(spacing: 6) {
+                        Text(entry.exerciseName)
+                            .font(.body.bold())
+                            .strikethrough(entry.isSkipped, color: .secondaryText)
+                            .foregroundColor(entry.isSkipped ? .secondaryText : .primary)
+                        if entry.isSkipped {
+                            Text("skipped")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondaryText.opacity(0.15))
                                 .foregroundColor(.secondaryText)
-                                .frame(width: 50, alignment: .leading)
-
-                            Text("\(Int(set.weight)) x \(set.reps.formattedReps)")
-                                .font(.body.monospacedDigit())
-                                .foregroundColor(set.isFailed ? .failedRed : .primary)
-
-                            if set.isWarmup {
-                                Text("warm-up")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondaryText)
-                            }
-
-                            Spacer()
+                                .cornerRadius(4)
                         }
                     }
 
-                    Text("Volume: \(Int(entry.totalVolume)) lbs")
-                        .font(.caption)
-                        .foregroundColor(.secondaryText)
+                    if !entry.isSkipped {
+                        ForEach(entry.sortedSets) { set in
+                            HStack {
+                                Text("Set \(set.setNumber)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondaryText)
+                                    .frame(width: 50, alignment: .leading)
+
+                                Text("\(Int(set.weight)) x \(set.reps.formattedReps)")
+                                    .font(.body.monospacedDigit())
+                                    .foregroundColor(set.isFailed ? .failedRed : .primary)
+
+                                if set.isWarmup {
+                                    Text("warm-up")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondaryText)
+                                }
+
+                                Spacer()
+                            }
+                        }
+
+                        Text("Volume: \(Int(entry.totalVolume)) lbs")
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
                 }
                 .padding()
-                .background(Color.cardSurface)
+                .background(Color.cardSurface.opacity(entry.isSkipped ? 0.4 : 1))
                 .cornerRadius(8)
             }
         }

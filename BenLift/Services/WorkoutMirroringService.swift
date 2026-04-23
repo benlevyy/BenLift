@@ -58,20 +58,29 @@ class WorkoutMirroringService: NSObject, HKWorkoutSessionDelegate {
     private var lastSentAt: Date = .distantPast
     private let debounceWindow: TimeInterval = 0.25
 
-    /// Send a message to the Watch via the mirrored session.
-    func sendToWatch(_ message: WorkoutMessage) {
+    /// Send a message to the Watch via the mirrored session. Returns `true`
+    /// when the send was *attempted* (there is an active mirrored session and
+    /// the payload wasn't deduped). Callers use this signal to decide whether
+    /// an optimistic UI hint (e.g. a pending set) is worth appending — false
+    /// means the watch will never see it and we'd be lying to the user.
+    @discardableResult
+    func sendToWatch(_ message: WorkoutMessage) -> Bool {
         guard let session = mirroredSession, let data = message.encoded() else {
             print("[BenLift/Mirroring] ⚠️ Cannot send \(message) — no active mirrored session")
-            return
+            return false
         }
 
-        // Debounce duplicates (only for commands; snapshots are owner-only)
-        if case .command = message {
-            let signature = "\(message)"
+        // Debounce duplicates (only for commands; snapshots are owner-only).
+        // Uses a structured signature that explicitly names the case + key args
+        // so commands that differ only in payload (e.g. skip on different
+        // indices) are NOT dedupe'd together. Previously this used
+        // `"\(message)"` which relied on Swift's enum stringification being
+        // stable and payload-inclusive — not guaranteed across toolchains.
+        if case .command(let cmd) = message {
+            let signature = Self.debounceSignature(for: cmd)
             if signature == lastSentSignature,
                Date().timeIntervalSince(lastSentAt) < debounceWindow {
-                // Suppress duplicate
-                return
+                return false
             }
             lastSentSignature = signature
             lastSentAt = Date()
@@ -83,6 +92,37 @@ class WorkoutMirroringService: NSObject, HKWorkoutSessionDelegate {
             } else {
                 print("[BenLift/Mirroring] → Sent \(message) to Watch (\(data.count) bytes)")
             }
+        }
+        return true
+    }
+
+    /// Explicit per-case signature. Each command carries whatever identifying
+    /// payload matters (index, weight, etc.) so two distinct user actions can
+    /// never accidentally share a signature and get deduped into one.
+    private static func debounceSignature(for cmd: WorkoutCommand) -> String {
+        switch cmd {
+        case .logSet(let i, let w, let r, let isWarmup):
+            return "logSet:\(i):\(w):\(r):\(isWarmup)"
+        case .undoSet(let i):
+            return "undoSet:\(i)"
+        case .selectExercise(let i):
+            return "selectExercise:\(i)"
+        case .skipRest:
+            return "skipRest"
+        case .adjustRestTimer(let delta):
+            return "adjustRestTimer:\(delta)"
+        case .adaptExercise(let i, let replacement):
+            return "adaptExercise:\(i):\(replacement.name)"
+        case .addExercise(let info):
+            return "addExercise:\(info.name)"
+        case .end:
+            return "end"
+        case .requestSnapshot:
+            return "requestSnapshot"
+        case .skipExercise(let i):
+            return "skipExercise:\(i)"
+        case .unskipExercise(let i):
+            return "unskipExercise:\(i)"
         }
     }
 

@@ -2,9 +2,20 @@ import SwiftUI
 
 /// Sheet for requesting AI exercise adaptation during a workout.
 struct MidWorkoutAdaptSheet: View {
+    /// Presentation mode. `.manual` shows the full reason+details form (the
+    /// "AI Suggest Changes" entry point). `.swipe` skips straight to the
+    /// loader → accept flow for the swipe-left-to-swap gesture, where the
+    /// caller has already fired the LLM request with a default reason.
+    ///
+    /// Passed in explicitly rather than detected from VM state at `.onAppear`
+    /// — the async request isn't guaranteed to have set `isAdapting = true`
+    /// by the time the sheet mounts, so sniffing state is racy.
+    enum Mode { case manual, swipe }
+
     @Environment(\.dismiss) private var dismiss
     @Bindable var workoutVM: PhoneWorkoutViewModel
     var program: TrainingProgram?
+    var mode: Mode = .manual
     @State private var selectedReason: AdaptReason = .equipmentTaken
     @State private var detailsText: String = ""
 
@@ -42,68 +53,70 @@ struct MidWorkoutAdaptSheet: View {
                         .cornerRadius(10)
                     }
 
-                    // Reason picker
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Reason")
-                            .font(.subheadline.bold())
-                            .foregroundColor(.secondaryText)
+                    // Reason picker + details + Ask-AI — only shown when the
+                    // user opened the sheet manually (not via swipe-swap which
+                    // already sent a request with a default reason).
+                    if mode == .manual {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Reason")
+                                .font(.subheadline.bold())
+                                .foregroundColor(.secondaryText)
 
-                        LazyVGrid(columns: [
-                            GridItem(.flexible()),
-                            GridItem(.flexible())
-                        ], spacing: 8) {
-                            ForEach(AdaptReason.allCases) { reason in
-                                Button {
-                                    selectedReason = reason
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: reason.icon)
-                                            .font(.caption)
-                                        Text(reason.displayName)
-                                            .font(.caption.bold())
+                            LazyVGrid(columns: [
+                                GridItem(.flexible()),
+                                GridItem(.flexible())
+                            ], spacing: 8) {
+                                ForEach(AdaptReason.allCases) { reason in
+                                    Button {
+                                        selectedReason = reason
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: reason.icon)
+                                                .font(.caption)
+                                            Text(reason.displayName)
+                                                .font(.caption.bold())
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                        .background(selectedReason == reason ? Color.accentBlue : Color.cardSurface)
+                                        .foregroundColor(selectedReason == reason ? .white : .primary)
+                                        .cornerRadius(8)
                                     }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(selectedReason == reason ? Color.accentBlue : Color.cardSurface)
-                                    .foregroundColor(selectedReason == reason ? .white : .primary)
-                                    .cornerRadius(8)
                                 }
                             }
                         }
-                    }
 
-                    // Details
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Details (optional)")
-                            .font(.subheadline.bold())
-                            .foregroundColor(.secondaryText)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Details (optional)")
+                                .font(.subheadline.bold())
+                                .foregroundColor(.secondaryText)
 
-                        TextField("e.g., both cable machines are taken", text: $detailsText)
-                            .textFieldStyle(.roundedBorder)
-                    }
+                            TextField("e.g., both cable machines are taken", text: $detailsText)
+                                .textFieldStyle(.roundedBorder)
+                        }
 
-                    // Ask AI button
-                    if workoutVM.adaptSuggestion == nil && !workoutVM.isAdapting {
-                        Button {
-                            Task {
-                                await workoutVM.requestAdaptation(
-                                    exerciseIndex: workoutVM.adaptTargetIndex,
-                                    reason: selectedReason,
-                                    details: detailsText.isEmpty ? nil : detailsText,
-                                    program: program
-                                )
+                        if workoutVM.adaptSuggestion == nil && !workoutVM.isAdapting {
+                            Button {
+                                Task {
+                                    await workoutVM.requestAdaptation(
+                                        exerciseIndex: workoutVM.adaptTargetIndex,
+                                        reason: selectedReason,
+                                        details: detailsText.isEmpty ? nil : detailsText,
+                                        program: program
+                                    )
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "sparkles")
+                                    Text("Ask AI")
+                                }
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color.accentBlue)
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
                             }
-                        } label: {
-                            HStack {
-                                Image(systemName: "sparkles")
-                                Text("Ask AI")
-                            }
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.accentBlue)
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
                         }
                     }
 

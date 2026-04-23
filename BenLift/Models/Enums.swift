@@ -37,6 +37,17 @@ enum Equipment: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         rawValue.capitalized
     }
+
+    /// Smallest realistic weight-adjustment step for this equipment type.
+    /// Pin-stacks / cables / dumbbells / pin-loaded machines micro-adjust at 2.5lb;
+    /// barbells and kettlebells at 5lb. Bodyweight returns 0 (no adjustment).
+    var defaultIncrement: Double {
+        switch self {
+        case .cable, .dumbbell, .machine: return 2.5
+        case .barbell, .kettlebell: return 5.0
+        case .bodyweight: return 0
+        }
+    }
 }
 
 // MARK: - Workout Category (Push/Pull/Legs)

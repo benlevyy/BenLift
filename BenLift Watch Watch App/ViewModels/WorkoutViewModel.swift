@@ -28,6 +28,29 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     // MARK: - Workout State
     @Published var isWorkoutActive: Bool = false
     @Published var workoutStartDate: Date?
+    /// Who owns the currently-active workout:
+    /// - `.watchOwned`: the watch started it (tap Plan Ready / Start Empty);
+    ///   HKWorkoutSession runs locally, phone mirrors via HK.
+    /// - `.mirroredFromPhone`: the phone started it; watch is a read-only
+    ///   view of the phone's snapshot, no HKWorkoutSession, no HR.
+    /// Used to gate mutators — logging / skipping from the watch only makes
+    /// sense when the watch is owner; in phone-owned mode those would try
+    /// to update state we don't control.
+    @Published var workoutMode: WorkoutMode = .watchOwned
+
+    enum WorkoutMode {
+        case watchOwned
+        case mirroredFromPhone
+    }
+
+    /// Mirrors `WatchWorkoutPlan.aiPlanUsed` from the plan that kicked off this
+    /// session. Flows through the snapshot and the final `WatchWorkoutResult`
+    /// so phone-finish and sync-manager persist paths agree on the saved flag.
+    private var sessionAiPlanUsed: Bool = false
+    /// True for the ~100ms window between `finishWorkout()` starting and
+    /// `dismissSummary()` completing — during teardown, `processCommand`
+    /// returns early so a late mirror message can't mutate half-cleaned state.
+    private var isFinalizingWorkout: Bool = false
 
     // MARK: - Rest Timer
     @Published var isResting: Bool = false
@@ -52,6 +75,9 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         let info: WatchExerciseInfo
         var loggedSets: [WatchSetResult] = []
         var isWarmupPhase: Bool
+        /// User-initiated skip via swipe. Separate from completion — lets us
+        /// distinguish "bailed" from "finished" for future AI context.
+        var isSkipped: Bool = false
 
         var targetSets: Int { info.sets }
         var workingSetsCompleted: Int { loggedSets.filter { !$0.isWarmup }.count }
@@ -75,11 +101,15 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         activeExercise?.info
     }
 
-    /// Cable exercises use 2.5 lb pin increments; everything else uses the user's
-    /// configured increment (default 5 lb plates).
+    /// Per-exercise increment based on equipment (2.5 for cables/dumbbells/pin-machines,
+    /// 5 for barbells/kettlebells). Falls back to the user's global `weightIncrement`
+    /// setting when equipment is unknown (older plans or user-added custom exercises).
+    /// Bodyweight exercises return the global setting so the stepper still does something
+    /// if the user is adding weight (e.g., weighted dips).
     var effectiveWeightIncrement: Double {
-        if let name = activeExerciseInfo?.name, name.localizedCaseInsensitiveContains("cable") {
-            return 2.5
+        if let equipment = activeExerciseInfo?.equipment {
+            let inc = equipment.defaultIncrement
+            return inc > 0 ? inc : weightIncrement
         }
         return weightIncrement
     }
@@ -133,7 +163,9 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     // MARK: - Start Workout
 
     func startWorkout(with plan: WatchWorkoutPlan) {
+        workoutMode = .watchOwned
         currentPlan = plan
+        sessionAiPlanUsed = plan.aiPlanUsed ?? false
         exerciseStates = plan.exercises.map { info in
             ExerciseState(
                 id: info.name,
@@ -144,6 +176,10 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         activeExerciseIndex = nil
         isWorkoutActive = true
         workoutStartDate = Date()
+        // Restart the snapshot counter. Phone's staleness check is scoped to
+        // `workoutStartDate` so the 0 → 1 reset can't collide with the prior
+        // session's final version; this is just hygiene.
+        snapshotVersion = 0
         heartRateSamples = []
         currentHeartRate = 0
         averageHeartRate = 0
@@ -167,21 +203,56 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         broadcastSnapshot()
     }
 
-    func startWorkoutFromLibrary(category: WorkoutCategory, exercises: [WatchExerciseInfo]) {
+    /// Kick off a blank manual workout — no plan pushed from the phone, no
+    /// category, no focus. User adds exercises from the hub via
+    /// `WatchAddExerciseView`. This is the watch's offline-first entry path.
+    func startEmptyWorkout() {
         let plan = WatchWorkoutPlan(
-            sessionName: category.displayName,
-            muscleGroups: category.muscleGroups.map(\.rawValue),
-            category: category,
-            exercises: exercises,
-            sessionStrategy: nil
+            sessionName: "Manual Workout",
+            muscleGroups: [],
+            category: nil,
+            exercises: [],
+            sessionStrategy: nil,
+            aiPlanUsed: false
         )
         startWorkout(with: plan)
     }
 
     // MARK: - Select Exercise (from list)
 
+    /// True when the watch owns the active session, so a local mutation
+    /// makes sense. When it's `.mirroredFromPhone`, mutators send a
+    /// `WorkoutCommand` over WCSession instead — the phone processes it
+    /// and broadcasts the resulting snapshot back.
+    private var canMutate: Bool { workoutMode == .watchOwned }
+
+    /// Forward a mutation to the phone when it owns the session. Returns
+    /// true if the caller should bail (command has been dispatched; the
+    /// next incoming snapshot will reflect the state change).
+    private func forwardIfMirrored(_ cmd: WorkoutCommand) -> Bool {
+        guard workoutMode == .mirroredFromPhone else { return false }
+        WatchSyncService.shared.sendPhoneCommand(cmd)
+        return true
+    }
+
     func selectExercise(at index: Int) {
         guard index < exerciseStates.count else { return }
+        if forwardIfMirrored(.selectExercise(index: index)) {
+            // Optimistic UX: update the input wheels immediately so
+            // tapping a row feels responsive. Phone's next snapshot will
+            // confirm activeExerciseIndex; we just set what the user sees.
+            let state = exerciseStates[index]
+            if state.isWarmupPhase && state.warmupSetsCompleted < state.totalWarmups {
+                let warmup = state.info.warmupSets![state.warmupSetsCompleted]
+                currentWeight = warmup.displayWeight
+                currentReps = Double(warmup.reps)
+            } else {
+                currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
+                currentReps = 0
+            }
+            currentScreen = .exercise
+            return
+        }
         activeExerciseIndex = index
 
         let state = exerciseStates[index]
@@ -204,6 +275,19 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     func logSet() {
         guard let idx = activeExerciseIndex else { return }
+        let isWarmup = exerciseStates[idx].isWarmupPhase
+        if forwardIfMirrored(.logSet(
+            exerciseIndex: idx,
+            weight: currentWeight,
+            reps: currentReps,
+            isWarmup: isWarmup
+        )) {
+            // Tactile feedback immediately even though state updates
+            // arrive on the next phone broadcast — the user pressed a
+            // thing, it should feel pressed.
+            WKInterfaceDevice.current().play(.click)
+            return
+        }
         var state = exerciseStates[idx]
 
         let setResult = WatchSetResult(
@@ -284,9 +368,13 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         broadcastSnapshot()
     }
 
-    func skipRest() { finishRest() }
+    func skipRest() {
+        if forwardIfMirrored(.skipRest) { return }
+        finishRest()
+    }
 
     func adjustRestTimer(by seconds: Double) {
+        if forwardIfMirrored(.adjustRestTimer(deltaSeconds: Int(seconds))) { return }
         restTimerRemaining += seconds
         if let current = restEndsAt {
             restEndsAt = current.addingTimeInterval(seconds)
@@ -314,6 +402,11 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     // MARK: - Skip Warmups
 
     func skipWarmups() {
+        // No dedicated wire command — phone's standalone flow has the same
+        // gap. Best we can do in mirrored mode is nothing; the user can
+        // just start logging the working set and the warmup phase
+        // auto-advances when a working-weight set lands.
+        guard canMutate else { return }
         guard let idx = activeExerciseIndex else { return }
         exerciseStates[idx].isWarmupPhase = false
         // Load working weight
@@ -324,9 +417,49 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         broadcastSnapshot()
     }
 
+    // MARK: - Skip / Unskip Exercise
+
+    /// Mark an exercise skipped. Does not remove it from the list — just flags
+    /// it so the UI can ghost it and the AI loop can record the bail as signal.
+    /// Safe to call on the active exercise; will clear active and return to
+    /// the hub so the user isn't stuck logging into a skipped card.
+    func skipExercise(at index: Int) {
+        guard index < exerciseStates.count else { return }
+        if forwardIfMirrored(.skipExercise(index: index)) {
+            WKInterfaceDevice.current().play(.directionDown)
+            return
+        }
+        guard !exerciseStates[index].isSkipped else { return }
+        exerciseStates[index].isSkipped = true
+        print("[BenLift/Watch] Skipped: \(exerciseStates[index].info.name)")
+
+        if activeExerciseIndex == index {
+            // Bail out of logging the skipped exercise — return to hub.
+            activeExerciseIndex = nil
+            currentScreen = .exerciseList
+        }
+        WKInterfaceDevice.current().play(.directionDown)
+        broadcastSnapshot()
+    }
+
+    /// Restore a previously skipped exercise back to the active pool.
+    func unskipExercise(at index: Int) {
+        guard index < exerciseStates.count else { return }
+        if forwardIfMirrored(.unskipExercise(index: index)) {
+            WKInterfaceDevice.current().play(.click)
+            return
+        }
+        guard exerciseStates[index].isSkipped else { return }
+        exerciseStates[index].isSkipped = false
+        print("[BenLift/Watch] Unskipped: \(exerciseStates[index].info.name)")
+        WKInterfaceDevice.current().play(.click)
+        broadcastSnapshot()
+    }
+
     // MARK: - Add Exercise Mid-Workout
 
     func addExercise(_ info: WatchExerciseInfo) {
+        if forwardIfMirrored(.addExercise(info: info)) { return }
         let state = ExerciseState(
             id: info.name,
             info: info,
@@ -364,13 +497,28 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     // MARK: - Finish Workout
 
     func finishWorkout() {
-        // Capture data before any state changes
+        // Phone-mirrored sessions: hand off to the phone. It has the saved
+        // context and owns persistence; we just ask it to end. The phone's
+        // terminal snapshot will then bring the watch UI back to home.
+        if forwardIfMirrored(.end) {
+            WKInterfaceDevice.current().play(.success)
+            return
+        }
+        // Raise the teardown flag IMMEDIATELY — any mirrored command that
+        // arrives while we're cleaning up must be ignored (it's targeting
+        // a session that no longer exists from the user's perspective).
+        isFinalizingWorkout = true
+        // Capture data before any state changes. Keep an entry if the user
+        // logged sets OR explicitly skipped it — silent "didn't get to it"
+        // omissions still drop out. Skipped-empty entries carry isSkipped=true
+        // so the phone's persistence layer can distinguish bail from completion.
         let entries = exerciseStates.enumerated().compactMap { index, state -> WatchExerciseResult? in
-            guard !state.loggedSets.isEmpty else { return nil }
+            guard !state.loggedSets.isEmpty || state.isSkipped else { return nil }
             return WatchExerciseResult(
                 exerciseName: state.info.name,
                 order: index,
-                sets: state.loggedSets
+                sets: state.loggedSets,
+                isSkipped: state.isSkipped ? true : nil
             )
         }
 
@@ -386,7 +534,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             duration: duration,
             feeling: nil,
             concerns: nil,
-            entries: entries
+            entries: entries,
+            aiPlanUsed: sessionAiPlanUsed
         )
 
         // Stop timer first
@@ -412,17 +561,152 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     }
 
     func dismissSummary() {
+        isFinalizingWorkout = false
         exerciseStates = []
         activeExerciseIndex = nil
         currentPlan = nil
         workoutStartDate = nil
         currentScreen = .home
+        workoutMode = .watchOwned
+    }
+
+    // MARK: - Phone-Owned Mirror
+
+    /// Render a phone-owned workout on the watch. Called when the user taps
+    /// "Workout on phone" on the home card (initial open) and every time a
+    /// fresh phone snapshot arrives (ongoing sync). The watch becomes a
+    /// read-only view of the phone's state — no HKWorkoutSession, no HR.
+    /// For full-fidelity watch engagement the user starts *from* the watch.
+    ///
+    /// Terminal snapshot (`isActive == false`) from the phone collapses the
+    /// watch back to the home screen.
+    @MainActor
+    func applyPhoneSnapshot(_ snap: WorkoutSnapshot) {
+        // Terminal snapshot — phone ended the session.
+        guard snap.isActive else {
+            if workoutMode == .mirroredFromPhone {
+                exerciseStates = []
+                activeExerciseIndex = nil
+                currentPlan = nil
+                workoutStartDate = nil
+                isWorkoutActive = false
+                isResting = false
+                restTimerRemaining = 0
+                restEndsAt = nil
+                restTimer?.invalidate()
+                restTimer = nil
+                currentScreen = .home
+                workoutMode = .watchOwned
+            }
+            return
+        }
+
+        // If a watch-owned workout is already running, don't let a phone
+        // snapshot hijack it — these are two different sessions at that
+        // point and the watch user is the authority for their own session.
+        if isWorkoutActive && workoutMode == .watchOwned { return }
+
+        let isFirstApply = !isWorkoutActive
+        workoutMode = .mirroredFromPhone
+
+        // Reuse the existing `ExerciseState` shape so the existing views
+        // (ExerciseListHubView, ExerciseView, RestTimerView) render without
+        // knowing about snapshot origin.
+        exerciseStates = snap.exercises.map { ex in
+            ExerciseState(
+                id: ex.name,
+                info: WatchExerciseInfo(
+                    name: ex.name,
+                    sets: ex.targetSets,
+                    targetReps: ex.targetReps,
+                    suggestedWeight: ex.suggestedWeight,
+                    warmupSets: ex.warmupSets,
+                    notes: ex.notes,
+                    intent: ex.intent,
+                    lastWeight: ex.lastWeight,
+                    lastReps: ex.lastReps,
+                    equipment: nil
+                ),
+                loggedSets: ex.loggedSets,
+                isWarmupPhase: ex.isWarmupPhase,
+                isSkipped: ex.isSkipped ?? false
+            )
+        }
+        activeExerciseIndex = snap.activeExerciseIndex
+        workoutStartDate = snap.workoutStartDate
+        isWorkoutActive = true
+        currentHeartRate = snap.currentHeartRate
+        activeCalories = snap.activeCalories
+
+        // Thin currentPlan so existing code paths (session name display,
+        // muscle-group focus for add-exercise filtering, etc.) keep working.
+        currentPlan = WatchWorkoutPlan(
+            sessionName: snap.sessionName,
+            muscleGroups: snap.muscleGroups,
+            category: snap.category,
+            exercises: [],
+            sessionStrategy: snap.sessionStrategy,
+            aiPlanUsed: snap.aiPlanUsed,
+            recentExercises: nil
+        )
+
+        // Rest timer in mirror mode. The phone broadcasts on mutations,
+        // not every second, so without a local ticker `restTimerRemaining`
+        // stays frozen between broadcasts. Reuse the existing `restTimer`
+        // slot to drive a 1Hz update while rest is active — no haptic here
+        // (that's the phone's job), just keep the visible countdown
+        // honest.
+        let wasResting = isResting
+        restTimer?.invalidate()
+        if let endsAt = snap.restEndsAt {
+            isResting = true
+            restTimerDuration = snap.restDuration
+            restEndsAt = endsAt
+            restTimerRemaining = endsAt.timeIntervalSinceNow
+            restTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.restTimerRemaining = endsAt.timeIntervalSinceNow
+                }
+            }
+        } else {
+            isResting = false
+            restTimerRemaining = 0
+            restEndsAt = nil
+            restTimer = nil
+        }
+
+        // Rest-state navigation — mirrors what the watch-owned
+        // startRestTimer / finishRest do for currentScreen. Without this,
+        // a user logs a set on the watch, the phone starts rest, the
+        // countdown is live in state but the RestTimerView never appears.
+        if !wasResting && isResting {
+            currentScreen = .restTimer
+        } else if wasResting && !isResting && currentScreen == .restTimer {
+            // Match watch-owned behavior: done exercises go back to the
+            // hub, incomplete ones stay on the exercise detail so the
+            // user can keep logging.
+            if let idx = snap.activeExerciseIndex,
+               idx < snap.exercises.count,
+               snap.exercises[idx].workingSetsCompleted >= snap.exercises[idx].targetSets {
+                currentScreen = .exerciseList
+            } else {
+                currentScreen = .exercise
+            }
+        }
+
+        if isFirstApply {
+            currentScreen = .exerciseList
+            print("[BenLift/Watch] ← Entered phone-mirror mode: \(snap.exercises.count) exercises, session=\(snap.sessionName ?? "workout")")
+        }
     }
 
     // MARK: - Weight / Reps
 
     func adjustWeight(by delta: Double) {
-        currentWeight = max(0, currentWeight + delta)
+        // Clamp to a plausible human-lifting range. Upper bound catches anything
+        // that leaked past phone-side sanitization (see CoachViewModel.pickStartingWeight).
+        currentWeight = min(2000, max(0, currentWeight + delta))
     }
 
     func adjustReps(by delta: Double) {
@@ -443,8 +727,12 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     /// Undo the last logged set for the current exercise
     func undoLastSet() {
-        guard let idx = activeExerciseIndex,
-              !exerciseStates[idx].loggedSets.isEmpty else { return }
+        guard let idx = activeExerciseIndex else { return }
+        if forwardIfMirrored(.undoSet(exerciseIndex: idx)) {
+            WKInterfaceDevice.current().play(.click)
+            return
+        }
+        guard !exerciseStates[idx].loggedSets.isEmpty else { return }
 
         let removed = exerciseStates[idx].loggedSets.removeLast()
         // Restore weight/reps from undone set
@@ -541,7 +829,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                 lastWeight: state.info.lastWeight,
                 lastReps: state.info.lastReps,
                 loggedSets: state.loggedSets,
-                isWarmupPhase: state.isWarmupPhase
+                isWarmupPhase: state.isWarmupPhase,
+                isSkipped: state.isSkipped
             )
         }
         return WorkoutSnapshot(
@@ -557,7 +846,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             restEndsAt: restEndsAt,
             restDuration: restTimerDuration,
             currentHeartRate: currentHeartRate,
-            activeCalories: activeCalories
+            activeCalories: activeCalories,
+            aiPlanUsed: sessionAiPlanUsed
         )
     }
 
@@ -593,6 +883,19 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     /// Process a command from the phone mirror. Each command maps to an existing
     /// local action; broadcastSnapshot at the end ensures the phone re-renders.
     private func processCommand(_ cmd: WorkoutCommand) {
+        // Ignore anything that arrives after we've started tearing the workout
+        // down — half-cleaned state can't safely accept mutations. `.end` is
+        // the exception: the phone may retry after WCSession delivery
+        // uncertainty, and a retry landing here is idempotent (finishWorkout
+        // guards on `isWorkoutActive` upstream).
+        if isFinalizingWorkout {
+            if case .end = cmd {
+                // Let it through — idempotent
+            } else {
+                print("[BenLift/Watch] Ignored mid-finalization command: \(cmd)")
+                return
+            }
+        }
         switch cmd {
         case .logSet(let idx, let weight, let reps, _):
             guard idx < exerciseStates.count else { return }
@@ -646,6 +949,12 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         case .requestSnapshot:
             print("[BenLift/Watch] ← phone requested snapshot")
             broadcastSnapshot()
+
+        case .skipExercise(let idx):
+            skipExercise(at: idx)
+
+        case .unskipExercise(let idx):
+            unskipExercise(at: idx)
         }
     }
 

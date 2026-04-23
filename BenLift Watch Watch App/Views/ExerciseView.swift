@@ -3,6 +3,11 @@ import SwiftUI
 struct ExerciseView: View {
     @ObservedObject var workoutVM: WorkoutViewModel
     @State private var crownReps: Double = 0
+    // Set true before any programmatic crownReps = … so the next onChange tick is ignored.
+    @State private var suppressCrownSync: Bool = false
+    // Grabs the Digital Crown for the rep adjuster on appear so the outer
+    // ScrollView doesn't compete for crown input.
+    @FocusState private var repsFocused: Bool
 
     var body: some View {
         let exercise = workoutVM.activeExerciseInfo
@@ -65,6 +70,7 @@ struct ExerciseView: View {
                 HStack(spacing: 10) {
                     Button {
                         workoutVM.adjustReps(by: -1)
+                        suppressCrownSync = true
                         crownReps = workoutVM.currentReps
                     } label: {
                         Image(systemName: "minus.circle.fill")
@@ -79,6 +85,7 @@ struct ExerciseView: View {
 
                     Button {
                         workoutVM.adjustReps(by: 1)
+                        suppressCrownSync = true
                         crownReps = workoutVM.currentReps
                     } label: {
                         Image(systemName: "plus.circle.fill")
@@ -89,6 +96,7 @@ struct ExerciseView: View {
                     // Failed rep toggle
                     Button {
                         workoutVM.toggleFailedRep()
+                        suppressCrownSync = true
                         crownReps = workoutVM.currentReps
                     } label: {
                         Text("F")
@@ -101,6 +109,7 @@ struct ExerciseView: View {
                     .buttonStyle(.plain)
                 }
                 .focusable()
+                .focused($repsFocused)
                 .digitalCrownRotation(
                     $crownReps,
                     from: 0,
@@ -109,6 +118,13 @@ struct ExerciseView: View {
                     sensitivity: .low
                 )
                 .onChange(of: crownReps) { _, newValue in
+                    // Buttons sync crownReps → currentReps programmatically; that write
+                    // would otherwise fire here and .rounded() would erase the .5 that
+                    // the F button just set.
+                    if suppressCrownSync {
+                        suppressCrownSync = false
+                        return
+                    }
                     // Crown produces fractional values mid-rotation; round so the rep
                     // count stays integer. Fractional (failed) reps are only set via
                     // the F button, never by scrolling.
@@ -151,6 +167,7 @@ struct ExerciseView: View {
                     if let ex = workoutVM.activeExercise, !ex.loggedSets.isEmpty {
                         Button {
                             workoutVM.undoLastSet()
+                            suppressCrownSync = true
                             crownReps = workoutVM.currentReps
                         } label: {
                             Text("Undo")
@@ -182,7 +199,9 @@ struct ExerciseView: View {
             .padding(.horizontal, 4)
         }
         .onAppear {
+            suppressCrownSync = true
             crownReps = workoutVM.currentReps
+            repsFocused = true
         }
     }
 }

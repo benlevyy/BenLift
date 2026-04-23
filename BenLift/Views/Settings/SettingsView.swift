@@ -32,6 +32,7 @@ struct SettingsView: View {
                 workoutPreferencesSection
                 unitsSection
                 notificationsSection
+                librarySection
                 dataSection
             }
             .navigationTitle("Settings")
@@ -224,6 +225,22 @@ struct SettingsView: View {
     @State private var showImportPicker = false
     @State private var importMessage: String?
     @State private var showImportResult = false
+
+    /// Exercise library browse / add / delete. Lives here now — was on
+    /// the old Recovery tab as a bottom link. It's a browse/edit surface,
+    /// not daily training info, so Settings is the right home.
+    private var librarySection: some View {
+        Section("Library") {
+            NavigationLink {
+                ExerciseListView()
+            } label: {
+                HStack {
+                    Image(systemName: "dumbbell.fill")
+                    Text("Exercise Library")
+                }
+            }
+        }
+    }
 
     private var dataSection: some View {
         Section("Data") {

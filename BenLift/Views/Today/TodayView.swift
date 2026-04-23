@@ -5,20 +5,29 @@ struct TodayView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var coachVM: CoachViewModel
     @Bindable var programVM: ProgramViewModel
-    @Bindable var phoneWorkoutVM: PhoneWorkoutViewModel
-    @Binding var showPhoneWorkout: Bool
+    /// App-scoped mirroring controller. Exposes `phoneWorkoutVM` for binding
+    /// + `showPhoneWorkout` for sheet presentation + the `startStandaloneSession`
+    /// entry point for the phone-owned-workout fallback.
+    @Bindable var phoneMirroring: PhoneMirroringController
+
+    private var phoneWorkoutVM: PhoneWorkoutViewModel { phoneMirroring.phoneWorkoutVM }
 
     @State private var analysisVM = AnalysisViewModel()
-    @State private var selectedCategory: WorkoutCategory?
     @State private var savedSession: WorkoutSession?
 
-    // Check-in state
-    @State private var feeling: Int = 3
-    @State private var sorenessText: String = ""
-    @State private var showPlanView = false
+    // Check-in state — pulled from HealthKit on appear so the recovery strip
+    // can render inline without requiring the user to open a separate sheet.
+    @State private var healthContext: HealthContext?
+    /// Local mirror of `coachVM.concerns` so the text field is responsive
+    /// without fighting the view model on every keystroke. Committed on
+    /// submit → flips `coachVM.concerns` → drives `isPlanStale`.
+    @State private var concernsDraft: String = ""
+    /// Drives the keyboard-dismiss toolbar. The concerns field uses a
+    /// vertical-axis TextField (multi-line), where Return inserts a newline
+    /// instead of submitting — so without this there's literally no way to
+    /// close the keyboard on iOS.
+    @FocusState private var concernsFocused: Bool
 
-    // Phone workout state (local UI only — VM + sheet are owned by ContentView)
-    @State private var sentToWatchWaiting = false
 
     var body: some View {
         NavigationStack {
@@ -27,6 +36,17 @@ struct TodayView: View {
                     // Workout in progress banner (tap to resume)
                     if phoneWorkoutVM.isWorkoutActive {
                         phoneWorkoutBanner
+                    }
+
+                    // Inline check-in — feeling + time + recovery + concerns.
+                    // Changes stage locally; the plan regenerates only when
+                    // the user taps the Refresh pill (or pull-to-refresh).
+                    checkInRow
+
+                    // Refresh pill — shown when the plan's inputs have drifted
+                    // from what produced the currently-displayed plan.
+                    if coachVM.isPlanStale && !coachVM.isGenerating && !coachVM.isLoadingRecommendation {
+                        refreshPill
                     }
 
                     // Loading / content — use ZStack so loading doesn't shift layout
@@ -48,9 +68,6 @@ struct TodayView: View {
                         }
                     }
 
-                    // Adjust section — feeling + soreness + regenerate
-                    adjustSection
-
                     // Error
                     if let error = coachVM.planError {
                         Text(error)
@@ -60,13 +77,15 @@ struct TodayView: View {
                             .background(Color.failedRed.opacity(0.1))
                             .cornerRadius(6)
                     }
-
-                    // Quick PPL fallback (collapsed)
-                    pplFallbackButtons
                 }
                 .padding()
             }
             .background(Color.appBackground)
+            // Dragging the scroll view up / down while the keyboard is up
+            // dismisses it — same gesture users learn from Mail / Messages.
+            // Paired with the keyboard-toolbar Done button so there are two
+            // ways out.
+            .scrollDismissesKeyboard(.interactively)
             .refreshable {
                 // Pull-to-refresh: always regenerate
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -85,12 +104,9 @@ struct TodayView: View {
             }
             .navigationTitle("Today")
             .onAppear {
-                coachVM.calculateDaysSinceLast(modelContext: modelContext)
                 programVM.loadCurrentProgram(modelContext: modelContext)
-            }
-            // Reset the Send-to-Watch waiting UI when a workout actually starts/ends.
-            .onChange(of: phoneWorkoutVM.isWorkoutActive) { _, _ in
-                sentToWatchWaiting = false
+                concernsDraft = coachVM.concerns
+                Task { healthContext = await HealthKitService.shared.fetchHealthContext() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .workoutSessionSaved)) { notification in
                 if let sessionId = notification.object as? UUID {
@@ -108,7 +124,6 @@ struct TodayView: View {
                                 healthContext: nil
                             )
                         }
-                        coachVM.calculateDaysSinceLast(modelContext: modelContext)
                     }
                 }
             }
@@ -155,59 +170,15 @@ struct TodayView: View {
                     .cornerRadius(6)
             }
 
-            // Exercise list
-            List {
+            // Exercise list — LazyVStack, not List, so there's a single
+            // scroll container (the outer ScrollView). A nested List with
+            // scrollDisabled still had gesture + fixed-height-frame issues
+            // that cut rows off and made scrolling feel flaky.
+            LazyVStack(spacing: 4) {
                 ForEach(Array(coachVM.editedExercises.enumerated()), id: \.element.name) { idx, exercise in
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(intentColor(exercise.intent))
-                            .frame(width: 6, height: 6)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(exercise.name)
-                                .font(.subheadline.bold())
-                            HStack(spacing: 4) {
-                                Text("\(exercise.sets)×\(exercise.targetReps)")
-                                    .font(.caption.monospacedDigit())
-                                if exercise.weight > 0 {
-                                    Text("@ \(Int(exercise.weight)) lbs")
-                                        .font(.caption)
-                                        .foregroundColor(.accentBlue)
-                                }
-                            }
-                        }
-                        Spacer()
-
-                        // Quick swap — AI picks a similar alternative, no user input.
-                        Button {
-                            Task { await coachVM.quickSwap(at: idx, modelContext: modelContext) }
-                        } label: {
-                            if coachVM.swappingIndex == idx {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .frame(width: 28, height: 28)
-                            } else {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.footnote)
-                                    .foregroundColor(.accentBlue)
-                                    .frame(width: 28, height: 28)
-                                    .background(Color.accentBlue.opacity(0.12))
-                                    .clipShape(Circle())
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(coachVM.swappingIndex != nil)
-                    }
-                    .padding(.vertical, 2)
-                }
-                .onMove { from, to in coachVM.moveExercise(from: from, to: to) }
-                .onDelete { offsets in
-                    for i in offsets { coachVM.removeExercise(at: i) }
+                    exerciseRow(idx: idx, exercise: exercise)
                 }
             }
-            .listStyle(.plain)
-            .frame(height: CGFloat(coachVM.editedExercises.count * 52 + 8))
-            .environment(\.editMode, .constant(isEditingPlan ? .active : .inactive))
 
             // Actions
             HStack(spacing: 8) {
@@ -233,58 +204,19 @@ struct TodayView: View {
                 }
             }
 
-            if sentToWatchWaiting {
-                // Waiting for Watch to start
-                VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Sent — open Watch to start")
-                            .font(.subheadline)
-                            .foregroundColor(.secondaryText)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.cardSurface)
-                    .cornerRadius(12)
-
-                    Button {
-                        sentToWatchWaiting = false
-                    } label: {
-                        Text("Cancel")
-                            .font(.caption.bold())
-                            .padding(10)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-            } else {
-                // Send to Watch (the only way to start in v1 — phone is mirror-only)
-                Button {
-                    if let plan = coachVM.buildWatchPlan() {
-                        WatchSyncService.shared.sendWorkoutPlan(plan)
-                        sentToWatchWaiting = true
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "applewatch")
-                        Text("Start on Watch")
-                    }
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.accentBlue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-                }
-            }
+            startControl
         }
         .sheet(isPresented: $showAddExercise) {
-            AddExerciseToPlanSheet(category: selectedCategory ?? .push) { exercise in
+            AddExerciseToPlanSheet(focus: coachVM.targetMuscleGroups) { exercise in
                 let newExercise = PlannedExercise(
                     name: exercise.name, sets: 3, targetReps: "8-12",
                     suggestedWeight: exercise.defaultWeight, repScheme: nil,
                     warmupSets: nil, notes: nil, intent: "isolation"
                 )
-                coachVM.editedExercises.append(newExercise)
+                // addExerciseToPlan also archives any existing exerciseOut
+                // UserRule for this exercise — user explicitly re-adding
+                // is the clearest "never mind" signal.
+                coachVM.addExerciseToPlan(newExercise, modelContext: modelContext)
             }
         }
     }
@@ -292,113 +224,276 @@ struct TodayView: View {
     @State private var showAddExercise = false
     @State private var showWatchAlert = false
 
-    // MARK: - Adjust Section
+    // MARK: - Button Styles
 
-    @State private var showAdjust = false
-    @State private var adjustText = ""
-
-    private var adjustSection: some View {
-        Button {
-            showAdjust = true
-        } label: {
-            HStack {
-                Image(systemName: "pencil.circle.fill")
-                Text("Adjust Plan")
-            }
-            .font(.subheadline)
-            .foregroundColor(.accentBlue)
-            .frame(maxWidth: .infinity)
-            .padding(12)
-            .background(Color.accentBlue.opacity(0.1))
-            .cornerRadius(10)
-        }
-        .fullScreenCover(isPresented: $showAdjust) {
-            adjustFullScreen
+    /// Scale + opacity press feedback for inline icon buttons. `.plain`
+    /// gives no visual response to a tap, which made the Today plan rows
+    /// feel inert. This mirrors what `List` rows do implicitly.
+    private struct PressableIconStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.88 : 1.0)
+                .opacity(configuration.isPressed ? 0.65 : 1.0)
+                .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
         }
     }
 
-    private var adjustFullScreen: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Feeling
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("How do you feel?")
-                            .font(.headline)
-                        HStack(spacing: 6) {
-                            ForEach(1...5, id: \.self) { level in
-                                Button {
-                                    feeling = level
-                                } label: {
-                                    VStack(spacing: 2) {
-                                        Text("\(level)")
-                                            .font(.headline)
-                                        Text(feelingLabel(level))
-                                            .font(.system(size: 9))
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(feeling == level ? feelingColor(level) : Color.cardSurface)
-                                    .foregroundColor(feeling == level ? .white : .primary)
-                                    .cornerRadius(10)
-                                }
-                            }
-                        }
+    // MARK: - Exercise Row
+
+    /// Single plan-list row. Always-visible quick-swap button; delete button
+    /// surfaces only in edit mode (`isEditingPlan`). Uses `PressableIconStyle`
+    /// so the inline buttons have real press feedback (previous `.plain`
+    /// style gave no visual response, which read as "broken"). Tap targets
+    /// are a full 44×44 per Apple's HIG minimum.
+    private func exerciseRow(idx: Int, exercise: PlannedExercise) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(intentColor(exercise.intent))
+                .frame(width: 8, height: 8)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(exercise.name)
+                    .font(.subheadline.bold())
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("\(exercise.sets)×\(exercise.targetReps)")
+                        .font(.caption.monospacedDigit())
+                    if exercise.weight > 0 {
+                        Text("@ \(Int(exercise.weight)) lbs")
+                            .font(.caption)
+                            .foregroundColor(.accentBlue)
                     }
-
-                    // What to change
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("What should change?")
-                            .font(.headline)
-                        TextField("e.g. legs sore, swap OHP for machine, more chest...", text: $adjustText, axis: .vertical)
-                            .lineLimit(3...8)
-                            .padding(12)
-                            .background(Color.cardSurface)
-                            .cornerRadius(12)
-                    }
-
-                    // Submit
-                    Button {
-                        showAdjust = false
-                        coachVM.feeling = feeling
-                        coachVM.concerns = adjustText
-                        adjustText = ""
-
-                        // Clear old plan immediately
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            coachVM.editedExercises = []
-                            coachVM.currentPlan = nil
-                            coachVM.recommendation = nil
-                        }
-
-                        Task {
-                            await coachVM.getRecommendationAndPlan(
-                                modelContext: modelContext,
-                                program: programVM.currentProgram
-                            )
-                        }
-                    } label: {
-                        Text("Regenerate Plan")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.accentBlue)
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
-                    }
-                    .padding(.top, 8)
                 }
-                .padding(20)
             }
-            .background(Color.appBackground)
-            .navigationTitle("Adjust Plan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showAdjust = false }
+            Spacer()
+
+            // Delete — visible only in edit mode. Passes modelContext so
+            // the removal also writes a durable exerciseOut UserRule
+            // (the AI respects these deterministically next time it
+            // plans).
+            if isEditingPlan {
+                Button {
+                    coachVM.removeExercise(at: idx, modelContext: modelContext)
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.failedRed)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(PressableIconStyle())
+            }
+
+            // Quick swap — AI picks a similar alternative, no user input.
+            Button {
+                Task { await coachVM.quickSwap(at: idx, modelContext: modelContext) }
+            } label: {
+                Group {
+                    if coachVM.swappingIndex == idx {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.body.weight(.semibold))
+                            .foregroundColor(.accentBlue)
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .background(Color.accentBlue.opacity(0.15))
+                .clipShape(Circle())
+                .frame(width: 44, height: 44)  // 44pt hit area, 36pt visual
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableIconStyle())
+            .disabled(coachVM.swappingIndex != nil)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(Color.cardSurface)
+        .cornerRadius(10)
+    }
+
+    // MARK: - Inline Check-In Row
+
+    /// Compact card above the plan: feeling chips + time chips + live
+    /// HealthKit recovery pills + free-text concerns. Changes stage onto
+    /// `coachVM` but don't regenerate — the Refresh pill below the card
+    /// becomes visible when inputs have drifted from the shown plan.
+    private var checkInRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            feelingChips
+            timeChips
+            if healthContext != nil { recoveryPills }
+            concernsField
+        }
+        .padding(12)
+        .background(Color.cardSurface)
+        .cornerRadius(12)
+    }
+
+    /// Chip widths are size-limited so the row has breathing room and is
+    /// harder to fat-finger. Previously each chip stretched with
+    /// `.frame(maxWidth: .infinity)`, which made adjacent taps feel sloppy.
+    private let chipMaxWidth: CGFloat = 56
+    private let chipHeight: CGFloat = 32
+
+    private var feelingChips: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("How do you feel?")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
+            HStack(spacing: 8) {
+                ForEach(1...5, id: \.self) { level in
+                    Button {
+                        coachVM.feeling = level
+                    } label: {
+                        VStack(spacing: 0) {
+                            Text("\(level)")
+                                .font(.subheadline.bold())
+                            Text(feelingLabel(level))
+                                .font(.system(size: 9))
+                        }
+                        .frame(maxWidth: chipMaxWidth)
+                        .frame(height: chipHeight + 8)
+                        .background(coachVM.feeling == level ? feelingColor(level) : Color.gray.opacity(0.12))
+                        .foregroundColor(coachVM.feeling == level ? .white : .primary)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
             }
         }
+    }
+
+    private var timeChips: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Time")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
+            HStack(spacing: 8) {
+                // Tapping the currently-selected chip clears availableTime
+                // (sets nil → AI picks). Gives the user an escape without
+                // needing a separate "Any" affordance.
+                ForEach([30, 45, 60, 90], id: \.self) { minutes in
+                    Button {
+                        coachVM.availableTime = coachVM.availableTime == minutes ? nil : minutes
+                    } label: {
+                        Text("\(minutes)")
+                            .font(.subheadline.bold())
+                            .frame(maxWidth: chipMaxWidth)
+                            .frame(height: chipHeight)
+                            .background(coachVM.availableTime == minutes ? Color.accentBlue : Color.gray.opacity(0.12))
+                            .foregroundColor(coachVM.availableTime == minutes ? .white : .primary)
+                            .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var recoveryPills: some View {
+        HStack(spacing: 10) {
+            if let sleep = healthContext?.sleepHours {
+                pill(icon: "bed.double.fill", value: String(format: "%.1fh", sleep))
+            }
+            if let rhr = healthContext?.restingHR {
+                pill(icon: "heart.fill", value: "\(Int(rhr))")
+            }
+            if let hrv = healthContext?.hrv {
+                pill(icon: "waveform.path.ecg", value: "\(Int(hrv))ms")
+            }
+            if let weight = healthContext?.bodyWeight {
+                pill(icon: "scalemass.fill", value: "\(Int(weight))")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func pill(icon: String, value: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundColor(.secondaryText)
+            Text(value)
+                .font(.caption.monospacedDigit())
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.gray.opacity(0.12))
+        .cornerRadius(6)
+    }
+
+    private var concernsField: some View {
+        TextField("Anything to adjust? (e.g. shoulder sore, go heavy)",
+                  text: $concernsDraft, axis: .vertical)
+            .lineLimit(1...3)
+            .font(.caption)
+            .textFieldStyle(.roundedBorder)
+            .focused($concernsFocused)
+            .submitLabel(.done)
+            .onSubmit { commitConcerns() }
+            .toolbar {
+                // Keyboard toolbar Done — the only reliable dismiss for a
+                // vertical-axis TextField (Return = newline, not submit).
+                // Gated on focus so the toolbar doesn't stack with the
+                // rest timer overlay's toolbar when present.
+                if concernsFocused {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") {
+                            commitConcerns()
+                            concernsFocused = false
+                        }
+                        .font(.subheadline.bold())
+                    }
+                }
+            }
+    }
+
+    /// Push the local concerns draft into coachVM. No auto-regen — the
+    /// Refresh pill surfaces when inputs have drifted so the user chooses
+    /// when to spend the API round-trip.
+    private func commitConcerns() {
+        let trimmed = concernsDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != coachVM.concerns else { return }
+        coachVM.concerns = trimmed
+    }
+
+    // MARK: - Refresh Pill
+
+    /// Visible only when `coachVM.isPlanStale`. Calls the cheap `refreshPlan`
+    /// path (which uses `generatePlan` if a recommendation already exists —
+    /// roughly half the API cost of the combined `getRecommendationAndPlan`).
+    /// Pull-to-refresh still triggers the full regeneration.
+    private var refreshPill: some View {
+        Button {
+            Task {
+                await coachVM.refreshPlan(
+                    modelContext: modelContext,
+                    program: programVM.currentProgram
+                )
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                Text("Refresh plan")
+                    .font(.subheadline.bold())
+                Spacer()
+                Text("Inputs changed")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.accentBlue)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     private func feelingLabel(_ level: Int) -> String {
@@ -410,37 +505,6 @@ struct TodayView: View {
         case 5: return "Great"
         default: return ""
         }
-    }
-
-    // MARK: - PPL Fallback Buttons
-
-    private var pplFallbackButtons: some View {
-        DisclosureGroup("Quick Start (Push / Pull / Legs)") {
-            HStack(spacing: 6) {
-                ForEach(WorkoutCategory.allCases) { category in
-                    Button {
-                        selectedCategory = category
-                        coachVM.selectedCategory = category
-                        coachVM.targetMuscleGroups = category.muscleGroups
-                        coachVM.currentSessionName = category.displayName
-                        coachVM.loadLastWeights(for: category, modelContext: modelContext)
-                        coachVM.loadDefaultTemplate(category: category, modelContext: modelContext)
-                        showPlanView = true
-                    } label: {
-                        Text(category.displayName)
-                            .font(.subheadline.bold())
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(category.color.opacity(0.2))
-                            .foregroundColor(category.color)
-                            .cornerRadius(8)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-        .font(.subheadline)
-        .foregroundColor(.secondaryText)
     }
 
     // MARK: - Helpers
@@ -477,9 +541,42 @@ struct TodayView: View {
     }
 
 
+    // MARK: - Start Control
+
+    /// Tap Start → phone always starts a standalone session and immediately
+    /// begins broadcasting its state to the watch (applicationContext push).
+    /// If the watch is present and awake, it picks the workout up from the
+    /// home screen card automatically — nothing for the user to configure.
+    /// If the watch isn't there, the phone runs solo. One button, one path,
+    /// no "which device owns this" ceremony.
+    ///
+    /// Full watch engagement (HR, ring credit, HKWorkoutSession mirroring)
+    /// remains available via its own entry point: tap Start directly on
+    /// the watch's Plan Ready card. Starting from the watch goes through
+    /// the existing watch-owner + HK mirror path unchanged.
+    private var startControl: some View {
+        Button {
+            guard let plan = coachVM.buildWatchPlan() else { return }
+            phoneMirroring.startStandaloneSession(plan: plan)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "play.fill")
+                Text("Start")
+            }
+            .font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color.accentBlue)
+            .foregroundColor(.white)
+            .cornerRadius(12)
+        }
+    }
+
+    // MARK: - Phone Workout Banner
+
     private var phoneWorkoutBanner: some View {
         Button {
-            showPhoneWorkout = true
+            phoneMirroring.showPhoneWorkout = true
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "figure.strengthtraining.traditional")
@@ -500,510 +597,6 @@ struct TodayView: View {
 
 }
 
-// MARK: - Active Plan View
-
-struct ActivePlanView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Bindable var coachVM: CoachViewModel
-    @Bindable var programVM: ProgramViewModel
-    let category: WorkoutCategory
-    let onDismiss: () -> Void
-
-    @State private var showAIAdjust = false
-    @State private var showWatchAlert = false
-    @State private var showAddExercise = false
-    @State private var feeling: Int = 3
-    @State private var concerns: String = ""
-    @State private var isEditing = false
-    @State private var iterateText: String = ""
-
-    @Query private var allExercises: [Exercise]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                Text("\(category.displayName) Plan")
-                    .font(.title3.bold())
-
-                Spacer()
-
-                Button {
-                    isEditing.toggle()
-                } label: {
-                    Text(isEditing ? "Done" : "Edit")
-                        .font(.subheadline)
-                        .foregroundColor(.accentBlue)
-                }
-
-                Button {
-                    showAIAdjust = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "sparkles")
-                        Text("AI")
-                    }
-                    .font(.subheadline.bold())
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color.accentBlue.opacity(0.15))
-                    .foregroundColor(.accentBlue)
-                    .cornerRadius(8)
-                }
-            }
-
-            // Strategy note + iterate
-            if let strategy = coachVM.currentPlan?.sessionStrategy {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .foregroundColor(.accentBlue)
-                            .font(.caption)
-                            .padding(.top, 2)
-                        Text(strategy)
-                            .font(.caption)
-                            .foregroundColor(.secondaryText)
-                    }
-
-                    // Iterate on the plan
-                    HStack(spacing: 8) {
-                        TextField("e.g. drop leg extension, go heavier on bench", text: $iterateText, axis: .vertical)
-                            .font(.caption)
-                            .lineLimit(1...5)
-                            .textFieldStyle(.roundedBorder)
-                            .submitLabel(.send)
-                            .onSubmit { submitIteration() }
-
-                        Button {
-                            submitIteration()
-                        } label: {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
-                                .foregroundColor(iterateText.isEmpty ? .secondaryText : .accentBlue)
-                        }
-                        .disabled(iterateText.isEmpty || coachVM.isGenerating)
-                    }
-                }
-                .padding(10)
-                .background(Color.cardSurface)
-                .cornerRadius(8)
-            }
-
-            // Loading
-            if coachVM.isGenerating {
-                HStack(spacing: 12) {
-                    ProgressView()
-                    Text("AI is adjusting your plan...")
-                        .foregroundColor(.secondaryText)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-            }
-
-            // Error
-            if let error = coachVM.planError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundColor(.failedRed)
-                    .padding(8)
-                    .background(Color.failedRed.opacity(0.1))
-                    .cornerRadius(6)
-            }
-
-            // Exercise list — editable
-            List {
-                ForEach(Array(coachVM.editedExercises.enumerated()), id: \.element.name) { index, exercise in
-                    exerciseRow(exercise)
-                }
-                .onMove { from, to in
-                    coachVM.moveExercise(from: from, to: to)
-                }
-                .onDelete { offsets in
-                    for i in offsets {
-                        coachVM.removeExercise(at: i)
-                    }
-                }
-
-                // Add exercise button
-                Button {
-                    showAddExercise = true
-                } label: {
-                    HStack {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundColor(.accentBlue)
-                        Text("Add Exercise")
-                            .foregroundColor(.accentBlue)
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .frame(minHeight: CGFloat(coachVM.editedExercises.count * 72 + 44))
-            .environment(\.editMode, .constant(isEditing ? .active : .inactive))
-
-            // Stats
-            HStack {
-                Text("\(coachVM.editedExercises.count) exercises")
-                Text("•")
-                Text("\(coachVM.editedExercises.reduce(0) { $0 + $1.sets }) sets")
-                if let duration = coachVM.currentPlan?.estimatedDuration {
-                    Text("•")
-                    Text("~\(duration) min")
-                }
-            }
-            .font(.caption)
-            .foregroundColor(.secondaryText)
-
-            // Action buttons
-            HStack(spacing: 12) {
-                Button {
-                    coachVM.savePlanForCurrentCategory()
-                    onDismiss()
-                } label: {
-                    Text("Close")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.cardSurface)
-                        .foregroundColor(.primary)
-                        .cornerRadius(12)
-                }
-
-                Button {
-                    if let plan = coachVM.buildWatchPlan() {
-                        WatchSyncService.shared.sendWorkoutPlan(plan)
-                        showWatchAlert = true
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "applewatch")
-                        Text("Send to Watch")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(category.color)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-                }
-                .alert("Plan Sent", isPresented: $showWatchAlert) {
-                    Button("OK") {}
-                } message: {
-                    Text("Your \(category.displayName) plan has been sent to your Apple Watch.")
-                }
-            }
-        }
-        .sheet(isPresented: $showAIAdjust) {
-            AIAdjustSheet(
-                coachVM: coachVM,
-                program: programVM.currentProgram,
-                category: category,
-                feeling: $feeling,
-                concerns: $concerns
-            )
-        }
-        .sheet(isPresented: $showAddExercise) {
-            AddExerciseToPlanSheet(category: category) { exercise in
-                let newExercise = PlannedExercise(
-                    name: exercise.name,
-                    sets: 3,
-                    targetReps: "8-12",
-                    suggestedWeight: exercise.defaultWeight ?? 0,
-                    repScheme: nil,
-                    warmupSets: nil,
-                    notes: nil,
-                    intent: "isolation"
-                )
-                coachVM.editedExercises.append(newExercise)
-            }
-        }
-    }
-
-    private func exerciseRow(_ exercise: PlannedExercise) -> some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(intentColor(exercise.intent))
-                .frame(width: 8, height: 8)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(exercise.name)
-                    .font(.body.bold())
-
-                HStack(spacing: 6) {
-                    Text("\(exercise.sets) × \(exercise.targetReps)")
-                        .font(.subheadline.monospacedDigit())
-                    Text("@ \(Int(exercise.weight)) lbs")
-                        .font(.subheadline)
-                        .foregroundColor(.accentBlue)
-                }
-            }
-
-            Spacer()
-
-            if let warmups = exercise.warmupSets, !warmups.isEmpty {
-                Text("\(warmups.count) warm-up")
-                    .font(.caption2)
-                    .foregroundColor(.secondaryText)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func submitIteration() {
-        guard !iterateText.isEmpty, !coachVM.isGenerating else { return }
-        coachVM.concerns = iterateText
-        iterateText = ""
-        // Dismiss keyboard
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        Task {
-            await coachVM.generatePlan(modelContext: modelContext, program: programVM.currentProgram)
-        }
-    }
-
-    private func intentColor(_ intent: String?) -> Color {
-        switch intent {
-        case "primary compound": return .accentBlue
-        case "secondary compound": return .pushBlue
-        case "isolation": return .secondaryText
-        case "finisher": return .legsOrange
-        default: return .secondaryText
-        }
-    }
-}
-
-// MARK: - AI Adjust Sheet
-
-struct AIAdjustSheet: View {
-    @Environment(\.modelContext) private var modelContext
-    @Environment(\.dismiss) private var dismiss
-    @Bindable var coachVM: CoachViewModel
-    let program: TrainingProgram?
-    let category: WorkoutCategory
-    @Binding var feeling: Int
-    @Binding var concerns: String
-
-    @State private var healthContext: HealthContext?
-
-    private let feelingLabels = ["Wrecked", "Rough", "Okay", "Good", "Great"]
-    private let timeOptions = [30, 45, 60, 75]
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Program-level context (read-only summary)
-                    if let program {
-                        programContextCard(program)
-                    }
-
-                    if let hc = healthContext {
-                        healthCard(hc)
-                    }
-
-                    // Daily-level inputs
-                    dailyHeader
-
-                    // Feeling
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("How do you feel?")
-                            .font(.headline)
-
-                        HStack(spacing: 6) {
-                            ForEach(1...5, id: \.self) { value in
-                                Button {
-                                    feeling = value
-                                    coachVM.feeling = value
-                                } label: {
-                                    VStack(spacing: 2) {
-                                        Text("\(value)")
-                                            .font(.title3.bold())
-                                        Text(feelingLabels[value - 1])
-                                            .font(.caption2)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 10)
-                                    .background(feeling == value ? Color.accentBlue.opacity(0.3) : Color.cardSurface)
-                                    .cornerRadius(8)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    // Time
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Available time")
-                            .font(.headline)
-
-                        HStack(spacing: 6) {
-                            ForEach(timeOptions, id: \.self) { minutes in
-                                Button {
-                                    coachVM.availableTime = minutes
-                                } label: {
-                                    Text(minutes == 75 ? "75+" : "\(minutes)")
-                                        .font(.body.bold())
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 10)
-                                        .background(coachVM.availableTime == minutes ? Color.accentBlue.opacity(0.3) : Color.cardSurface)
-                                        .cornerRadius(8)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        Text("minutes")
-                            .font(.caption)
-                            .foregroundColor(.secondaryText)
-                    }
-
-                    // Today's concerns
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Today's adjustments")
-                            .font(.headline)
-                        TextField("e.g. shoulder sore, go heavy, skip isolation", text: $concerns, axis: .vertical)
-                            .lineLimit(1...5)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    // Generate
-                    Button {
-                        coachVM.concerns = concerns
-                        dismiss()
-                        Task {
-                            await coachVM.generatePlan(modelContext: modelContext, program: program)
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "sparkles")
-                            Text(coachVM.isGenerating ? "Generating..." : "Generate AI Plan")
-                        }
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.accentBlue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
-                    }
-                    .disabled(coachVM.isGenerating)
-                }
-                .padding()
-            }
-            .navigationTitle("AI Adjust — \(category.displayName)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .task { healthContext = await HealthKitService.shared.fetchHealthContext() }
-    }
-
-    private func healthCard(_ hc: HealthContext) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "heart.fill")
-                    .foregroundColor(.failedRed)
-                Text("Today's Recovery")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                    .textCase(.uppercase)
-            }
-
-            HStack(spacing: 16) {
-                if let sleep = hc.sleepHours {
-                    VStack(spacing: 2) {
-                        Text(String(format: "%.1f", sleep))
-                            .font(.title3.bold().monospacedDigit())
-                        Text("hrs sleep")
-                            .font(.caption2)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-                if let rhr = hc.restingHR {
-                    VStack(spacing: 2) {
-                        Text("\(Int(rhr))")
-                            .font(.title3.bold().monospacedDigit())
-                        Text("resting HR")
-                            .font(.caption2)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-                if let hrv = hc.hrv {
-                    VStack(spacing: 2) {
-                        Text("\(Int(hrv))")
-                            .font(.title3.bold().monospacedDigit())
-                        Text("HRV ms")
-                            .font(.caption2)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-                if let weight = hc.bodyWeight {
-                    VStack(spacing: 2) {
-                        Text("\(Int(weight))")
-                            .font(.title3.bold().monospacedDigit())
-                        Text("lbs")
-                            .font(.caption2)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-            }
-
-            if hc.sleepHours == nil && hc.restingHR == nil && hc.hrv == nil {
-                Text("No health data available. Grant HealthKit access in Settings.")
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
-            }
-        }
-        .padding(10)
-        .background(Color.cardSurface)
-        .cornerRadius(8)
-    }
-
-    private var dailyHeader: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "clock")
-                .foregroundColor(.secondaryText)
-            Text("Today's Parameters")
-                .font(.caption.bold())
-                .foregroundColor(.secondaryText)
-                .textCase(.uppercase)
-            Spacer()
-        }
-    }
-
-    private func programContextCard(_ program: TrainingProgram) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "brain.head.profile")
-                    .foregroundColor(.secondaryText)
-                Text("AI Already Knows")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                    .textCase(.uppercase)
-                Spacer()
-                Text("Edit in Program tab")
-                    .font(.caption2)
-                    .foregroundColor(.secondaryText)
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(program.goal) • \(program.daysPerWeek) days/week")
-                    .font(.caption)
-                if let intel = fetchIntelligence(), !intel.injuries.isEmpty {
-                    Text(intel.injuries)
-                        .font(.caption)
-                        .foregroundColor(.failedRed.opacity(0.8))
-                }
-            }
-        }
-        .padding(10)
-        .background(Color.cardSurface)
-        .cornerRadius(8)
-    }
-
-    private func fetchIntelligence() -> UserIntelligence? {
-        let descriptor = FetchDescriptor<UserIntelligence>()
-        return try? modelContext.fetch(descriptor).first
-    }
-}
 
 // MARK: - Post-Workout Sheet
 
@@ -1161,16 +754,25 @@ struct PostWorkoutSheet: View {
 
 struct AddExerciseToPlanSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let category: WorkoutCategory
+    /// Muscle groups to prioritize in the list. Empty = show every muscle
+    /// group (no narrowing). Pass `coachVM.targetMuscleGroups` to align with
+    /// today's AI-recommended focus.
+    let focus: [MuscleGroup]
     let onSelect: (Exercise) -> Void
 
     @Query private var allExercises: [Exercise]
     @State private var searchText = ""
+    @State private var showAll = false
 
     private var filteredExercises: [Exercise] {
-        let categoryExercises = allExercises.filter { category.muscleGroups.contains($0.muscleGroup) }
-        if searchText.isEmpty { return categoryExercises }
-        return categoryExercises.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        let scoped: [Exercise]
+        if focus.isEmpty || showAll {
+            scoped = allExercises
+        } else {
+            scoped = allExercises.filter { focus.contains($0.muscleGroup) }
+        }
+        if searchText.isEmpty { return scoped }
+        return scoped.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
     private var groupedExercises: [(MuscleGroup, [Exercise])] {
@@ -1217,6 +819,16 @@ struct AddExerciseToPlanSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+                // Focus toggle — only shown when there's actually a focus to
+                // widen out of; without it the button would do nothing.
+                if !focus.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(showAll ? "Focus" : "All") {
+                            showAll.toggle()
+                        }
+                        .font(.caption)
+                    }
                 }
             }
         }

@@ -22,6 +22,13 @@ struct BenLiftApp: App {
             ActivityLog.self,
             UserProfile.self,
             UserIntelligence.self,
+            SessionEvent.self,
+            // New in the UserState architecture — UserRule carries durable
+            // decisions the AI must respect; UserObservation replaces the
+            // freeform UserIntelligence.*Patterns strings with structured,
+            // lifecycled AI-discovered patterns.
+            UserRule.self,
+            UserObservation.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: false)
         container = try! ModelContainer(for: schema, configurations: config)
@@ -57,6 +64,14 @@ struct BenLiftApp: App {
             print("[BenLift] UserIntelligence seeded from existing data")
         }
 
+        // One-shot migration: re-save the API key with AfterFirstUnlock so
+        // background post-workout analysis can read it when the phone is locked.
+        if !UserDefaults.standard.bool(forKey: "didMigrateKeychainAccessibility") {
+            KeychainService.migrateAccessibility(key: KeychainService.apiKeyKey)
+            UserDefaults.standard.set(true, forKey: "didMigrateKeychainAccessibility")
+            print("[BenLift] Migrated API key keychain accessibility")
+        }
+
         // Debug: check API key status
         let hasKey = KeychainService.load(key: KeychainService.apiKeyKey) != nil
         print("[BenLift] API key in Keychain: \(hasKey)")
@@ -67,6 +82,9 @@ struct BenLiftApp: App {
         // App-scoped mirroring controller — wires callbacks BEFORE registering with
         // HealthKit, so no start/message event can be delivered into nil handlers.
         phoneMirroring = PhoneMirroringController()
+        // Give the workout VM a writable context so it can persist SessionEvents
+        // as it derives them from snapshot diffs (AI learning log).
+        phoneMirroring.phoneWorkoutVM.modelContext = container.mainContext
 
         // Start background sync manager — persists Watch results to SwiftData
         // regardless of which view is active

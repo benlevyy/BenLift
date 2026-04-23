@@ -1,9 +1,16 @@
 import Foundation
 import WatchConnectivity
 
-/// Shared WatchConnectivity service — add to BOTH iOS and watchOS targets.
-/// On iOS: sends workout plans to Watch, receives results back.
-/// On watchOS: receives plans, sends results back.
+// ⚠️ SHARED FILE — KEEP IN LOCKSTEP WITH THE WATCH COPY AT
+// `BenLift Watch Watch App/Shared/WatchSyncService.swift`.
+// These two files are compiled separately by each target today; any change here
+// must be mirrored there verbatim (the only platform differences are gated by
+// `#if os(iOS)` / `#if os(watchOS)` below). A future Xcode refactor should
+// unify these into a single file with membership in both targets.
+
+/// Shared WatchConnectivity service. On iOS: sends plans to Watch, receives results
+/// back. On watchOS: receives plans, sends results back. Lifecycle signals
+/// (workoutStarted/Ended) flow both ways.
 class WatchSyncService: NSObject, WCSessionDelegate {
     static let shared = WatchSyncService()
 
@@ -11,6 +18,15 @@ class WatchSyncService: NSObject, WCSessionDelegate {
     var isPaired = false
     var isWatchAppInstalled = false
     var isWorkoutActive = false  // Set by Watch via message when workout starts/ends
+
+    #if os(iOS)
+    /// Fires when reachability transitions false → true while a workout is
+    /// active. Hook from PhoneMirroringController to request a fresh snapshot
+    /// so the phone doesn't render stale state after a BT/wrist-wake gap.
+    var onReachabilityRecovered: (() -> Void)?
+    /// Previous reachability value — needed to detect the rising edge.
+    private var lastReachable: Bool = false
+    #endif
 
     // iOS: received workout result from Watch
     var receivedWorkoutResult: WatchWorkoutResult? {
@@ -24,6 +40,22 @@ class WatchSyncService: NSObject, WCSessionDelegate {
 
     // watchOS: cached exercise library + metadata
     var exerciseLibrary: WatchExerciseLibrary?
+
+    // watchOS: latest snapshot from a PHONE-owned session. When the user
+    // starts a workout on the phone (watch unavailable or chose not to
+    // engage HK mirroring), the phone broadcasts snapshots here so the
+    // watch can render the same session — "act as one" even though the
+    // phone is the single source of truth.
+    var receivedPhoneSnapshot: WorkoutSnapshot?
+
+    // iOS: latest command a phone-owned workout received from the watch.
+    // Phone reads + clears this to apply the mutation; watch used sendMessage
+    // (or transferUserInfo fallback) to deliver it. Kept as a simple latest-
+    // command slot plus a notification so the mirroring controller can
+    // route immediately.
+    var receivedPhoneCommand: WorkoutCommand? {
+        didSet { NotificationCenter.default.post(name: .phoneCommandReceived, object: nil) }
+    }
 
     private override init() {
         super.init()
@@ -62,6 +94,65 @@ class WatchSyncService: NSObject, WCSessionDelegate {
             print("[BenLift/Sync] ❌ Failed to encode plan: \(error)")
         }
     }
+
+    // MARK: - iOS → Watch: Broadcast Phone-Owned Snapshot
+    //
+    // When the phone owns a workout (no watch / user tapped "Start here
+    // now"), the watch still wants to show what's happening — "start
+    // anywhere, see anywhere." We piggyback on `updateApplicationContext`
+    // so the latest state always wins (older snapshots get replaced) and
+    // the watch gets it on next activation even if it was asleep.
+
+    #if os(iOS)
+    func sendPhoneOwnedSnapshot(_ snapshot: WorkoutSnapshot) {
+        guard WCSession.default.activationState == .activated else { return }
+        do {
+            let data = try JSONEncoder().encode(snapshot)
+            let payload = data.base64EncodedString()
+            try WCSession.default.updateApplicationContext([
+                "type": "phoneOwnedSnapshot",
+                "payload": payload,
+            ])
+        } catch {
+            print("[BenLift/Sync] ❌ Failed to send phone-owned snapshot: \(error)")
+        }
+    }
+    #endif
+
+    // MARK: - watchOS → iPhone: Send Command for phone-owned session
+    //
+    // Watch is a full participant now, not a read-only view. When the user
+    // taps log / skip / swap / finish on the watch during a phone-owned
+    // session, we send the `WorkoutCommand` to the phone over WCSession;
+    // phone processes it through the same standalone mutators, then
+    // broadcasts the updated snapshot back. sendMessage is used when the
+    // phone is reachable (realtime), transferUserInfo as persistent
+    // fallback so a command queued during a flap still applies once the
+    // phone wakes up.
+
+    #if os(watchOS)
+    func sendPhoneCommand(_ command: WorkoutCommand) {
+        guard WCSession.default.activationState == .activated else {
+            print("[BenLift/Sync] ❌ Session not activated, can't send phone command")
+            return
+        }
+        do {
+            let data = try JSONEncoder().encode(command)
+            let payload = data.base64EncodedString()
+            let dict: [String: Any] = ["type": "phoneCommand", "payload": payload]
+            if WCSession.default.isReachable {
+                WCSession.default.sendMessage(dict, replyHandler: nil, errorHandler: { err in
+                    print("[BenLift/Sync] sendMessage(phoneCommand) failed: \(err). Queuing via transferUserInfo.")
+                    WCSession.default.transferUserInfo(dict)
+                })
+            } else {
+                WCSession.default.transferUserInfo(dict)
+            }
+        } catch {
+            print("[BenLift/Sync] ❌ Failed to encode phone command: \(error)")
+        }
+    }
+    #endif
 
     // MARK: - iOS → Watch: Send Exercise Library (via applicationContext)
 
@@ -110,6 +201,7 @@ class WatchSyncService: NSObject, WCSessionDelegate {
             #if os(iOS)
             self.isPaired = session.isPaired
             self.isWatchAppInstalled = session.isWatchAppInstalled
+            self.lastReachable = session.isReachable
             print("[BenLift/Sync] Session activated: paired=\(session.isPaired), installed=\(session.isWatchAppInstalled), reachable=\(session.isReachable)")
             #else
             print("[BenLift/Sync] Watch session activated: reachable=\(session.isReachable)")
@@ -134,8 +226,20 @@ class WatchSyncService: NSObject, WCSessionDelegate {
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
+            #if os(iOS)
+            let becameReachable = !self.lastReachable && session.isReachable
+            self.lastReachable = session.isReachable
+            #endif
             self.isReachable = session.isReachable
             print("[BenLift/Sync] Reachability changed: \(session.isReachable)")
+            #if os(iOS)
+            if becameReachable && self.isWorkoutActive {
+                // Rising edge during an active workout — the phone may have
+                // missed snapshots while disconnected. Let the mirror layer
+                // pull a fresh one.
+                self.onReachabilityRecovered?()
+            }
+            #endif
         }
     }
 
@@ -148,6 +252,12 @@ class WatchSyncService: NSObject, WCSessionDelegate {
                 switch type {
                 case "workoutEnded":
                     self.isWorkoutActive = false
+                    #if os(watchOS)
+                    // Watch listens for remote-finish so the WorkoutViewModel
+                    // can shut down if the phone initiated the end while we
+                    // were briefly unreachable.
+                    NotificationCenter.default.post(name: .remoteFinishRequested, object: nil)
+                    #endif
                     print("[BenLift/Sync] ← Workout ended (queued)")
                 default:
                     print("[BenLift/Sync] Unknown signal userInfo: \(type)")
@@ -182,6 +292,14 @@ class WatchSyncService: NSObject, WCSessionDelegate {
                 }
             }
 
+        case "phoneCommand":
+            // Watch-originated command that queued up (sendMessage failed
+            // / wasn't reachable). Same decode + deliver path as the
+            // realtime sendMessage branch above.
+            #if os(iOS)
+            handlePhoneCommandPayload(payloadString)
+            #endif
+
         default:
             print("[BenLift/Sync] Unknown userInfo type: \(type)")
         }
@@ -200,13 +318,42 @@ class WatchSyncService: NSObject, WCSessionDelegate {
             case "workoutEnded":
                 DispatchQueue.main.async {
                     self.isWorkoutActive = false
-                    print("[BenLift/Sync] ← Watch workout ended")
+                    #if os(watchOS)
+                    NotificationCenter.default.post(name: .remoteFinishRequested, object: nil)
+                    #endif
+                    print("[BenLift/Sync] ← Workout ended (remote)")
                 }
+            case "phoneCommand":
+                // Watch-originated command for a phone-owned session.
+                // Only the phone cares about this; the watch just sent it
+                // and already dispatched local state optimistically (if at
+                // all).
+                #if os(iOS)
+                handlePhoneCommandPayload(message["payload"] as? String)
+                #endif
             default:
                 print("[BenLift/Sync] Unknown message type: \(type)")
             }
         }
     }
+
+    /// Decode + deliver a phone command payload (base64-encoded JSON of
+    /// `WorkoutCommand`). Same shape whether it arrived over sendMessage
+    /// or transferUserInfo — both paths use the same dictionary keys.
+    #if os(iOS)
+    private func handlePhoneCommandPayload(_ payloadString: String?) {
+        guard let payloadString,
+              let data = Data(base64Encoded: payloadString),
+              let cmd = try? JSONDecoder().decode(WorkoutCommand.self, from: data) else {
+            print("[BenLift/Sync] ❌ Couldn't decode phoneCommand payload")
+            return
+        }
+        DispatchQueue.main.async {
+            self.receivedPhoneCommand = cmd
+            print("[BenLift/Sync] ← Phone command from watch: \(cmd)")
+        }
+    }
+    #endif
 
     // MARK: - Watch → iPhone: Send workout status (call from Watch side)
 
@@ -241,6 +388,16 @@ class WatchSyncService: NSObject, WCSessionDelegate {
                     print("[BenLift/Sync] ← Received exercise library: \(library.exercises.count) exercises")
                 }
             }
+        } else if type == "phoneOwnedSnapshot" {
+            // Phone is the owner of an active workout; we're the passive
+            // display. Reuses the same `WorkoutSnapshot` the watch-owned
+            // path uses — watch UI renders from snapshot either way.
+            if let snap = try? JSONDecoder().decode(WorkoutSnapshot.self, from: payloadData) {
+                DispatchQueue.main.async {
+                    self.receivedPhoneSnapshot = snap
+                    NotificationCenter.default.post(name: .phoneOwnedSnapshotReceived, object: nil)
+                }
+            }
         }
     }
 }
@@ -250,4 +407,14 @@ class WatchSyncService: NSObject, WCSessionDelegate {
 extension Notification.Name {
     static let workoutPlanReceived = Notification.Name("workoutPlanReceived")
     static let workoutResultReceived = Notification.Name("workoutResultReceived")
+    /// Watch listens for this to finish a session the phone initiated end on.
+    /// Declared in the shared file so both targets see the identifier.
+    static let remoteFinishRequested = Notification.Name("remoteFinishRequested")
+    /// Watch-side hook: the phone broadcast a fresh snapshot of its owned
+    /// workout. Watch's WorkoutViewModel listens so it can refresh state.
+    static let phoneOwnedSnapshotReceived = Notification.Name("phoneOwnedSnapshotReceived")
+    /// iOS-side hook: a watch-originated command arrived for the phone's
+    /// owned session. PhoneMirroringController listens and dispatches to
+    /// the VM's `handleRemoteCommand`.
+    static let phoneCommandReceived = Notification.Name("phoneCommandReceived")
 }

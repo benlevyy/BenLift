@@ -25,19 +25,30 @@ struct KeychainService {
         ]
         SecItemDelete(deleteQuery as CFDictionary)
 
-        // Add new item
+        // Add new item. Use AfterFirstUnlock so the key is readable from
+        // background tasks (e.g. post-workout analysis fired by the Watch
+        // ending a mirrored session) when the iPhone is locked.
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
 
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw KeychainError.unexpectedStatus(status)
         }
+    }
+
+    /// Re-saves the key under the current access attribute. Used to migrate
+    /// items written with kSecAttrAccessibleWhenUnlocked over to
+    /// kSecAttrAccessibleAfterFirstUnlock without forcing the user to
+    /// re-enter their API key.
+    static func migrateAccessibility(key: String) {
+        guard let value = load(key: key) else { return }
+        try? save(key: key, value: value)
     }
 
     static func load(key: String) -> String? {

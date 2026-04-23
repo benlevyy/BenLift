@@ -51,7 +51,7 @@ struct OnboardingView: View {
             Text("BenLift")
                 .font(.largeTitle.bold())
 
-            Text("AI-powered strength training.\nPush. Pull. Legs. Progress.")
+            Text("AI-driven strength training.\nThe right muscles, the right day.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondaryText)
 

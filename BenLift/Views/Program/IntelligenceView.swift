@@ -7,20 +7,33 @@ struct IntelligenceView: View {
     var intelligenceVM: IntelligenceViewModel
     var program: TrainingProgram?
 
+    // Active durable decisions the AI must obey — user-initiated, shown
+    // as a deletable list so the user can restore a previously removed
+    // exercise without digging through plan UI.
+    @Query(
+        filter: #Predicate<UserRule> { $0.isActive == true },
+        sort: \UserRule.lastReinforcedAt,
+        order: .reverse
+    ) private var activeRules: [UserRule]
+
+    // AI-discovered patterns. Top-by-recency in the card; the supersede
+    // logic in ObservationStore keeps this list deduped across refreshes.
+    @Query(
+        filter: #Predicate<UserObservation> { $0.isActive == true },
+        sort: \UserObservation.lastReinforcedAt,
+        order: .reverse
+    ) private var activeObservations: [UserObservation]
+
+    @State private var showResetConfirm = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     refreshSection
                     userInputSection
-                    if let intel = intelligenceVM.intelligence, intel.hasBeenRefreshed {
-                        intelligenceSections(intel)
-                    } else {
-                        emptyState
-                    }
-                    if let intel = intelligenceVM.intelligence, !intel.pendingObservations.isEmpty {
-                        pendingSection(intel)
-                    }
+                    rulesSection
+                    observationsSection
                 }
                 .padding()
             }
@@ -34,6 +47,25 @@ struct IntelligenceView: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button(role: .destructive) {
+                            showResetConfirm = true
+                        } label: {
+                            Label("Reset Intelligence", systemImage: "arrow.counterclockwise")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+            .alert("Reset Intelligence?", isPresented: $showResetConfirm) {
+                Button("Reset", role: .destructive) {
+                    intelligenceVM.resetIntelligence(modelContext: modelContext)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Wipes the AI-generated observations. Your rules, injuries, and notes are kept. The next Refresh will rebuild observations from your remaining sessions.")
             }
         }
     }
@@ -52,8 +84,7 @@ struct IntelligenceView: View {
             } label: {
                 HStack {
                     if intelligenceVM.isRefreshing {
-                        ProgressView()
-                            .tint(.white)
+                        ProgressView().tint(.white)
                     } else {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -90,7 +121,7 @@ struct IntelligenceView: View {
         }
     }
 
-    // MARK: - User Input (injuries + notes)
+    // MARK: - User Input
 
     private var userInputSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -123,100 +154,190 @@ struct IntelligenceView: View {
         .cornerRadius(12)
     }
 
-    // MARK: - Intelligence Sections
+    // MARK: - Rules (durable user decisions)
 
-    private func intelligenceSections(_ intel: UserIntelligence) -> some View {
-        VStack(spacing: 12) {
-            sectionHeader("AI INTELLIGENCE", subtitle: "Auto-generated from your data")
+    private var rulesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(
+                "YOUR RULES",
+                subtitle: activeRules.isEmpty ? "None yet" : "\(activeRules.count) active"
+            )
 
-            if !intel.activityPatterns.isEmpty && intel.activityPatterns != "Insufficient data" {
-                intelligenceCard("Activity Patterns", icon: "figure.run", text: intel.activityPatterns)
-            }
-            if !intel.trainingPatterns.isEmpty && intel.trainingPatterns != "Insufficient data" {
-                intelligenceCard("Training Patterns", icon: "dumbbell", text: intel.trainingPatterns)
-            }
-            if !intel.strengthProfile.isEmpty && intel.strengthProfile != "Insufficient data" {
-                intelligenceCard("Strength Profile", icon: "chart.line.uptrend.xyaxis", text: intel.strengthProfile)
-            }
-            if !intel.recoveryProfile.isEmpty && intel.recoveryProfile != "Insufficient data" {
-                intelligenceCard("Recovery Profile", icon: "bed.double", text: intel.recoveryProfile)
-            }
-            if !intel.exercisePreferences.isEmpty && intel.exercisePreferences != "Insufficient data" {
-                intelligenceCard("Exercise Preferences", icon: "star", text: intel.exercisePreferences)
-            }
-            if !intel.notableObservations.isEmpty && intel.notableObservations != "Insufficient data" {
-                intelligenceCard("Notable Observations", icon: "lightbulb", text: intel.notableObservations)
-            }
-        }
-    }
-
-    private func intelligenceCard(_ title: String, icon: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
+            if activeRules.isEmpty {
+                Text("When you remove an exercise from a plan, it lands here. The AI will stop suggesting it until you add it back.")
                     .font(.caption)
-                    .foregroundColor(.accentBlue)
-                Text(title)
-                    .font(.caption.bold())
-                    .foregroundColor(.primary)
+                    .foregroundColor(.secondaryText)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(activeRules) { rule in
+                        ruleRow(rule)
+                    }
+                }
             }
-            Text(text)
-                .font(.caption)
-                .foregroundColor(.primary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
         .background(Color.cardSurface)
         .cornerRadius(12)
     }
 
-    // MARK: - Empty State
+    private func ruleRow(_ rule: UserRule) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon(for: rule.kind))
+                .font(.caption)
+                .foregroundColor(.accentBlue)
+                .frame(width: 18)
 
-    private var emptyState: some View {
-        VStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(rule.subject)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.primary)
+                HStack(spacing: 6) {
+                    Text(label(for: rule.kind))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondaryText)
+                    if let reason = rule.reason, !reason.isEmpty {
+                        Text("·")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondaryText)
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                            .lineLimit(2)
+                    }
+                }
+            }
+
+            Spacer(minLength: 6)
+
+            Button {
+                UserRuleStore.archiveRule(rule.id, modelContext: modelContext)
+            } label: {
+                Text("Archive")
+                    .font(.caption.bold())
+                    .foregroundColor(.failedRed)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.failedRed.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(Color(UIColor.systemGroupedBackground))
+        .cornerRadius(8)
+    }
+
+    private func icon(for kind: UserRuleKind) -> String {
+        switch kind {
+        case .exerciseOut: return "nosign"
+        case .preferOver:  return "arrow.left.arrow.right"
+        case .equipment:   return "wrench.and.screwdriver"
+        case .programming: return "list.bullet.rectangle"
+        case .unknown:     return "questionmark.circle"
+        }
+    }
+
+    private func label(for kind: UserRuleKind) -> String {
+        switch kind {
+        case .exerciseOut: return "EXERCISE OUT"
+        case .preferOver:  return "PREFERENCE"
+        case .equipment:   return "EQUIPMENT"
+        case .programming: return "PROGRAMMING"
+        case .unknown:     return "RULE"
+        }
+    }
+
+    // MARK: - Observations (AI-discovered)
+
+    private var observationsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(
+                "AI OBSERVATIONS",
+                subtitle: activeObservations.isEmpty ? "Nothing yet" : "\(activeObservations.count) active"
+            )
+
+            if activeObservations.isEmpty {
+                emptyObservationsBody
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(activeObservations) { obs in
+                        observationRow(obs)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.cardSurface)
+        .cornerRadius(12)
+    }
+
+    private var emptyObservationsBody: some View {
+        VStack(spacing: 6) {
             Image(systemName: "brain")
-                .font(.title)
+                .font(.title3)
                 .foregroundColor(.secondaryText)
-            Text("No intelligence yet")
-                .font(.headline)
-                .foregroundColor(.primary)
-            Text("Tap Refresh to analyze your training data, HealthKit activities, and health metrics.")
+            Text("Tap Refresh to analyze your training, HealthKit activities, and recovery signals.")
                 .font(.caption)
                 .foregroundColor(.secondaryText)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
-        .padding(.horizontal)
-        .background(Color.cardSurface)
-        .cornerRadius(12)
+        .padding(.vertical, 16)
     }
 
-    // MARK: - Pending Observations
-
-    private func pendingSection(_ intel: UserIntelligence) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let count = intel.pendingObservations.components(separatedBy: "\n").filter { !$0.isEmpty }.count
-            HStack {
-                sectionHeader("PENDING OBSERVATIONS", subtitle: "\(count) items waiting for next refresh")
-                Button {
-                    intel.pendingObservations = ""
-                    try? modelContext.save()
-                } label: {
-                    Text("Clear")
-                        .font(.caption)
-                        .foregroundColor(.failedRed)
-                }
-            }
-
-            Text(intel.pendingObservations)
+    private func observationRow(_ obs: UserObservation) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon(for: obs.kind))
                 .font(.caption)
-                .foregroundColor(.secondaryText)
+                .foregroundColor(.accentBlue)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(obs.subject.uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.secondaryText)
+                    confidenceBadge(obs.confidence)
+                }
+                Text(obs.text)
+                    .font(.caption)
+                    .foregroundColor(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color.cardSurface)
-        .cornerRadius(12)
+        .padding(10)
+        .background(Color(UIColor.systemGroupedBackground))
+        .cornerRadius(8)
+    }
+
+    private func icon(for kind: ObservationKind) -> String {
+        switch kind {
+        case .correlation: return "link"
+        case .pattern:     return "chart.line.uptrend.xyaxis"
+        case .programming: return "dumbbell"
+        case .recovery:    return "bed.double"
+        case .note:        return "lightbulb"
+        case .unknown:     return "sparkles"
+        }
+    }
+
+    private func confidenceBadge(_ confidence: ObservationConfidence) -> some View {
+        let (label, color): (String, Color) = {
+            switch confidence {
+            case .high:   return ("HIGH",   .green)
+            case .medium: return ("MEDIUM", .orange)
+            case .low:    return ("LOW",    .secondaryText)
+            }
+        }()
+        return Text(label)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundColor(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12))
+            .clipShape(Capsule())
     }
 
     // MARK: - Helpers

@@ -4,7 +4,18 @@ struct PromptBuilder {
 
     // MARK: - Shared System Prefix
 
-    static func sharedSystemPrefix(program: TrainingProgram?, healthContext: HealthContext?, intelligence: UserIntelligence? = nil) -> String {
+    /// Primary prompt prefix. If `userState` is supplied, it becomes the
+    /// canonical structured view the model reads — the legacy per-field
+    /// text blocks (program summary, intelligence prose, recovery data)
+    /// are suppressed since the same info lives in the JSON in more
+    /// token-efficient form. Legacy callers that don't have a UserState
+    /// yet fall back to the original individual blocks.
+    static func sharedSystemPrefix(
+        userState: UserState? = nil,
+        program: TrainingProgram?,
+        healthContext: HealthContext?,
+        intelligence: UserIntelligence? = nil
+    ) -> String {
         var prompt = """
         You are a knowledgeable strength training coach who is encouraging, direct, and data-driven.
         You respond ONLY in JSON (no markdown, no backticks, no explanation outside the JSON).
@@ -14,42 +25,63 @@ struct PromptBuilder {
 
         """
 
-        if let program {
+        if let userState {
+            // Structured path — one JSON block carrying every piece of
+            // user context. ~3-5× fewer tokens than the old per-field
+            // text blocks and the model parses it faster.
             prompt += """
-            User profile:
-            - Goal: \(program.goal)
-            - Experience: \(program.experienceLevel)
-            - Training days/week: \(program.daysPerWeek)
+            USER STATE (authoritative — prefer this over any inferred assumption):
+            \(userState.toPromptJSON())
+
+            READING THE USER STATE:
+            - `today` is today's self-report. Weight it heavily.
+            - `constraints.injuries` are hard constraints — never suggest a movement they contraindicate.
+            - `rules` are explicit decisions the user made. OBEY rules.exerciseOut — never suggest an exercise whose `subject` is in that list. These are not suggestions, they are user-set boundaries.
+            - `preferences.rituals` are exercises the user does in ≥60% of their sessions — lean into them when the session focus fits.
+            - `preferences.rotation[muscle]` shows what the user cycles through for each slot — pick from these rather than proposing unfamiliar exercises.
+            - `strength[exercise]` gives current working weight + e1RM — anchor your weight suggestions to these, never invent numbers.
+            - `muscleState[muscle].status` is the recovery read (fresh/ready/recovering/sore). `fresh` is the best training target; avoid programming into `sore`.
+            - `observations` are soft priors from prior analyses — use as tiebreakers, not hard constraints.
+            - `today.muscleOverrides` TRUMPS `muscleState.status` for that muscle — the user's self-report wins.
+
 
             """
-        }
+        } else {
+            // Legacy path — individual text blocks. Kept as a fallback
+            // for any caller that hasn't migrated to UserState yet.
+            if let program {
+                prompt += """
+                User profile:
+                - Goal: \(program.goal)
+                - Experience: \(program.experienceLevel)
+                - Training days/week: \(program.daysPerWeek)
 
-        // Intelligence — data-driven user context (replaces manual coaching profile)
-        if let intel = intelligence, intel.hasBeenRefreshed {
-            prompt += "User intelligence (data-driven, auto-generated):\n"
-            prompt += intel.formattedForPrompt
-            prompt += "\n\n"
-        } else if let intel = intelligence {
-            // Before first refresh, still include user-provided safety info
-            if !intel.injuries.isEmpty {
-                prompt += "INJURIES/CONCERNS (user-reported): \(intel.injuries)\n"
+                """
             }
-            if !intel.userNotes.isEmpty {
-                prompt += "User notes: \(intel.userNotes)\n"
+            if let intel = intelligence, intel.hasBeenRefreshed {
+                prompt += "User intelligence (data-driven, auto-generated):\n"
+                prompt += intel.formattedForPrompt
+                prompt += "\n\n"
+            } else if let intel = intelligence {
+                if !intel.injuries.isEmpty {
+                    prompt += "INJURIES/CONCERNS (user-reported): \(intel.injuries)\n"
+                }
+                if !intel.userNotes.isEmpty {
+                    prompt += "User notes: \(intel.userNotes)\n"
+                }
+                if !intel.pendingObservations.isEmpty {
+                    prompt += "Observations from recent workouts:\n\(intel.pendingObservations)\n"
+                }
+                prompt += "\n"
             }
-            if !intel.pendingObservations.isEmpty {
-                prompt += "Observations from recent workouts:\n\(intel.pendingObservations)\n"
+            if let health = healthContext {
+                prompt += "Today's recovery data:\n"
+                if let sleep = health.sleepHours { prompt += "- Sleep last night: \(String(format: "%.1f", sleep)) hours\n" }
+                if let hr = health.restingHR { prompt += "- Resting HR: \(Int(hr)) bpm\n" }
+                if let hrv = health.hrv { prompt += "- HRV (SDNN): \(Int(hrv)) ms\n" }
+                if let weight = health.bodyWeight { prompt += "- Body weight: \(Int(weight)) lbs\n" }
+                prompt += "\n"
             }
-            prompt += "\n"
-        }
-
-        if let health = healthContext {
-            prompt += "Today's recovery data:\n"
-            if let sleep = health.sleepHours { prompt += "- Sleep last night: \(String(format: "%.1f", sleep)) hours\n" }
-            if let hr = health.restingHR { prompt += "- Resting HR: \(Int(hr)) bpm\n" }
-            if let hrv = health.hrv { prompt += "- HRV (SDNN): \(Int(hrv)) ms\n" }
-            if let weight = health.bodyWeight { prompt += "- Body weight: \(Int(weight)) lbs\n" }
-            prompt += "\n"
         }
 
         prompt += """
@@ -145,6 +177,13 @@ struct PromptBuilder {
     ///   3. Priority/lagging muscle → that muscle's primary exercise goes in slot 1.
     @MainActor
     static func recommendAndPlanPrompt(
+        /// When provided, the user block in the system prompt becomes the
+        /// structured `UserState` JSON. The redundant `recentSessionsSummary`
+        /// / `weeklyVolumeProgress` / `recentActivities` / feeling text is
+        /// suppressed from the user prompt since the same info lives in
+        /// the JSON. `exerciseLibrary` is still needed — the library isn't
+        /// part of user state.
+        userState: UserState? = nil,
         recentSessionsSummary: String,
         recentActivities: String,
         feeling: Int,
@@ -156,7 +195,12 @@ struct PromptBuilder {
         healthContext: HealthContext?,
         intelligence: UserIntelligence? = nil
     ) -> (system: String, user: String) {
-        var system = sharedSystemPrefix(program: program, healthContext: healthContext, intelligence: intelligence)
+        var system = sharedSystemPrefix(
+            userState: userState,
+            program: program,
+            healthContext: healthContext,
+            intelligence: intelligence
+        )
         system += """
 
 
@@ -209,19 +253,25 @@ struct PromptBuilder {
         """
 
         var user = "What should I train today, and what's the full plan?\n\n"
-        user += "Pre-workout check-in:\n"
-        user += "- Feeling: \(feeling)/5\n"
-        if let time = availableTime {
-            user += "- Available time: \(time) minutes\n"
+        if userState == nil {
+            // Legacy path — individual text blocks. When `userState` is
+            // provided, the system prompt already carries all of this
+            // plus more, so we skip to avoid the model reading redundant
+            // context.
+            user += "Pre-workout check-in:\n"
+            user += "- Feeling: \(feeling)/5\n"
+            if let time = availableTime {
+                user += "- Available time: \(time) minutes\n"
+            }
+            if let concerns = concerns, !concerns.isEmpty {
+                user += "- Concerns: \(concerns)\n"
+            }
+            user += "\nRecent training (last 7 days):\n\(recentSessionsSummary)\n"
+            if !recentActivities.isEmpty {
+                user += "\nOther activities (from Apple Health):\n\(recentActivities)\n"
+            }
+            user += "\nWeekly volume progress (use to weave in incidental work for under-volumed muscles):\n\(weeklyVolumeProgress)\n"
         }
-        if let concerns = concerns, !concerns.isEmpty {
-            user += "- Concerns: \(concerns)\n"
-        }
-        user += "\nRecent training (last 7 days):\n\(recentSessionsSummary)\n"
-        if !recentActivities.isEmpty {
-            user += "\nOther activities (from Apple Health):\n\(recentActivities)\n"
-        }
-        user += "\nWeekly volume progress (use to weave in incidental work for under-volumed muscles):\n\(weeklyVolumeProgress)\n"
         user += "\nFull exercise library (grouped by primary muscle — pick from any group):\n\(exerciseLibrary)\n"
         user += "\nToday is \(Date().weekdayName), \(Date().shortFormatted)."
 
@@ -257,7 +307,7 @@ struct PromptBuilder {
         if let injuries = injuries, !injuries.isEmpty {
             user += "\n- Injuries/limitations: \(injuries)"
         }
-        user += "\n\nDesign a Push/Pull/Legs program with weekly volume targets per muscle group, compound priority order, and progression scheme."
+        user += "\n\nDesign a training program structured around muscle-group coverage and recovery — pick the split shape (PPL, upper/lower, full body, or a dynamic AI-driven focus) that best fits the goal, experience, and days/week. Specify weekly volume targets per muscle group, compound priority order, and a progression scheme."
 
         return (system, user)
     }
@@ -429,11 +479,27 @@ struct PromptBuilder {
     // MARK: - Intelligence Refresh (Sonnet — analyze all data into structured profile)
 
     static func refreshIntelligencePrompt(
+        /// Compressed structured view of the user. Same one the plan
+        /// prompts get. Refresh gets this AND the raw `sessionsSummary`
+        /// below — the state is efficient, the raw is where Sonnet
+        /// finds correlations the state loses (the whole point of
+        /// running the heavier model).
+        userState: UserState? = nil,
         program: TrainingProgram?,
         activitiesText: String,
         healthAverages: String,
         sessionsSummary: String,
-        pendingObservations: String
+        pendingObservations: String,
+        injuries: String = "",
+        userNotes: String = "",
+        /// 30-day summary of SessionEvent activity — "User swapped Bench 4×,
+        /// skipped Split Squat 3×, added Pallof Press 2× mid-workout."
+        /// Empty string when there's nothing to report; the block simply
+        /// doesn't render. Feeds mid-workout behavior signal into the
+        /// refresh so the AI's exercisePreferences / notableObservations
+        /// sections reflect what the user ACTUALLY does, not just which
+        /// sets they logged.
+        behaviorPatterns: String = ""
     ) -> (system: String, user: String) {
         let system = """
         You are analyzing a strength training user's data to build a comprehensive intelligence profile.
@@ -466,7 +532,13 @@ struct PromptBuilder {
 
         var user = "Build an intelligence profile from this data.\n\n"
 
-        if let program {
+        if let userState {
+            // UserState JSON gives the model the compressed view;
+            // sessionsSummary below is the raw supplement for discovery.
+            user += "USER STATE (structured):\n\(userState.toPromptJSON())\n\n"
+        }
+
+        if userState == nil, let program {
             user += """
             USER CONTEXT:
             - Goal: \(program.goal)
@@ -476,17 +548,30 @@ struct PromptBuilder {
             """
         }
 
-        if !activitiesText.isEmpty {
-            user += "HEALTHKIT ACTIVITIES (last 30 days):\n\(activitiesText)\n\n"
-        } else {
-            user += "HEALTHKIT ACTIVITIES: None detected.\n\n"
+        // When UserState is present, it already carries injuries /
+        // notes / activities / recovery — skip the redundant text blocks.
+        if userState == nil {
+            if !injuries.isEmpty || !userNotes.isEmpty {
+                user += "USER PREFERENCES (self-reported — weight heavily):\n"
+                if !injuries.isEmpty { user += "- Injuries/concerns: \(injuries)\n" }
+                if !userNotes.isEmpty { user += "- Notes: \(userNotes)\n" }
+                user += "\n"
+            }
+            if !activitiesText.isEmpty {
+                user += "HEALTHKIT ACTIVITIES (last 30 days):\n\(activitiesText)\n\n"
+            } else {
+                user += "HEALTHKIT ACTIVITIES: None detected.\n\n"
+            }
+            if !healthAverages.isEmpty {
+                user += "HEALTH METRICS (30-day averages):\n\(healthAverages)\n\n"
+            }
         }
 
-        if !healthAverages.isEmpty {
-            user += "HEALTH METRICS (30-day averages):\n\(healthAverages)\n\n"
-        }
+        user += "TRAINING SESSIONS (full history — raw, for pattern discovery):\n\(sessionsSummary)\n\n"
 
-        user += "TRAINING SESSIONS (recent):\n\(sessionsSummary)\n\n"
+        if !behaviorPatterns.isEmpty {
+            user += "BEHAVIOR PATTERNS (last 30 days, from mid-workout actions):\n\(behaviorPatterns)\n\n"
+        }
 
         if !pendingObservations.isEmpty {
             user += "PENDING OBSERVATIONS (from recent workouts, not yet synthesized):\n\(pendingObservations)\n\n"

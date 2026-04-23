@@ -77,9 +77,16 @@ class AnalysisViewModel {
                 volumeAnalysis: analysis.volumeAnalysis
             )
 
-            // Append observations to intelligence for next refresh
+            // Append observations to intelligence for next refresh. Pass
+            // the analyzed session's id so we can de-duplicate re-analyses
+            // — editing a session and re-analyzing shouldn't inflate the
+            // "workouts since refresh" counter.
             if let observations = response.observations, !observations.isEmpty {
-                appendObservations(observations, modelContext: modelContext)
+                appendObservations(
+                    observations,
+                    sessionId: session.id,
+                    modelContext: modelContext
+                )
             }
 
         } catch {
@@ -91,26 +98,76 @@ class AnalysisViewModel {
 
     // MARK: - Intelligence Observations
 
-    @MainActor
-    private func appendObservations(_ observations: [String], modelContext: ModelContext) {
-        let descriptor = FetchDescriptor<UserIntelligence>()
-        let intel: UserIntelligence
-        if let existing = try? modelContext.fetch(descriptor).first {
-            intel = existing
-        } else {
-            intel = UserIntelligence()
-            modelContext.insert(intel)
-        }
+    /// Cap pendingObservations at this many lines. Older lines get trimmed
+    /// on append. Keeps the prompt-bound string bounded — without this,
+    /// months of post-workout analyses could stack into a giant blob that
+    /// bloats every plan request.
+    private static let maxPendingObservationLines: Int = 20
 
+    @MainActor
+    private func appendObservations(
+        _ observations: [String],
+        sessionId: UUID,
+        modelContext: ModelContext
+    ) {
+        // Dedup: if a PostWorkoutAnalysis for this session already exists
+        // and predates this one, it was a re-analysis (user edited the
+        // session in History). We already counted this session's
+        // observations + bumped the counter on the original analysis —
+        // don't re-inflate stats on every edit.
+        let analysesDescriptor = FetchDescriptor<PostWorkoutAnalysis>(
+            predicate: #Predicate { $0.sessionId == sessionId }
+        )
+        let existingAnalysesCount = (try? modelContext.fetchCount(analysesDescriptor)) ?? 0
+        // `existingAnalysesCount` is 1 here (we just inserted one above).
+        // >1 means there's an older one → this is a re-analysis.
+        let isReanalysis = existingAnalysesCount > 1
+
+        let intel = ensureIntelligenceExists(modelContext: modelContext)
         let newText = observations.map { "• \($0)" }.joined(separator: "\n")
+
         if intel.pendingObservations.isEmpty {
             intel.pendingObservations = newText
         } else {
             intel.pendingObservations += "\n" + newText
         }
-        intel.workoutsSinceRefresh += 1
+
+        // Also emit structured Observation rows so UserState /
+        // IntelligenceView / the Patterns card can consume them. Each
+        // AI observation becomes one row; upsert by text-prefix so
+        // repeated observations dedupe instead of stacking.
+        for text in observations {
+            ObservationStore.recordPostWorkoutNote(text, modelContext: modelContext)
+        }
+
+        // Trim to the most-recent N lines so pending stays bounded.
+        let lines = intel.pendingObservations.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > Self.maxPendingObservationLines {
+            let keep = lines.suffix(Self.maxPendingObservationLines)
+            intel.pendingObservations = keep.joined(separator: "\n")
+        }
+
+        if !isReanalysis {
+            intel.workoutsSinceRefresh += 1
+        }
         try? modelContext.save()
 
-        print("[BenLift/Intel] Observations appended: \(observations.count) items, \(intel.workoutsSinceRefresh) workouts since refresh")
+        print("[BenLift/Intel] Observations appended: \(observations.count) items, \(intel.workoutsSinceRefresh) workouts since refresh\(isReanalysis ? " (re-analysis, counter skipped)" : "")")
+    }
+
+    /// Mirror of IntelligenceViewModel.ensureIntelligenceExists — lives
+    /// here too so AnalysisViewModel doesn't need a cross-VM dependency.
+    /// Both funnel through the same "fetch-or-create" pattern so we don't
+    /// ever silently end up with duplicate UserIntelligence rows.
+    @MainActor
+    private func ensureIntelligenceExists(modelContext: ModelContext) -> UserIntelligence {
+        let descriptor = FetchDescriptor<UserIntelligence>()
+        if let existing = try? modelContext.fetch(descriptor).first {
+            return existing
+        }
+        let new = UserIntelligence()
+        modelContext.insert(new)
+        try? modelContext.save()
+        return new
     }
 }

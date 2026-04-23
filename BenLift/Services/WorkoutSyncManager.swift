@@ -40,10 +40,14 @@ class WorkoutSyncManager {
     }
 
     private func persistWorkout(_ result: WatchWorkoutResult, in context: ModelContext) {
-        // Don't save empty workouts (user ended without logging anything)
-        let nonEmptyEntries = result.entries.filter { !$0.sets.isEmpty }
-        if nonEmptyEntries.isEmpty {
-            print("[BenLift/SyncManager] Empty workout result (no sets logged), skipping")
+        // Don't save empty workouts (no sets AND no skips = user opened and
+        // closed without touching anything). A session with only skips IS
+        // worth persisting — an explicit bail is signal for the AI loop.
+        let meaningfulEntries = result.entries.filter {
+            !$0.sets.isEmpty || ($0.isSkipped ?? false)
+        }
+        if meaningfulEntries.isEmpty {
+            print("[BenLift/SyncManager] Empty workout result (no sets, no skips), skipping")
             return
         }
 
@@ -68,13 +72,17 @@ class WorkoutSyncManager {
             duration: result.duration,
             feeling: result.feeling,
             concerns: result.concerns,
-            aiPlanUsed: false
+            aiPlanUsed: result.aiPlanUsed ?? false
         )
 
         for entry in result.entries {
+            // Persist skipped-empty entries too so history can show "bailed"
+            // rows; skip truly-empty-untouched entries.
+            guard !entry.sets.isEmpty || (entry.isSkipped ?? false) else { continue }
             let exerciseEntry = ExerciseEntry(
                 exerciseName: entry.exerciseName,
-                order: entry.order
+                order: entry.order,
+                isSkipped: entry.isSkipped ?? false
             )
             for set in entry.sets {
                 let setLog = SetLog(

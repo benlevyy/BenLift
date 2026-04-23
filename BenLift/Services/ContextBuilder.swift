@@ -7,7 +7,7 @@ struct ContextBuilder {
 
     @MainActor
     static func buildDailyPlanContext(
-        category: WorkoutCategory? = nil,
+        userState: UserState? = nil,
         targetMuscleGroups: [MuscleGroup] = [],
         sessionName: String? = nil,
         feeling: Int,
@@ -19,14 +19,8 @@ struct ContextBuilder {
     ) -> (system: String, user: String) {
         // Today's focus muscle groups — used as GUIDANCE, not as a filter.
         // The AI sees the full library and picks the most efficient session for the focus.
-        let focusMuscleGroups: [MuscleGroup]
-        if !targetMuscleGroups.isEmpty {
-            focusMuscleGroups = targetMuscleGroups
-        } else if let cat = category {
-            focusMuscleGroups = cat.muscleGroups
-        } else {
-            focusMuscleGroups = []  // No focus → AI picks freely from full library + weekly volume
-        }
+        // Empty focus → AI picks freely from full library + weekly volume signal.
+        let focusMuscleGroups: [MuscleGroup] = targetMuscleGroups
 
         // Full exercise library, grouped by primary muscle for token-efficient formatting.
         // The AI may select ANY exercise — many compounds efficiently cover multiple muscles
@@ -34,13 +28,8 @@ struct ContextBuilder {
         let allExercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
         let library = exerciseLibraryGrouped(allExercises)
 
-        // Summarize recent sessions
-        let recentSummary: String
-        if let cat = category {
-            recentSummary = summarizeRecentSessions(category: cat, limit: 3, modelContext: modelContext)
-        } else {
-            recentSummary = summarizeAllRecentSessions(limit: 5, modelContext: modelContext)
-        }
+        // Summarize recent sessions — always the cross-muscle view, no PPL slice.
+        let recentSummary = summarizeAllRecentSessions(limit: 5, modelContext: modelContext)
 
         // Weekly volume progress
         let volumeProgress = weeklyVolumeProgress(modelContext: modelContext, exerciseLookup: DefaultExercises.buildMuscleGroupLookup(from: modelContext))
@@ -49,7 +38,12 @@ struct ContextBuilder {
         let intelDescriptor = FetchDescriptor<UserIntelligence>()
         let intelligence = try? modelContext.fetch(intelDescriptor).first
 
-        var system = PromptBuilder.sharedSystemPrefix(program: program, healthContext: healthContext, intelligence: intelligence)
+        var system = PromptBuilder.sharedSystemPrefix(
+            userState: userState,
+            program: program,
+            healthContext: healthContext,
+            intelligence: intelligence
+        )
         system += """
 
         EXERCISE SELECTION PRINCIPLES:
@@ -89,8 +83,13 @@ struct ContextBuilder {
         }
 
         user += "\n\nFull exercise library (grouped by primary muscle — pick from any group):\n\(library)"
-        user += "\n\nRecent sessions:\n\(recentSummary)"
-        user += "\n\nWeekly volume progress (use this to decide which non-focus muscles need incidental work):\n\(volumeProgress)"
+        // Skip the legacy text dumps when userState is present — the
+        // same info lives in the JSON block at the top of the system
+        // prompt, in more efficient form.
+        if userState == nil {
+            user += "\n\nRecent sessions:\n\(recentSummary)"
+            user += "\n\nWeekly volume progress (use this to decide which non-focus muscles need incidental work):\n\(volumeProgress)"
+        }
 
         return (system, user)
     }
@@ -141,12 +140,9 @@ struct ContextBuilder {
         healthContext: HealthContext?
     ) -> (system: String, user: String) {
         let actualWorkout = formatSession(session)
-        let recentSummary: String
-        if let cat = session.category {
-            recentSummary = summarizeRecentSessions(category: cat, limit: 5, modelContext: modelContext)
-        } else {
-            recentSummary = "No category-specific history (dynamic session)"
-        }
+        // Cross-muscle view of recent sessions — lets the analyzer see the user's
+        // actual training pattern without being siloed into a PPL slice.
+        let recentSummary = summarizeAllRecentSessions(limit: 5, modelContext: modelContext)
 
         // Load pending observations from intelligence
         let intelDescriptor = FetchDescriptor<UserIntelligence>()
@@ -183,32 +179,6 @@ struct ContextBuilder {
     }
 
     // MARK: - Helpers
-
-    @MainActor
-    private static func summarizeRecentSessions(category: WorkoutCategory, limit: Int, modelContext: ModelContext) -> String {
-        var descriptor = FetchDescriptor<WorkoutSession>(
-            predicate: #Predicate<WorkoutSession> { session in session.category == category },
-            sortBy: [SortDescriptor(\.date, order: .reverse)]
-        )
-        descriptor.fetchLimit = limit
-
-        guard let sessions = try? modelContext.fetch(descriptor), !sessions.isEmpty else {
-            return "No recent sessions for this category."
-        }
-
-        return sessions.enumerated().map { index, session in
-            let daysAgo = Date().daysSince(session.date)
-            var summary = "Session \(index + 1) (\(daysAgo) days ago):\n"
-            for entry in session.sortedEntries {
-                guard let top = StatsEngine.topSet(sets: entry.sets) else { continue }
-                let e1rm = StatsEngine.estimatedOneRepMax(weight: top.weight, reps: top.reps)
-                let topWeightStr = top.weight == 0 ? "BW" : "\(Int(top.weight)) lbs"
-                summary += "  \(entry.exerciseName): top set \(topWeightStr) x \(top.reps.formattedReps), e1RM: \(Int(e1rm))\n"
-            }
-            summary += "  Total volume: \(Int(session.totalVolume)) lbs"
-            return summary
-        }.joined(separator: "\n")
-    }
 
     @MainActor
     static func weeklyVolumeProgress(modelContext: ModelContext, exerciseLookup: [String: MuscleGroup]) -> String {

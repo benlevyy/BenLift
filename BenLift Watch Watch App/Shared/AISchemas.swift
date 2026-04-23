@@ -164,13 +164,20 @@ extension PlannedExercise: Codable {
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         intent = try container.decodeIfPresent(String.self, forKey: .intent)
 
-        // Handle suggestedWeight as Double, String, or null
+        // Handle suggestedWeight as Double, String, or null. Hard-cap at 2000 lb —
+        // no legitimate human lift exceeds this, so any larger value is an LLM
+        // hallucination or a comma-stripped concatenation ("15,000 lbs" → 15000).
+        let maxPlausible: Double = 2000
         if let d = try? container.decodeIfPresent(Double.self, forKey: .suggestedWeight) {
-            suggestedWeight = d
+            suggestedWeight = (d.isFinite && d <= maxPlausible) ? d : nil
         } else if let s = try? container.decodeIfPresent(String.self, forKey: .suggestedWeight) {
             // Try to extract number from strings like "Bodyweight + 0 lbs"
             let digits = s.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-            suggestedWeight = Double(digits)
+            if let val = Double(digits), val.isFinite, val <= maxPlausible {
+                suggestedWeight = val
+            } else {
+                suggestedWeight = nil
+            }
         } else {
             suggestedWeight = nil
         }
@@ -238,6 +245,18 @@ struct WatchWorkoutPlan: Codable {
     let sessionStrategy: String?
     var restTimerDuration: Double?
     var weightIncrement: Double?
+    /// Whether this plan was AI-generated. Carried through the watch and back
+    /// out in `WatchWorkoutResult` / `WorkoutSnapshot` so both persistence
+    /// paths (phone-finish and sync-manager) agree on the saved flag.
+    /// Optional so older payloads decode. Default-nil so callers (like the
+    /// watch's `startEmptyWorkout`) that don't know the flag can omit it.
+    var aiPlanUsed: Bool? = nil
+    /// Names of the user's most-used exercises from recent history, ranked
+    /// high→low. Feeds the "Recent" section at the top of the watch's
+    /// add-exercise picker so the user doesn't have to scroll the full
+    /// library to find their usual movements. Optional so older plans (and
+    /// the watch's own `startEmptyWorkout`) decode cleanly.
+    var recentExercises: [String]? = nil
 }
 
 struct WatchExerciseInfo: Codable, Identifiable {
@@ -251,6 +270,9 @@ struct WatchExerciseInfo: Codable, Identifiable {
     let intent: String?
     let lastWeight: Double?
     let lastReps: Double?
+    /// Optional — when present, drives per-exercise weight increment (2.5 vs 5).
+    /// Nil means the watch falls back to the user's global `weightIncrement` setting.
+    let equipment: Equipment?
 
     var weight: Double { suggestedWeight }
 }
@@ -265,12 +287,20 @@ struct WatchWorkoutResult: Codable, Identifiable {
     let feeling: Int?
     let concerns: String?
     let entries: [WatchExerciseResult]
+    /// Propagated from `WatchWorkoutPlan.aiPlanUsed` so the WCSession persist
+    /// path saves the same flag as the mirrored-snapshot persist path would.
+    /// Optional for backward-compat.
+    let aiPlanUsed: Bool?
 }
 
 struct WatchExerciseResult: Codable {
     let exerciseName: String
     let order: Int
     let sets: [WatchSetResult]
+    /// User-initiated skip via swipe. Carried so skipped-but-unlogged exercises
+    /// survive into `WorkoutSession` history instead of being filtered as empty.
+    /// Optional so older payloads in flight at upgrade time decode cleanly.
+    let isSkipped: Bool?
 }
 
 struct WatchSetResult: Codable {

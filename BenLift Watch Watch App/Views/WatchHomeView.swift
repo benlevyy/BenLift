@@ -3,12 +3,55 @@ import SwiftUI
 struct WatchHomeView: View {
     @ObservedObject var workoutVM: WorkoutViewModel
     @State private var receivedPlan: WatchWorkoutPlan?
+    /// Latest phone-owned snapshot received. When present and active, we
+    /// show a "Workout on phone" card that opens a read-only mirror view —
+    /// so a user who started on phone can glance at their wrist.
+    @State private var phoneSnapshot: WorkoutSnapshot?
+
+    private var phoneSessionActive: Bool {
+        phoneSnapshot?.isActive == true
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                // AI recommendation / plan ready
-                if let plan = receivedPlan {
+                // Active phone-owned workout — tap to view on watch. Takes
+                // precedence over Plan Ready (if both were somehow set),
+                // since an active session is more relevant than a pending
+                // one.
+                if phoneSessionActive, let snap = phoneSnapshot {
+                    Button {
+                        workoutVM.applyPhoneSnapshot(snap)
+                        // `applyPhoneSnapshot` only switches screens on
+                        // first-apply (to avoid re-presenting mid-session).
+                        // When the user taps the card after having backed
+                        // out to Home, we want the mirror view to come up
+                        // again — force it.
+                        workoutVM.currentScreen = .exerciseList
+                    } label: {
+                        VStack(spacing: 4) {
+                            HStack {
+                                Image(systemName: "iphone.and.arrow.forward")
+                                Text("On Phone")
+                            }
+                            .font(.headline)
+
+                            Text(snap.sessionName ?? "Workout")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.85))
+
+                            Text("\(snap.exercises.count) exercises")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.65))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentBlue)
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(.plain)
+                } else if let plan = receivedPlan {
+                    // AI plan pushed from phone — tap to start watch-owned.
                     Button {
                         workoutVM.startWorkout(with: plan)
                     } label: {
@@ -19,7 +62,7 @@ struct WatchHomeView: View {
                             }
                             .font(.headline)
 
-                            Text(plan.sessionName ?? plan.category?.displayName ?? "Workout")
+                            Text(plan.sessionName ?? "Workout")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.8))
 
@@ -29,81 +72,42 @@ struct WatchHomeView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(plan.category?.color ?? .accentBlue)
+                        .background(Color.accentBlue)
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
                 }
 
-                // PPL quick-start buttons (fallback)
-                ForEach(WorkoutCategory.allCases) { category in
-                    categoryButton(category)
+                // Manual workout fallback — start a blank session and add
+                // exercises on the fly via the hub. Visible even when a plan
+                // is ready, so the user is never forced into a pushed plan.
+                Button {
+                    workoutVM.startEmptyWorkout()
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                        Text("Start Empty Workout")
+                            .font(.body.bold())
+                        Spacer()
+                    }
+                    .padding()
+                    .background(Color.gray.opacity(0.2))
+                    .cornerRadius(10)
                 }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal)
         }
         .navigationTitle("BenLift")
         .onAppear {
             receivedPlan = WatchSyncService.shared.receivedPlan
+            phoneSnapshot = WatchSyncService.shared.receivedPhoneSnapshot
         }
         .onReceive(NotificationCenter.default.publisher(for: .workoutPlanReceived)) { _ in
             receivedPlan = WatchSyncService.shared.receivedPlan
         }
-    }
-
-    private func categoryButton(_ category: WorkoutCategory) -> some View {
-        Button {
-            let defaults = defaultExercises(for: category)
-            workoutVM.startWorkoutFromLibrary(category: category, exercises: defaults)
-        } label: {
-            HStack {
-                Text(category.displayName)
-                    .font(.body.bold())
-                Spacer()
-            }
-            .padding()
-            .background(category.color.opacity(0.2))
-            .cornerRadius(10)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func defaultExercises(for category: WorkoutCategory) -> [WatchExerciseInfo] {
-        let defs: [(String, Double, String)]
-        switch category {
-        case .push:
-            defs = [
-                ("Bench Press", 135, "primary compound"),
-                ("DB Incline Press", 55, "secondary compound"),
-                ("DB Shoulder Press", 45, "secondary compound"),
-                ("Lateral Raises", 20, "isolation"),
-                ("Tricep Overhead Extension", 47.5, "isolation"),
-            ]
-        case .pull:
-            defs = [
-                ("Pull-ups", 0, "primary compound"),
-                ("Chest Supported Row", 55, "secondary compound"),
-                ("Seated Row", 145, "secondary compound"),
-                ("Face Pulls", 50, "isolation"),
-                ("Incline Hammer Curl", 25, "isolation"),
-            ]
-        case .legs:
-            defs = [
-                ("Squat", 185, "primary compound"),
-                ("Romanian Deadlift", 135, "secondary compound"),
-                ("Split Squat", 25, "secondary compound"),
-                ("Hamstring Curl", 100, "isolation"),
-                ("Leg Extension", 180, "isolation"),
-            ]
-        }
-
-        return defs.map { name, weight, intent in
-            WatchExerciseInfo(
-                name: name, sets: 3,
-                targetReps: intent.contains("compound") ? "6-8" : "10-15",
-                suggestedWeight: weight, warmupSets: nil, notes: nil,
-                intent: intent, lastWeight: nil, lastReps: nil
-            )
+        .onReceive(NotificationCenter.default.publisher(for: .phoneOwnedSnapshotReceived)) { _ in
+            phoneSnapshot = WatchSyncService.shared.receivedPhoneSnapshot
         }
     }
 }

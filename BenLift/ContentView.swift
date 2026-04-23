@@ -17,8 +17,7 @@ struct ContentView: View {
             TodayView(
                 coachVM: sharedCoachVM,
                 programVM: sharedProgramVM,
-                phoneWorkoutVM: phoneMirroring.phoneWorkoutVM,
-                showPhoneWorkout: $phoneMirroring.showPhoneWorkout
+                phoneMirroring: phoneMirroring
             )
                 .tabItem {
                     Label("Today", systemImage: "figure.strengthtraining.traditional")
@@ -31,7 +30,10 @@ struct ContentView: View {
 
             ProgramOverview(coachVM: sharedCoachVM, programVM: sharedProgramVM, intelligenceVM: sharedIntelligenceVM)
                 .tabItem {
-                    Label("Recovery", systemImage: "heart.text.square")
+                    // Training > Recovery — the tab is really the training
+                    // dashboard (muscle map + volume + trends + intelligence),
+                    // not just recovery. Chart icon fits the trend-y content.
+                    Label("Training", systemImage: "chart.bar.xaxis")
                 }
 
             SettingsView()

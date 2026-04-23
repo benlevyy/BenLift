@@ -7,6 +7,10 @@ struct HistoryListView: View {
     @State private var showClearConfirm = false
     @State private var showManualEntry = false
     @State private var activities: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = []
+    /// Search query — filters the timeline to sessions containing any
+    /// exercise whose name matches (case-insensitive contains). Empty
+    /// string = show everything, including HealthKit activities.
+    @State private var searchText: String = ""
 
     // Unified timeline item
     private enum TimelineItem: Identifiable {
@@ -29,9 +33,29 @@ struct HistoryListView: View {
     }
 
     private var timeline: [TimelineItem] {
-        var items: [TimelineItem] = sessions.map { .workout($0) }
-        for (i, act) in activities.enumerated() {
-            items.append(.activity(index: i, type: act.type, date: act.date, duration: act.duration, calories: act.calories, source: act.source))
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filterActive = !query.isEmpty
+
+        // Sessions: when searching, only include ones with a matching
+        // exercise entry. Case-insensitive `contains` so "bench" hits
+        // "Bench Press" and "Close Grip Bench."
+        let filteredSessions: [WorkoutSession] = filterActive
+            ? sessions.filter { session in
+                session.entries.contains {
+                    $0.exerciseName.localizedCaseInsensitiveContains(query)
+                }
+            }
+            : sessions
+
+        var items: [TimelineItem] = filteredSessions.map { .workout($0) }
+
+        // HealthKit activities — no exercise names to match against, so
+        // they drop out entirely when a query is active. Keeps the
+        // search-result list focused on lifts.
+        if !filterActive {
+            for (i, act) in activities.enumerated() {
+                items.append(.activity(index: i, type: act.type, date: act.date, duration: act.duration, calories: act.calories, source: act.source))
+            }
         }
         return items.sorted { $0.date > $1.date }
     }
@@ -45,6 +69,12 @@ struct HistoryListView: View {
                         systemImage: "figure.strengthtraining.traditional",
                         description: Text("Start your first session from the Today tab.")
                     )
+                } else if timeline.isEmpty {
+                    // Non-empty history overall but the current search
+                    // returned no sessions. Distinct from "no history yet"
+                    // so the user knows the issue is the query, not an
+                    // empty log.
+                    ContentUnavailableView.search(text: searchText)
                 } else {
                     List {
                         ForEach(timeline) { item in
@@ -73,6 +103,11 @@ struct HistoryListView: View {
                 }
             }
             .navigationTitle("History")
+            .searchable(
+                text: $searchText,
+                placement: .navigationBarDrawer(displayMode: .automatic),
+                prompt: "Search exercises (e.g. bench)"
+            )
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 12) {
@@ -164,7 +199,13 @@ struct HistoryListView: View {
     // MARK: - Workout Row
 
     private func sessionRow(_ session: WorkoutSession) -> some View {
-        HStack(spacing: 12) {
+        // Precompute counts used in the meta row — skipped entries get a
+        // separate visible pill so "3 exercises" isn't secretly "2 done,
+        // 1 bailed." Logged = has sets; skipped = explicit skip.
+        let loggedCount = session.entries.filter { !$0.sets.isEmpty }.count
+        let skippedCount = session.entries.filter { $0.isSkipped }.count
+
+        return HStack(spacing: 12) {
             Text(String(session.displayName.prefix(1)))
                 .font(.caption.bold())
                 .foregroundColor(.white)
@@ -173,8 +214,18 @@ struct HistoryListView: View {
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.displayName)
-                    .font(.body.bold())
+                HStack(spacing: 6) {
+                    Text(session.displayName)
+                        .font(.body.bold())
+                    // AI-planned badge — subtle sparkle next to the title
+                    // so a glance tells you whether the AI built it or
+                    // it was a manual session.
+                    if session.aiPlanUsed {
+                        Image(systemName: "sparkles")
+                            .font(.caption)
+                            .foregroundColor(.accentBlue)
+                    }
+                }
                 Text(session.date.shortFormatted)
                     .font(.caption)
                     .foregroundColor(.secondaryText)
@@ -190,9 +241,18 @@ struct HistoryListView: View {
                         .font(.caption)
                         .foregroundColor(.secondaryText)
 
-                    Text("\(session.entries.count) exercises")
-                        .font(.caption)
-                        .foregroundColor(.secondaryText)
+                    // Exercise counts: "3 logged" solo, or "3 logged · 1
+                    // skipped" when the user bailed on something. Dropping
+                    // the old generic "N exercises" — it hid the skips.
+                    if skippedCount > 0 {
+                        Text("\(loggedCount) logged · \(skippedCount) skipped")
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    } else {
+                        Text("\(loggedCount) exercise\(loggedCount == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
                 }
             }
 

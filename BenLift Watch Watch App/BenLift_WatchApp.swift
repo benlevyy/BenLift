@@ -37,5 +37,14 @@ struct WatchRootView: View {
             }
             .animation(.easeInOut(duration: 0.2), value: workoutVM.currentScreen)
         }
+        // Listen at the root so phone-owned snapshots keep flowing after
+        // the screen transitions away from home. Applying a snapshot
+        // updates both metadata (title, active index) and UI-visible state
+        // (exerciseStates, rest timer) with each broadcast.
+        .onReceive(NotificationCenter.default.publisher(for: .phoneOwnedSnapshotReceived)) { _ in
+            if let snap = WatchSyncService.shared.receivedPhoneSnapshot {
+                workoutVM.applyPhoneSnapshot(snap)
+            }
+        }
     }
 }

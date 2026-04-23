@@ -37,106 +37,126 @@ struct PhoneRestTimerView: View {
             return .failedRed
         }()
 
-        ZStack {
-            Color.black.opacity(0.5)
+        // Bottom-anchored card with a light backdrop. Taps on the
+        // backdrop are still blocked (so the exercise list above reads as
+        // "on pause"), but the visual weight is dialed way back — you can
+        // see what you just did without the app feeling hidden away.
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.15)
                 .ignoresSafeArea()
-                .onTapGesture {} // Prevent taps passing through
+                .onTapGesture {} // blocks taps without dismissing
 
-            VStack(spacing: 20) {
-                Text("Rest")
-                    .font(.headline)
-                    .foregroundColor(.secondaryText)
+            VStack(spacing: 14) {
+                // Small status header — confirms "rest" + shows HR inline
+                // without a separate row.
+                HStack(spacing: 10) {
+                    Text("Rest")
+                        .font(.subheadline.bold())
+                        .foregroundColor(.secondaryText)
+                    if workoutVM.currentHeartRate > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "heart.fill")
+                                .font(.caption2)
+                                .foregroundColor(.failedRed)
+                            Text("\(Int(workoutVM.currentHeartRate))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondaryText)
+                        }
+                    }
+                    Spacer()
+                    // Small undo link — deliberately demoted from a prominent
+                    // block button. Rare action; shouldn't compete with Skip/Go.
+                    Button {
+                        workoutVM.undoLastSet()
+                        onDismiss()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.caption2)
+                            Text("Undo")
+                                .font(.caption.bold())
+                        }
+                        .foregroundColor(.failedRed)
+                    }
+                    .buttonStyle(.plain)
+                }
 
-                ZStack {
-                    Circle()
-                        .stroke(Color.gray.opacity(0.2), lineWidth: 8)
+                HStack(spacing: 16) {
+                    // Ring + time — smaller than the centered version, same
+                    // info. 110pt still reads from arm's length but leaves
+                    // room for the action stack on the right.
+                    ZStack {
+                        Circle()
+                            .stroke(Color.gray.opacity(0.2), lineWidth: 6)
+                        Circle()
+                            .trim(from: 0, to: ringProgress)
+                            .stroke(ringColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 1), value: ringProgress)
+                        VStack(spacing: 0) {
+                            Text(displayTime)
+                                .font(.system(size: 30, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundColor(timerColor)
+                            if isOverRest {
+                                Text("over")
+                                    .font(.caption2)
+                                    .foregroundColor(timerColor.opacity(0.7))
+                            }
+                        }
+                    }
+                    .frame(width: 110, height: 110)
 
-                    Circle()
-                        .trim(from: 0, to: ringProgress)
-                        .stroke(ringColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.linear(duration: 1), value: ringProgress)
-
-                    VStack(spacing: 2) {
-                        Text(displayTime)
-                            .font(.system(size: 44, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundColor(timerColor)
-
-                        if isOverRest {
-                            Text("over rest")
-                                .font(.caption)
-                                .foregroundColor(timerColor.opacity(0.7))
+                    // Primary action + adjust stack on the right so the
+                    // thumb lands naturally. Skip/Go gets the lion's share
+                    // of visual weight — it's what the user reaches for.
+                    VStack(spacing: 8) {
+                        Button {
+                            onDismiss()
+                        } label: {
+                            Text(isOverRest ? "Go" : "Skip")
+                                .font(.headline.bold())
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .background(isOverRest ? Color.prGreen : Color.accentBlue)
+                                .cornerRadius(12)
+                        }
+                        HStack(spacing: 8) {
+                            Button {
+                                workoutVM.adjustRestTimer(by: -30)
+                            } label: {
+                                Text("−30")
+                                    .font(.subheadline.bold())
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 36)
+                                    .background(Color.cardSurface)
+                                    .cornerRadius(8)
+                            }
+                            Button {
+                                workoutVM.adjustRestTimer(by: 30)
+                            } label: {
+                                Text("+30")
+                                    .font(.subheadline.bold())
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 36)
+                                    .background(Color.cardSurface)
+                                    .cornerRadius(8)
+                            }
                         }
                     }
                 }
-                .frame(width: 160, height: 160)
-
-                if workoutVM.currentHeartRate > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "heart.fill")
-                            .font(.caption)
-                            .foregroundColor(.failedRed)
-                        Text("\(Int(workoutVM.currentHeartRate)) bpm")
-                            .font(.subheadline.monospacedDigit())
-                    }
-                }
-
-                HStack(spacing: 20) {
-                    Button {
-                        workoutVM.adjustRestTimer(by: -30)
-                    } label: {
-                        Text("-30")
-                            .font(.subheadline.bold())
-                            .frame(width: 56, height: 40)
-                            .background(Color.cardSurface)
-                            .cornerRadius(8)
-                    }
-
-                    Button {
-                        onDismiss()
-                    } label: {
-                        Text(isOverRest ? "Go" : "Skip")
-                            .font(.headline.bold())
-                            .foregroundColor(.white)
-                            .frame(width: 80, height: 44)
-                            .background(isOverRest ? Color.prGreen : Color.secondaryText)
-                            .cornerRadius(10)
-                    }
-
-                    Button {
-                        workoutVM.adjustRestTimer(by: 30)
-                    } label: {
-                        Text("+30")
-                            .font(.subheadline.bold())
-                            .frame(width: 56, height: 40)
-                            .background(Color.cardSurface)
-                            .cornerRadius(8)
-                    }
-                }
-
-                Button {
-                    workoutVM.undoLastSet()
-                    onDismiss()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.caption)
-                        Text("Undo Last Set")
-                            .font(.subheadline.bold())
-                    }
-                    .foregroundColor(.failedRed)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.failedRed.opacity(0.1))
-                    .cornerRadius(8)
-                }
             }
-            .padding(32)
-            .background(Color.appBackground)
-            .cornerRadius(20)
-            .shadow(color: .black.opacity(0.2), radius: 20)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color.appBackground)
+                    .shadow(color: .black.opacity(0.18), radius: 16, y: -2)
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
     }
 

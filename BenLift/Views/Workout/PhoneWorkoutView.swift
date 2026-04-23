@@ -9,6 +9,9 @@ struct PhoneWorkoutView: View {
     var programVM: ProgramViewModel
     @State private var navigationPath: [Int] = [] // exercise indices
     @State private var showAdaptSheet = false
+    /// Mode the adapt sheet should open in. Set by the caller before flipping
+    /// `showAdaptSheet` so the sheet doesn't have to sniff VM state.
+    @State private var adaptSheetMode: MidWorkoutAdaptSheet.Mode = .manual
     @State private var showFinishConfirmation = false
     /// Tracks the `restEndsAt` value the user has dismissed locally. The rest overlay
     /// stays hidden until the watch sends a new snapshot with a different restEndsAt
@@ -36,7 +39,25 @@ struct PhoneWorkoutView: View {
                                 workoutVM.selectExercise(at: index)
                                 navigationPath.append(index)
                             },
-                            onAdapt: { showAdaptSheet = true },
+                            onAdapt: {
+                                adaptSheetMode = .manual
+                                showAdaptSheet = true
+                            },
+                            onSwap: { index in
+                                // Swipe-left swap: auto-fill "user requested
+                                // alternative" reason, fire the LLM, open the
+                                // adapt sheet in compact mode where the result
+                                // renders with a single Accept button.
+                                workoutVM.adaptTargetIndex = index
+                                adaptSheetMode = .swipe
+                                showAdaptSheet = true
+                                Task {
+                                    await workoutVM.swipeSwap(
+                                        at: index,
+                                        program: programVM.currentProgram
+                                    )
+                                }
+                            },
                             onFinish: { showFinishConfirmation = true }
                         )
                     }
@@ -78,7 +99,8 @@ struct PhoneWorkoutView: View {
         .sheet(isPresented: $showAdaptSheet) {
             MidWorkoutAdaptSheet(
                 workoutVM: workoutVM,
-                program: programVM.currentProgram
+                program: programVM.currentProgram,
+                mode: adaptSheetMode
             )
             .presentationDetents([.medium, .large])
         }
@@ -122,6 +144,17 @@ struct PhoneWorkoutView: View {
                 dismiss()
             }
             .padding(.top, 8)
+        }
+        .task {
+            // Self-dismiss if no snapshot arrives in 10s — protects against
+            // ghost-session state where HK mirroring or WCSession fired a
+            // "workout started" signal but the watch never actually sent a
+            // snapshot (crash, lost connection, pre-Slice-1 stale cache).
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            if workoutVM.snapshot == nil {
+                print("[BenLift/Phone] No snapshot after 10s — dismissing ghost session")
+                dismiss()
+            }
         }
     }
 
