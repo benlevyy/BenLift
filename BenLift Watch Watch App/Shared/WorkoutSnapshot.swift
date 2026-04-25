@@ -82,7 +82,11 @@ enum WorkoutCommand: Codable {
     case adjustRestTimer(deltaSeconds: Int)
     case adaptExercise(index: Int, replacement: WatchExerciseInfo)
     case addExercise(info: WatchExerciseInfo)
-    case end
+    /// Terminate the in-progress workout. Optional 1...10 effort score
+    /// (Apple Workout Effort scale, watchOS 11+) rides along so the HK
+    /// owner can attach it to the saved HKWorkout via
+    /// `HKWorkoutEffortRelationship`. nil = user skipped the prompt.
+    case end(effortScore: Double?)
     /// Mirror is asking the owner to (re)send its current snapshot.
     /// Used on first connect or after backgrounding.
     case requestSnapshot

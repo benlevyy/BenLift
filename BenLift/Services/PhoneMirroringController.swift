@@ -19,6 +19,7 @@ class PhoneMirroringController {
     private let mirrorStartDebounce: TimeInterval = 1.0
 
     private var phoneCommandObserver: NSObjectProtocol?
+    private var vitalsObserver: NSObjectProtocol?
 
     init() {
         // Wire listeners BEFORE registering the HK handler.
@@ -53,6 +54,20 @@ class PhoneMirroringController {
                 self?.phoneWorkoutVM.handleRemoteCommand(cmd)
             }
         }
+        // Live vitals from the watch's sensor-only HK session. Ephemeral —
+        // we don't queue these, so if the phone is backgrounded we just
+        // miss a tick. The VM falls back to snapshot HR after 10s silence.
+        vitalsObserver = NotificationCenter.default.addObserver(
+            forName: .vitalsReceived,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let hr = note.userInfo?["hr"] as? Double ?? 0
+            let cal = note.userInfo?["cal"] as? Double ?? 0
+            MainActor.assumeIsolated {
+                self?.phoneWorkoutVM.applyLiveVitals(hr: hr, calories: cal)
+            }
+        }
         WorkoutMirroringService.shared.setup()
         print("[BenLift/PhoneMirroring] Controller ready — callbacks wired before HK setup")
     }
@@ -60,6 +75,9 @@ class PhoneMirroringController {
     deinit {
         if let phoneCommandObserver {
             NotificationCenter.default.removeObserver(phoneCommandObserver)
+        }
+        if let vitalsObserver {
+            NotificationCenter.default.removeObserver(vitalsObserver)
         }
     }
 

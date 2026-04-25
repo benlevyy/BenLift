@@ -496,14 +496,24 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     // MARK: - Finish Workout
 
-    func finishWorkout() {
+    /// Effort score (1...10) the user picked on the Summary screen. Stored
+    /// here so `endHealthKitSession` can attach it to the saved HKWorkout
+    /// via HKWorkoutEffortRelationship after finishWorkout returns. nil =
+    /// user skipped the prompt; we just don't write the sample.
+    private var pendingEffortScore: Double?
+
+    func finishWorkout(effortScore: Double? = nil) {
         // Phone-mirrored sessions: hand off to the phone. It has the saved
         // context and owns persistence; we just ask it to end. The phone's
         // terminal snapshot will then bring the watch UI back to home.
-        if forwardIfMirrored(.end) {
+        // Effort rides back on the command so if the watch's own Summary
+        // surfaces in a future watch-owned-but-phone-finishes flow, the
+        // phone knows what to record.
+        if forwardIfMirrored(.end(effortScore: effortScore)) {
             WKInterfaceDevice.current().play(.success)
             return
         }
+        pendingEffortScore = effortScore
         // Raise the teardown flag IMMEDIATELY — any mirrored command that
         // arrives while we're cleaning up must be ignored (it's targeting
         // a session that no longer exists from the user's perspective).
@@ -585,6 +595,13 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         // Terminal snapshot — phone ended the session.
         guard snap.isActive else {
             if workoutMode == .mirroredFromPhone {
+                // If the sensor-only HK session is still running (phone
+                // sent the terminal snapshot without a prior .end(effort)
+                // command — e.g. an older build, or a crash-end), finalize
+                // it with no effort rather than leaking an open session.
+                if workoutSession != nil {
+                    finalizeSensorHKSession(effortScore: nil)
+                }
                 exerciseStates = []
                 activeExerciseIndex = nil
                 currentPlan = nil
@@ -697,8 +714,29 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         if isFirstApply {
             currentScreen = .exerciseList
-            print("[BenLift/Watch] ← Entered phone-mirror mode: \(snap.exercises.count) exercises, session=\(snap.sessionName ?? "workout")")
+            // Phone owns the workout at the app level, but the watch owns
+            // the sensors. Spin up a local sensor-only HKWorkoutSession
+            // so HR + active-energy actually flow. No mirroring-to-companion
+            // — the phone isn't running an HKWorkoutSession to mirror to.
+            // HR samples are streamed back to the phone via WCSession
+            // ("vitals" message) in `workoutBuilder(_:didCollectDataOf:)`.
+            workoutStartDate = snap.workoutStartDate
+            startHealthKitSession()
+            print("[BenLift/Watch] ← Entered phone-mirror mode: \(snap.exercises.count) exercises, session=\(snap.sessionName ?? "workout"), HK sensor session starting")
         }
+    }
+
+    /// Finalize the sensor-only HKWorkoutSession that was running on behalf
+    /// of a phone-owned workout. Unlike `finishWorkout()`, this path does
+    /// NOT touch exerciseStates, the snapshot, or UI state — the phone's
+    /// terminal snapshot is authoritative for all of that. We only end
+    /// HK (saves HKWorkout + attaches effort via `saveEffortScore`).
+    private func finalizeSensorHKSession(effortScore: Double?) {
+        guard workoutSession != nil else { return }
+        pendingEffortScore = effortScore
+        endHealthKitSession()
+        WKInterfaceDevice.current().play(.success)
+        print("[BenLift/Watch] ✓ Sensor HK session finalized (effort=\(effortScore.map { "\(Int($0))" } ?? "nil"))")
     }
 
     // MARK: - Weight / Reps
@@ -757,9 +795,45 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     // MARK: - HealthKit Workout Session
 
+    /// Types we read live during a workout. The watch needs its own
+    /// authorization — iOS-side HealthKitService grants don't carry over.
+    private var watchHKReadTypes: Set<HKObjectType> {
+        var types: Set<HKObjectType> = []
+        if let hr = HKQuantityType.quantityType(forIdentifier: .heartRate) { types.insert(hr) }
+        if let cal = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) { types.insert(cal) }
+        return types
+    }
+
+    /// Types we write at end of workout: the workout itself, energy summary,
+    /// and the user's effort rating (Apple's Workout Effort, watchOS 11+).
+    private var watchHKShareTypes: Set<HKSampleType> {
+        var types: Set<HKSampleType> = [HKWorkoutType.workoutType()]
+        if let cal = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) { types.insert(cal) }
+        if let effort = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) { types.insert(effort) }
+        return types
+    }
+
     private func startHealthKitSession() {
         guard HKHealthStore.isHealthDataAvailable() else { return }
 
+        // Authorize first — iOS authorization does NOT propagate to watchOS.
+        // Without this the live builder silently drops HR samples and the
+        // workout never lands in Health. Idempotent: re-prompts only on the
+        // first run; Apple suppresses the dialog after that.
+        healthStore.requestAuthorization(toShare: watchHKShareTypes, read: watchHKReadTypes) { [weak self] success, error in
+            DispatchQueue.main.async {
+                if let error {
+                    print("[BenLift/Watch] ❌ HK authorization error: \(error)")
+                }
+                if !success {
+                    print("[BenLift/Watch] ⚠️ HK authorization not granted — HR/save will be limited")
+                }
+                self?.beginWorkoutSession()
+            }
+        }
+    }
+
+    private func beginWorkoutSession() {
         let config = HKWorkoutConfiguration()
         config.activityType = .traditionalStrengthTraining
         config.locationType = .indoor
@@ -771,13 +845,25 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             workoutBuilder?.delegate = self
             workoutBuilder?.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: config)
 
-            let startDate = Date()
+            // Respect the snapshot's workoutStartDate in mirrored mode so
+            // the saved HKWorkout lines up with the phone's timeline.
+            // Clamp to "not in the future" to stay within HK's allowed range.
+            let startDate = min(workoutStartDate ?? Date(), Date())
             workoutSession?.startActivity(with: startDate)
             workoutBuilder?.beginCollection(withStart: startDate) { [weak self] success, error in
+                guard let self else { return }
                 if success {
-                    print("[BenLift/Watch] HKWorkoutSession started — HR tracking active")
-                    // Start mirroring to companion iPhone
-                    self?.workoutSession?.startMirroringToCompanionDevice { mirrorSuccess, mirrorError in
+                    print("[BenLift/Watch] HKWorkoutSession started — HR tracking active (mode=\(self.workoutMode == .mirroredFromPhone ? "sensor-only" : "watch-owned"))")
+                    // Always mirror to companion. In watch-owned mode this
+                    // is the primary transport for snapshots + commands.
+                    // In phone-owned mode we still need it because
+                    // `WorkoutMirroringService.sendToWatch` (phone → watch
+                    // commands, including `.end(effortScore:)`) rides the
+                    // HK mirror channel. The phone's mirror-start handler
+                    // guards against treating this as a new watch-owned
+                    // session (see PhoneMirroringController.startMirrorSession),
+                    // so it's safe to always start.
+                    self.workoutSession?.startMirroringToCompanionDevice { mirrorSuccess, mirrorError in
                         if mirrorSuccess {
                             print("[BenLift/Watch] Mirroring started to companion device")
                         } else if let mirrorError {
@@ -795,18 +881,52 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     private func endHealthKitSession() {
         guard let session = workoutSession, let builder = workoutBuilder else { return }
+        let effort = pendingEffortScore
+        pendingEffortScore = nil
         session.end()
-        builder.endCollection(withEnd: Date()) { success, _ in
+        builder.endCollection(withEnd: Date()) { [weak self] success, _ in
             if success {
                 builder.finishWorkout { workout, _ in
                     if let workout {
                         print("[BenLift/Watch] ✅ HKWorkout saved: \(workout.duration.formattedDuration)")
+                        if let effort {
+                            self?.saveEffortScore(effort, for: workout)
+                        }
                     }
                 }
             }
         }
         workoutSession = nil
         workoutBuilder = nil
+    }
+
+    /// Persist the user's 1–10 effort rating using Apple's Workout Effort API
+    /// (watchOS 11+). Saved as an `HKQuantitySample` with unit
+    /// `appleEffortScore()` and linked to the workout so it surfaces in the
+    /// Fitness app alongside system-generated workouts.
+    private func saveEffortScore(_ score: Double, for workout: HKWorkout) {
+        guard let effortType = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) else { return }
+        let clamped = min(10, max(1, score))
+        let quantity = HKQuantity(unit: .appleEffortScore(), doubleValue: clamped)
+        let sample = HKQuantitySample(
+            type: effortType,
+            quantity: quantity,
+            start: workout.startDate,
+            end: workout.endDate
+        )
+        healthStore.save(sample) { [weak self] success, error in
+            guard success, let self else {
+                if let error { print("[BenLift/Watch] ❌ Effort save error: \(error)") }
+                return
+            }
+            self.healthStore.relateWorkoutEffortSample(sample, with: workout, activity: nil) { linked, linkError in
+                if linked {
+                    print("[BenLift/Watch] ✅ Effort \(Int(clamped))/10 linked to workout")
+                } else if let linkError {
+                    print("[BenLift/Watch] ❌ Effort link error: \(linkError)")
+                }
+            }
+        }
     }
 
     // MARK: - Mirroring: Send Messages to iPhone
@@ -939,12 +1059,22 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             addExercise(info)
             broadcastSnapshot()
 
-        case .end:
-            print("[BenLift/Watch] ← phone requested .end")
-            finishWorkout()
-            // User ended on phone — they're already seeing the post-workout sheet there.
-            // Skip the watch's local Summary screen and return straight to home.
-            dismissSummary()
+        case .end(let effort):
+            print("[BenLift/Watch] ← phone requested .end (effort=\(effort.map { "\($0)" } ?? "nil"))")
+            // When the watch is a sensor-only HK session for a phone-owned
+            // workout, the phone already persists state + state UI. All we
+            // need to do here is finalize the HK session (saves HKWorkout
+            // + attaches effort) and let the phone's terminal snapshot
+            // bring the watch UI home.
+            if workoutMode == .mirroredFromPhone {
+                finalizeSensorHKSession(effortScore: effort)
+            } else {
+                // Watch-owned workout that the phone ended remotely (e.g.
+                // user hit End on the phone). Run the usual save path
+                // and dismiss the Summary.
+                finishWorkout(effortScore: effort)
+                dismissSummary()
+            }
 
         case .requestSnapshot:
             print("[BenLift/Watch] ← phone requested snapshot")
@@ -997,10 +1127,21 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                         self.heartRateSamples.append(hr)
                         self.averageHeartRate = self.heartRateSamples.reduce(0, +) / Double(self.heartRateSamples.count)
 
-                        // Throttle HR snapshot broadcasts to every 5 seconds
+                        // Throttle per-device propagation to every 5 seconds.
+                        // In watch-owned mode this is a snapshot broadcast
+                        // (HKWorkoutSession mirror channel). In phone-owned
+                        // mode there's no mirrored HK session, so we push
+                        // over WCSession instead.
                         if Date().timeIntervalSince(self.lastHRSendTime) >= 5 {
                             self.lastHRSendTime = Date()
-                            self.broadcastSnapshot()
+                            if self.workoutMode == .mirroredFromPhone {
+                                WatchSyncService.shared.sendVitals(
+                                    heartRate: self.currentHeartRate,
+                                    calories: self.activeCalories
+                                )
+                            } else {
+                                self.broadcastSnapshot()
+                            }
                         }
                     }
                 }

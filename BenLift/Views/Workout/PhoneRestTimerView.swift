@@ -22,20 +22,11 @@ struct PhoneRestTimerView: View {
         let isOverRest = remaining <= 0
         let displayTime = isOverRest ? "+\(formatTime(abs(remaining)))" : formatTime(remaining)
         let ringProgress: Double = duration > 0 && !isOverRest ? max(0, min(1, 1 - (remaining / duration))) : 1.0
-        let ringColor: Color = {
-            if !isOverRest { return .accentBlue }
-            let over = abs(remaining)
-            if over < 30 { return .prGreen }
-            if over < 60 { return .legsOrange }
-            return .failedRed
-        }()
-        let timerColor: Color = {
-            if !isOverRest { return .primary }
-            let over = abs(remaining)
-            if over < 30 { return .prGreen }
-            if over < 60 { return .legsOrange }
-            return .failedRed
-        }()
+        // Two-state color: counting down = accent, over = red/attention.
+        // The old 3-tier green/orange/red ramp was noise during a timer the
+        // user watches for one event (zero).
+        let ringColor: Color = isOverRest ? .failedRed : .accentBlue
+        let timerColor: Color = isOverRest ? .failedRed : .primary
 
         // Bottom-anchored card with a light backdrop. Taps on the
         // backdrop are still blocked (so the exercise list above reads as
@@ -122,8 +113,10 @@ struct PhoneRestTimerView: View {
                                 .background(isOverRest ? Color.prGreen : Color.accentBlue)
                                 .cornerRadius(12)
                         }
+                        .sensoryFeedback(.impact(weight: .medium), trigger: isOverRest)
                         HStack(spacing: 8) {
                             Button {
+                                Haptics.selection()
                                 workoutVM.adjustRestTimer(by: -30)
                             } label: {
                                 Text("−30")
@@ -134,6 +127,7 @@ struct PhoneRestTimerView: View {
                                     .cornerRadius(8)
                             }
                             Button {
+                                Haptics.selection()
                                 workoutVM.adjustRestTimer(by: 30)
                             } label: {
                                 Text("+30")

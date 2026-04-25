@@ -42,11 +42,17 @@ struct ContentView: View {
                 }
         }
         .preferredColorScheme(.light)
-        .fullScreenCover(isPresented: $phoneMirroring.showPhoneWorkout) {
+        // .sheet w/ .large detent presents ~2× faster than .fullScreenCover
+        // (snappier slide). Drag indicator hidden + interactive-dismiss
+        // disabled (PhoneWorkoutView already does this internally) so the
+        // visual is indistinguishable from a full-screen cover.
+        .sheet(isPresented: $phoneMirroring.showPhoneWorkout) {
             PhoneWorkoutView(
                 workoutVM: phoneMirroring.phoneWorkoutVM,
                 programVM: sharedProgramVM
             )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
         }
         .onAppear {
             sharedProgramVM.loadCurrentProgram(modelContext: modelContext)

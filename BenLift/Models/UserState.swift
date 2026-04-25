@@ -66,6 +66,12 @@ struct UserState: Codable {
         let availableTime: Int?     // minutes, nil = no constraint
         let concerns: String?       // freeform user note; nil if empty
         let muscleOverrides: [String: MuscleOverrideEntry]
+        /// Deterministic working-set budget for today's session, derived
+        /// from `availableTime` and the user's `preferences.sessionShape
+        /// .preferredRestSeconds`. nil when no time limit is set. The AI
+        /// is instructed to plan exactly this many working sets — no
+        /// drift, no conservative trimming based on its own timing guess.
+        let targetWorkingSets: Int?
     }
 
     struct MuscleOverrideEntry: Codable {
@@ -123,10 +129,14 @@ struct UserState: Codable {
 
     /// Per muscle — recovery read at a glance. Only groups the user
     /// actually trains are included; zero-zero rows are noise.
+    /// `lastSource` distinguishes strength sessions from cross-activity
+    /// load (climbing heavily taxes pull muscles even though no sets
+    /// are logged), so the AI can reason about why a muscle is fatigued.
     struct MuscleStateEntry: Codable {
         let lastTrained: String     // "2d"
         let setsThisWeek: Int
         let status: String          // fresh/ready/recovering/sore
+        let lastSource: String      // "strength" / "climbing" / "running" / ...
     }
 
     // MARK: - Tier 3
@@ -152,6 +162,13 @@ struct UserState: Codable {
         let type: String            // "climbing" / "running" / ...
         let when: String            // "1d"
         let durationMin: Int
+        /// Active kcal per minute, rounded. nil when HK didn't record
+        /// calories or the workout was too short to compute reliably.
+        let kcalPerMin: Int?
+        /// "light" / "moderate" / "hard" / "unknown" — bucketed from
+        /// kcalPerMin so the AI can distinguish a 20-min warm-up climb
+        /// from a 90-min redpoint session without re-deriving.
+        let intensity: String
     }
 
     // MARK: - Tier 4
@@ -207,20 +224,29 @@ struct UserState: Codable {
 
         let exerciseLookup = DefaultExercises.buildMuscleGroupLookup(from: modelContext)
 
-        // --- Tier 1
-        let today = todayBlock(checkIn: checkIn, now: now)
-        let constraints = constraintsBlock(program: program, intelligence: intelligence)
-
-        // --- Tier 2
+        // --- Tier 2 (built first so Tier 1 can derive targetWorkingSets
+        // from the user's actual rest-between-sets pattern). Reordering
+        // here is a build-time concern only; the final struct still lists
+        // tiers in their read-time priority order.
         let preferences = preferencesBlock(
             sessions: sessions8wk,
             exerciseLookup: exerciseLookup,
             now: now
         )
+
+        // --- Tier 1
+        let today = todayBlock(
+            checkIn: checkIn,
+            restSeconds: preferences.sessionShape.preferredRestSeconds,
+            now: now
+        )
+        let constraints = constraintsBlock(program: program, intelligence: intelligence)
+
         let strength = strengthBlock(sessions: sessions60d, now: now)
         let muscleState = muscleStateBlock(
             sessions: sessions8wk,
             thisWeek: sessions7d,
+            activities: recentActivities,
             exerciseLookup: exerciseLookup,
             now: now
         )
@@ -281,7 +307,11 @@ private extension UserState {
 
     // MARK: Tier 1
 
-    static func todayBlock(checkIn: CheckInInput, now: Date) -> TodayBlock {
+    static func todayBlock(
+        checkIn: CheckInInput,
+        restSeconds: Int,
+        now: Date
+    ) -> TodayBlock {
         var overrides: [String: MuscleOverrideEntry] = [:]
         for (muscle, entry) in MuscleOverrideStore.load() {
             overrides[muscle] = MuscleOverrideEntry(
@@ -293,8 +323,34 @@ private extension UserState {
             feeling: checkIn.feeling,
             availableTime: checkIn.availableTime,
             concerns: checkIn.concerns.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            muscleOverrides: overrides
+            muscleOverrides: overrides,
+            targetWorkingSets: targetWorkingSets(
+                availableMinutes: checkIn.availableTime,
+                restSeconds: restSeconds
+            )
         )
+    }
+
+    /// Deterministic "how many working sets fit" budget. Replaces the
+    /// AI's fuzzy mental math with a concrete integer the prompt reader
+    /// is instructed to match.
+    ///
+    /// Model: per-set minutes = 1 (work) + rest/60. Overhead = 5 min
+    /// (warm-ups + transitions). Clamp low so an absurdly tight session
+    /// still returns at least 4 sets rather than 0 or negative.
+    ///
+    /// Returns nil when no time limit is set — the AI is then free to
+    /// pick whatever feels right.
+    static func targetWorkingSets(
+        availableMinutes: Int?,
+        restSeconds: Int
+    ) -> Int? {
+        guard let mins = availableMinutes, mins > 0 else { return nil }
+        let rest = restSeconds > 0 ? restSeconds : 150
+        let perSetMin = 1.0 + Double(rest) / 60.0
+        let budget = Double(mins) - 5.0
+        guard budget > 0 else { return 4 }
+        return max(4, Int((budget / perSetMin).rounded(.down)))
     }
 
     static func constraintsBlock(
@@ -478,17 +534,23 @@ private extension UserState {
     static func muscleStateBlock(
         sessions: [WorkoutSession],
         thisWeek: [WorkoutSession],
+        activities: [ActivityTuple],
         exerciseLookup: [String: MuscleGroup],
         now: Date
     ) -> [String: MuscleStateEntry] {
         var lastTrained: [MuscleGroup: Date] = [:]
+        var lastSource: [MuscleGroup: String] = [:]
         var setsThisWeek: [MuscleGroup: Int] = [:]
 
+        // Strength sessions first — set source to "strength" so cross-
+        // activity only overrides when it's more recent (the "what last
+        // loaded this muscle" question, answered by date, not by kind).
         for session in sessions {
             for entry in session.entries where !entry.sets.isEmpty {
                 guard let mg = exerciseLookup[entry.exerciseName] else { continue }
                 if lastTrained[mg] == nil || session.date > lastTrained[mg]! {
                     lastTrained[mg] = session.date
+                    lastSource[mg] = "strength"
                 }
             }
         }
@@ -499,12 +561,35 @@ private extension UserState {
             }
         }
 
+        // Cross-activity load from HealthKit. Climbing, running, etc.
+        // load real muscles — a climb yesterday shouldn't leave pull
+        // muscles showing "fresh" just because no sets were logged.
+        // Gated on intensity: "light" sessions (low kcal/min) still show
+        // up in the crossActivity list but don't reset the muscle clock,
+        // since a 20-min warm-up climb shouldn't flip back from fresh
+        // to sore. Moderate/hard/unknown all override when more recent.
+        for activity in activities {
+            let muscles = musclesLoadedBy(activityType: activity.type)
+            guard !muscles.isEmpty else { continue }
+            let (_, intensity) = classifyIntensity(
+                calories: activity.calories,
+                durationSec: activity.duration
+            )
+            if intensity == "light" { continue }
+            for mg in muscles {
+                if lastTrained[mg] == nil || activity.date > lastTrained[mg]! {
+                    lastTrained[mg] = activity.date
+                    lastSource[mg] = activity.type
+                }
+            }
+        }
+
         var out: [String: MuscleStateEntry] = [:]
         for mg in MuscleGroup.allCases {
             let last = lastTrained[mg]
             let sets = setsThisWeek[mg] ?? 0
-            // Skip trivially-zero muscles — no training in 8 weeks AND
-            // no sets this week. Nothing meaningful to say.
+            // Skip muscles with no strength history AND no cross-activity
+            // load in window AND no sets this week.
             guard last != nil || sets > 0 else { continue }
 
             let daysSince: Int
@@ -522,10 +607,34 @@ private extension UserState {
             out[mg.rawValue] = MuscleStateEntry(
                 lastTrained: last.map { relativeAgo(from: $0, now: now) } ?? "never",
                 setsThisWeek: sets,
-                status: status
+                status: status,
+                lastSource: lastSource[mg] ?? "strength"
             )
         }
         return out
+    }
+
+    /// Which muscles an HK activity loads enough to affect recovery.
+    /// Conservative list — only muscles that are *meaningfully* taxed.
+    /// Climbing mostly hammers pull + grip + core; running is lower-body
+    /// + core. Unrecognized types return empty (no effect on muscleState).
+    static func musclesLoadedBy(activityType: String) -> [MuscleGroup] {
+        switch activityType.lowercased() {
+        case "climbing", "rock climbing":
+            return [.back, .biceps, .forearms, .shoulders, .core]
+        case "running":
+            return [.quads, .hamstrings, .calves, .core]
+        case "cycling", "biking":
+            return [.quads, .hamstrings, .calves]
+        case "hiking":
+            return [.quads, .hamstrings, .calves, .glutes]
+        case "rowing":
+            return [.back, .biceps, .quads, .hamstrings, .core]
+        case "swimming":
+            return [.back, .shoulders, .chest, .core]
+        default:
+            return []
+        }
     }
 
     // MARK: Tier 3
@@ -568,12 +677,43 @@ private extension UserState {
         now: Date
     ) -> [CrossActivityEntry] {
         activities.prefix(7).map { act in
-            CrossActivityEntry(
+            let minutes = Int(act.duration / 60)
+            let (kcalPerMin, intensity) = classifyIntensity(
+                calories: act.calories,
+                durationSec: act.duration
+            )
+            return CrossActivityEntry(
                 type: act.type,
                 when: relativeAgo(from: act.date, now: now),
-                durationMin: Int(act.duration / 60)
+                durationMin: minutes,
+                kcalPerMin: kcalPerMin,
+                intensity: intensity
             )
         }
+    }
+
+    /// Classify a cross-activity by active-calorie burn rate. Uses
+    /// generic thresholds that land reasonably across climbing, running,
+    /// cycling, etc. — no per-sport tuning yet because Apple HK's active
+    /// calorie output is already sport-normalized. Too-short sessions
+    /// (<5 min) fall through to "unknown" since kcal/min is noisy when
+    /// warm-up calories dominate the sample.
+    ///
+    /// Thresholds: <6 light · 6-9 moderate · ≥9 hard. Adjust if empirical
+    /// data shows misclassification.
+    static func classifyIntensity(
+        calories: Double?,
+        durationSec: TimeInterval
+    ) -> (kcalPerMin: Int?, intensity: String) {
+        guard let calories, calories > 0, durationSec >= 300 else {
+            return (nil, "unknown")
+        }
+        let rate = calories / (durationSec / 60)
+        let bucket: String
+        if rate < 6 { bucket = "light" }
+        else if rate < 9 { bucket = "moderate" }
+        else { bucket = "hard" }
+        return (Int(rate.rounded()), bucket)
     }
 
     // MARK: Tier 4

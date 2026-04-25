@@ -639,8 +639,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "BenLift Watch";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = a;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BenLift reads your heart rate and active energy during workouts to track effort and intensity.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BenLift saves strength workouts, calories, and effort ratings to Apple Health.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKBackgroundModes = "workout-processing";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = benlevy.BenLift;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -674,8 +676,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "BenLift Watch";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = a;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BenLift reads your heart rate and active energy during workouts to track effort and intensity.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BenLift saves strength workouts, calories, and effort ratings to Apple Health.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKBackgroundModes = "workout-processing";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = benlevy.BenLift;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

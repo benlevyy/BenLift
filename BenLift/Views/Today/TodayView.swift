@@ -49,22 +49,29 @@ struct TodayView: View {
                         refreshPill
                     }
 
-                    // Loading / content — use ZStack so loading doesn't shift layout
+                    // Skeleton only on true cold start (no plan yet AND no
+                    // recommendation). On refresh, the existing plan stays
+                    // visible (dimmed) until the new recommendation event
+                    // lands and atomically replaces it — no flash to empty,
+                    // refresh feels like an in-place update.
                     let isLoading = coachVM.isLoadingRecommendation || coachVM.isGenerating
+                    let showSkeleton = coachVM.recommendation == nil
+                        && coachVM.editedExercises.isEmpty
+                        && isLoading
 
-                    if isLoading {
+                    if showSkeleton {
                         ThinkingView(
                             phase: coachVM.isLoadingRecommendation ? .analyzing : .building
                         )
+                        .transition(.opacity)
                     } else {
-                        // AI recommendation header
                         if let rec = coachVM.recommendation {
                             recommendationHeader(rec)
+                                .transition(.opacity)
                         }
-
-                        // Exercise plan
                         if !coachVM.editedExercises.isEmpty {
                             planSection
+                                .transition(.opacity)
                         }
                     }
 
@@ -108,6 +115,15 @@ struct TodayView: View {
                 concernsDraft = coachVM.concerns
                 Task { healthContext = await HealthKitService.shared.fetchHealthContext() }
             }
+            // Keep the local draft in sync when the VM resets concerns
+            // after a successful plan generation. Without this, the
+            // field stays full of the now-consumed intent and the UX
+            // implies it's still pending.
+            .onChange(of: coachVM.concerns) { _, newValue in
+                if newValue != concernsDraft {
+                    concernsDraft = newValue
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .workoutSessionSaved)) { notification in
                 if let sessionId = notification.object as? UUID {
                     let descriptor = FetchDescriptor<WorkoutSession>(
@@ -139,14 +155,51 @@ struct TodayView: View {
 
     // MARK: - Recommendation Header
 
-    private func recommendationHeader(_ rec: RecoveryRecommendation) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(rec.recommendedSessionName)
-                .font(.title3.bold())
+    /// Both LLM paragraphs (reasoning + strategy note) live behind one
+    /// "Why" disclosure so the default state is just the session title —
+    /// no wall of grey text on the home screen.
+    @State private var showRationale = false
 
-            Text(rec.reasoning)
-                .font(.caption)
-                .foregroundColor(.secondaryText)
+    private func recommendationHeader(_ rec: RecoveryRecommendation) -> some View {
+        let strategy = coachVM.currentPlan?.sessionStrategy
+        let hasDetail = !rec.reasoning.isEmpty || (strategy?.isEmpty == false)
+
+        return VStack(alignment: .leading, spacing: showRationale ? 10 : 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(rec.recommendedSessionName)
+                    .font(.title3.bold())
+                Spacer()
+                if hasDetail {
+                    Button {
+                        Haptics.selection()
+                        withAnimation(.smooth(duration: 0.3)) { showRationale.toggle() }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .rotationEffect(.degrees(showRationale ? 180 : 0))
+                            .foregroundColor(.secondaryText)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if showRationale {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !rec.reasoning.isEmpty {
+                        Text(rec.reasoning)
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
+                    if let strategy, !strategy.isEmpty {
+                        Text(strategy)
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -156,53 +209,110 @@ struct TodayView: View {
 
     // MARK: - Plan Section
 
+    /// Vestigial — kept only because the `exerciseRow` signature still
+    /// references it for the trailing delete affordance during transition.
+    /// Long-press context menu is now the canonical edit path; this is
+    /// always false. Will be removed once the inline Edit toggle is
+    /// fully gone from the row body.
     @State private var isEditingPlan = false
+
+    /// Reminders-style explicit reorder mode. Entered by tapping "Move"
+    /// in a row's context menu; exited via the "Done" button that
+    /// surfaces above the plan list while it's active. Drag handles +
+    /// the drag gesture are gated on this so a casual touch can't
+    /// reshuffle the plan accidentally.
+    @State private var isMoveMode = false
+
+    // MARK: - Custom Drag State (Home Screen-style reorder)
+    //
+    // We don't use `.draggable` / `.dropDestination` for reorder because
+    // their thumbnail preview detaches from the layout (a small chip
+    // floats; the row's slot disappears). For Apple-Home-Screen feel,
+    // the row itself follows the finger at full size while neighbors
+    // slide aside to open a slot. We track:
+    //  - `dragSourceIndex`: which row the user grabbed
+    //  - `dragTranslationY`: cumulative finger displacement
+    //  - `dragTargetIndex`: which slot the row currently occupies
+    // Other rows compute their offset from these to slide aside.
+
+    @State private var dragSourceIndex: Int? = nil
+    @State private var dragTranslationY: CGFloat = 0
+    @State private var dragTargetIndex: Int? = nil
+
+    /// Approximate height of one plan row including its trailing
+    /// 4pt VStack spacing. Tunable; small mismatches just mean the
+    /// "snap" between slots fires a little earlier or later. Measured
+    /// once and assumed uniform — every row uses the same vertical
+    /// padding so this holds in practice.
+    private let rowSlotHeight: CGFloat = 64
 
     private var planSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Strategy note
-            if let strategy = coachVM.currentPlan?.sessionStrategy {
-                Text(strategy)
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
-                    .padding(8)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(6)
+            // Strategy note has moved into the recommendation header's
+            // "Why" disclosure (recommendationHeader) so the home screen
+            // doesn't have two stacked paragraphs of grey LLM text.
+
+            // Move-mode banner — only visible while reorder is active.
+            // Mirrors Reminders' "Done" affordance for entering/exiting
+            // an explicit edit state.
+            if isMoveMode {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.caption.weight(.semibold))
+                    Text("Drag to reorder")
+                        .font(.caption.bold())
+                    Spacer()
+                    Button("Done") {
+                        Haptics.selection()
+                        withAnimation(.smooth(duration: 0.3)) { isMoveMode = false }
+                    }
+                    .font(.subheadline.bold())
+                    .foregroundColor(.accentBlue)
+                }
+                .foregroundColor(.accentBlue)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.accentBlue.opacity(0.08))
+                .cornerRadius(8)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
 
             // Exercise list — LazyVStack, not List, so there's a single
             // scroll container (the outer ScrollView). A nested List with
             // scrollDisabled still had gesture + fixed-height-frame issues
             // that cut rows off and made scrolling feel flaky.
-            LazyVStack(spacing: 4) {
-                ForEach(Array(coachVM.editedExercises.enumerated()), id: \.element.name) { idx, exercise in
-                    exerciseRow(idx: idx, exercise: exercise)
-                }
-            }
-
-            // Actions
-            HStack(spacing: 8) {
-                Button {
-                    isEditingPlan.toggle()
-                } label: {
-                    Text(isEditingPlan ? "Done" : "Edit")
-                        .font(.caption)
-                        .foregroundColor(.accentBlue)
-                }
-
-                Spacer()
-
-                Button {
-                    showAddExercise = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                        Text("Add")
+            // Eager VStack (not Lazy) so rows don't collapse to zero
+            // height when their identity churns — the cause of the
+            // mid-swap "empty gap" before. Only ~5–7 rows so eager
+            // layout is cheap. Identity by exercise name; safer than
+            // index-based keys when the list mutates mid-stream during
+            // a streaming plan generation (an out-of-range access if
+            // SwiftUI re-reads indices during a shrink).
+            VStack(spacing: 4) {
+                ForEach(coachVM.editedExercises) { exercise in
+                    if let idx = coachVM.editedExercises.firstIndex(where: { $0.name == exercise.name }) {
+                        exerciseRow(idx: idx, exercise: exercise)
+                            .transition(.opacity.combined(with: .offset(y: 8)))
                     }
-                    .font(.caption)
-                    .foregroundColor(.accentBlue)
+                }
+                // Inline footer — always last, visually quieter than a
+                // populated row. Hidden during initial generation to
+                // avoid offering "Add" before the AI plan exists.
+                if !coachVM.isLoadingRecommendation {
+                    addExerciseFooterRow
+                        .transition(.opacity)
                 }
             }
+            .animation(.smooth(duration: 0.35), value: coachVM.editedExercises.map(\.name))
+            // Subtle dim while a new plan is regenerating — signals "this
+            // is becoming stale" without flashing to empty. Existing rows
+            // stay tappable; the user just sees they're being refreshed.
+            .opacity((coachVM.isGenerating || coachVM.isLoadingRecommendation) ? 0.55 : 1.0)
+            .animation(.smooth(duration: 0.3), value: coachVM.isGenerating)
+
+            // Edit / Add / Regenerate moved into the recommendation
+            // header's ⋯ menu (see `planMenu`). Plan section is now just
+            // rows + Start.
 
             startControl
         }
@@ -240,16 +350,28 @@ struct TodayView: View {
 
     // MARK: - Exercise Row
 
-    /// Single plan-list row. Always-visible quick-swap button; delete button
-    /// surfaces only in edit mode (`isEditingPlan`). Uses `PressableIconStyle`
-    /// so the inline buttons have real press feedback (previous `.plain`
-    /// style gave no visual response, which read as "broken"). Tap targets
-    /// are a full 44×44 per Apple's HIG minimum.
+    /// Plan-list row. No inline action buttons — all modifications happen
+    /// via gestures: long-press for the context menu (Swap / Remove),
+    /// pull-to-refresh on the scroll view for full regenerate, and the
+    /// trailing inline "+ Add exercise" footer for additions. Matches
+    /// Photos / Files / Reminders interaction model.
+    /// A spinner replaces the muscle dot when this row is mid-swap so
+    /// the user has feedback that the LLM call is running without
+    /// reserving a permanent button slot for it.
     private func exerciseRow(idx: Int, exercise: PlannedExercise) -> some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(intentColor(exercise.intent))
-                .frame(width: 8, height: 8)
+            Group {
+                if coachVM.swappingIndex == idx {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(.accentBlue)
+                } else {
+                    Circle()
+                        .fill(intentColor(exercise.intent))
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .frame(width: 12, height: 12)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(exercise.name)
@@ -266,51 +388,167 @@ struct TodayView: View {
                 }
             }
             Spacer()
-
-            // Delete — visible only in edit mode. Passes modelContext so
-            // the removal also writes a durable exerciseOut UserRule
-            // (the AI respects these deterministically next time it
-            // plans).
-            if isEditingPlan {
-                Button {
-                    coachVM.removeExercise(at: idx, modelContext: modelContext)
-                } label: {
-                    Image(systemName: "minus.circle.fill")
-                        .font(.title3)
-                        .foregroundColor(.failedRed)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PressableIconStyle())
+            // Drag handle — only present in move mode. Reads as
+            // "you can grab this," and acts as a visual confirmation
+            // the user is in reorder mode.
+            if isMoveMode {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body.weight(.medium))
+                    .foregroundColor(.secondaryText)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isMoveMode ? Color.accentBlue.opacity(0.06) : Color.cardSurface)
+        .cornerRadius(10)
+        .scaleEffect(isMoveMode ? 1.0 : 1.0)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .contextMenu {
+            // Move first — most discoverable action for "I want to
+            // rearrange." Outside move mode the user can't drag, so
+            // this is the entry point.
+            Button {
+                Haptics.selection()
+                withAnimation(.smooth(duration: 0.3)) { isMoveMode = true }
+            } label: {
+                Label("Move", systemImage: "arrow.up.arrow.down")
             }
 
-            // Quick swap — AI picks a similar alternative, no user input.
             Button {
+                Haptics.selection()
                 Task { await coachVM.quickSwap(at: idx, modelContext: modelContext) }
             } label: {
-                Group {
-                    if coachVM.swappingIndex == idx {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.body.weight(.semibold))
-                            .foregroundColor(.accentBlue)
+                Label("Swap Exercise", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(coachVM.swappingIndex != nil)
+
+            Divider()
+
+            Button(role: .destructive) {
+                Haptics.warning()
+                coachVM.removeExercise(at: idx, modelContext: modelContext)
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+        }
+        // Home-Screen-style reorder: the row itself rides the finger at
+        // full size, and neighbors slide aside to open a slot. Lifted
+        // row gets a soft shadow + 1.03× scale so it reads as "picked
+        // up." Gated on move mode so casual touches can't trigger.
+        .offset(y: rowYOffset(idx: idx))
+        .scaleEffect(dragSourceIndex == idx ? 1.03 : 1.0)
+        .shadow(
+            color: dragSourceIndex == idx ? .black.opacity(0.18) : .clear,
+            radius: 10,
+            y: 4
+        )
+        .zIndex(dragSourceIndex == idx ? 1 : 0)
+        .animation(.smooth(duration: 0.25), value: dragTargetIndex)
+        .animation(.smooth(duration: 0.2), value: dragSourceIndex)
+        .gesture(isMoveMode ? makeDragGesture(idx: idx) : nil)
+    }
+
+    // MARK: - Custom Drag Math
+
+    /// Per-row Y offset during a drag.
+    /// - The dragged row follows the finger directly (`dragTranslationY`).
+    /// - Rows between source and target slide one slot in the opposite
+    ///   direction to make room.
+    /// Returns 0 for everyone when no drag is in flight.
+    private func rowYOffset(idx: Int) -> CGFloat {
+        guard let from = dragSourceIndex else { return 0 }
+        if idx == from {
+            return dragTranslationY
+        }
+        guard let to = dragTargetIndex, from != to else { return 0 }
+        if from < to {
+            // Dragging downward — rows in (from, to] slide UP one slot.
+            return (idx > from && idx <= to) ? -rowSlotHeight : 0
+        } else {
+            // Dragging upward — rows in [to, from) slide DOWN one slot.
+            return (idx >= to && idx < from) ? rowSlotHeight : 0
+        }
+    }
+
+    /// Builds the drag gesture for a row. Tracks finger movement, snaps
+    /// the target slot when the finger crosses the midpoint into a new
+    /// row's territory, and commits on release.
+    private func makeDragGesture(idx: Int) -> some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                if dragSourceIndex == nil {
+                    // First movement — pick up the row.
+                    dragSourceIndex = idx
+                    dragTargetIndex = idx
+                    Haptics.impact(.light)
+                }
+                dragTranslationY = value.translation.height
+                let count = coachVM.editedExercises.count
+                guard count > 0 else { return }
+                // Snap target to the slot the row's center is currently
+                // occupying. Half-slot bias means the swap "feels"
+                // crossing into the neighbor's space.
+                let slotsMoved = Int((dragTranslationY / rowSlotHeight).rounded())
+                let proposed = max(0, min(count - 1, idx + slotsMoved))
+                if proposed != dragTargetIndex {
+                    Haptics.selection()
+                    withAnimation(.smooth(duration: 0.22)) {
+                        dragTargetIndex = proposed
                     }
                 }
-                .frame(width: 36, height: 36)
-                .background(Color.accentBlue.opacity(0.15))
-                .clipShape(Circle())
-                .frame(width: 44, height: 44)  // 44pt hit area, 36pt visual
-                .contentShape(Rectangle())
             }
-            .buttonStyle(PressableIconStyle())
-            .disabled(coachVM.swappingIndex != nil)
+            .onEnded { _ in
+                let from = dragSourceIndex
+                let to = dragTargetIndex
+                if let from, let to, from != to, from < coachVM.editedExercises.count {
+                    Haptics.impact(.medium)
+                    let name = coachVM.editedExercises[from].name
+                    withAnimation(.smooth(duration: 0.3)) {
+                        coachVM.moveExercise(named: name, toIndex: to)
+                    }
+                }
+                // Reset drag state regardless of commit so visuals
+                // settle cleanly even if the drag was a no-op.
+                withAnimation(.smooth(duration: 0.22)) {
+                    dragSourceIndex = nil
+                    dragTargetIndex = nil
+                    dragTranslationY = 0
+                }
+            }
+    }
+
+    // ReorderableModifier removed — replaced by home-screen-style
+    // DragGesture math above (rowYOffset / makeDragGesture).
+
+    // MARK: - Add-Exercise Footer Row
+
+    /// Trailing row at the bottom of the plan list that opens the
+    /// add-exercise sheet. Same Reminders / Notes pattern: the "next"
+    /// row is always an inline affordance instead of a separate button
+    /// elsewhere on the page.
+    private var addExerciseFooterRow: some View {
+        Button {
+            Haptics.selection()
+            showAddExercise = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.body)
+                    .foregroundColor(.accentBlue)
+                    .frame(width: 12, height: 12)
+                Text("Add Exercise")
+                    .font(.subheadline)
+                    .foregroundColor(.accentBlue)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 10))
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(Color.cardSurface)
-        .cornerRadius(10)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Inline Check-In Row
@@ -556,6 +794,9 @@ struct TodayView: View {
     /// the existing watch-owner + HK mirror path unchanged.
     private var startControl: some View {
         Button {
+            // Instant haptic so the tap feels acknowledged before the sheet
+            // animation gets going — masks the ~0.3s presentation delay.
+            Haptics.impact(.medium)
             guard let plan = coachVM.buildWatchPlan() else { return }
             phoneMirroring.startStandaloneSession(plan: plan)
         } label: {

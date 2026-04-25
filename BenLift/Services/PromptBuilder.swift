@@ -35,6 +35,7 @@ struct PromptBuilder {
 
             READING THE USER STATE:
             - `today` is today's self-report. Weight it heavily.
+            - `today.targetWorkingSets`, when present, is the DETERMINISTIC working-set budget for this session — derived from `today.availableTime` and the user's actual rest pattern. Your plan's total working sets (sum of `sets` across exercises) MUST match this integer, ±1. Do not trim further "to be safe" and do not exceed it. If nil, pick freely.
             - `constraints.injuries` are hard constraints — never suggest a movement they contraindicate.
             - `rules` are explicit decisions the user made. OBEY rules.exerciseOut — never suggest an exercise whose `subject` is in that list. These are not suggestions, they are user-set boundaries.
             - `preferences.rituals` are exercises the user does in ≥60% of their sessions — lean into them when the session focus fits.

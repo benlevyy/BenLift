@@ -12,7 +12,7 @@ struct PhoneWorkoutView: View {
     /// Mode the adapt sheet should open in. Set by the caller before flipping
     /// `showAdaptSheet` so the sheet doesn't have to sniff VM state.
     @State private var adaptSheetMode: MidWorkoutAdaptSheet.Mode = .manual
-    @State private var showFinishConfirmation = false
+    @State private var showFinishSheet = false
     /// Tracks the `restEndsAt` value the user has dismissed locally. The rest overlay
     /// stays hidden until the watch sends a new snapshot with a different restEndsAt
     /// (a new rest period). Lets the user dismiss the overlay even if the watch is slow
@@ -58,7 +58,7 @@ struct PhoneWorkoutView: View {
                                     )
                                 }
                             },
-                            onFinish: { showFinishConfirmation = true }
+                            onFinish: { showFinishSheet = true }
                         )
                     }
                     .navigationDestination(for: Int.self) { index in
@@ -95,7 +95,7 @@ struct PhoneWorkoutView: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: workoutVM.isResting)
+        .animation(.smooth(duration: 0.35), value: workoutVM.isResting)
         .sheet(isPresented: $showAdaptSheet) {
             MidWorkoutAdaptSheet(
                 workoutVM: workoutVM,
@@ -104,20 +104,21 @@ struct PhoneWorkoutView: View {
             )
             .presentationDetents([.medium, .large])
         }
-        .alert("Finish Workout?", isPresented: $showFinishConfirmation) {
-            Button("End Workout", role: .destructive) {
+        .sheet(isPresented: $showFinishSheet) {
+            FinishWorkoutSheet(workoutVM: workoutVM) { effort in
                 workoutVM.finishWorkout(
                     modelContext: modelContext,
                     feeling: nil,
-                    concerns: nil
+                    concerns: nil,
+                    effortScore: effort
                 )
+                showFinishSheet = false
                 dismiss()
+            } onCancel: {
+                showFinishSheet = false
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            let sets = workoutVM.totalSetsCompleted
-            let vol = Int(workoutVM.totalVolume)
-            Text("\(sets) sets logged, \(vol) lbs total volume")
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .interactiveDismissDisabled(workoutVM.isWorkoutActive || workoutVM.snapshot == nil)
         .onReceive(NotificationCenter.default.publisher(for: .liveActivitySwapTapped)) { _ in
@@ -189,7 +190,7 @@ struct PhoneWorkoutView: View {
 
             // End workout button
             Button {
-                showFinishConfirmation = true
+                showFinishSheet = true
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title3)
@@ -199,5 +200,116 @@ struct PhoneWorkoutView: View {
         .padding(.horizontal)
         .padding(.vertical, 10)
         .background(Color.cardSurface)
+    }
+}
+
+// MARK: - Finish Workout Sheet
+
+/// Post-"End Workout" confirmation with an Apple-style 1...10 effort picker
+/// (RPE/Workout Effort). The picked score is passed to `finishWorkout` so
+/// the watch can attach it to the saved HKWorkout via
+/// `HKWorkoutEffortRelationship`. "Skip" saves the workout without effort.
+private struct FinishWorkoutSheet: View {
+    @Bindable var workoutVM: PhoneWorkoutViewModel
+    let onConfirm: (Double?) -> Void
+    let onCancel: () -> Void
+
+    @State private var effort: Int = 6
+
+    var body: some View {
+        VStack(spacing: 28) {
+            VStack(spacing: 6) {
+                Text("Rate Effort")
+                    .font(.title2.bold())
+                Text(effortLabel(effort))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: effort)
+            }
+            .padding(.top, 12)
+
+            // Stats strip — monochrome, no cards. Lets the picker breathe.
+            HStack(spacing: 24) {
+                stat("\(workoutVM.totalSetsCompleted)", "sets")
+                stat("\(Int(workoutVM.totalVolume))", "lbs")
+                stat(workoutVM.elapsedTime.formattedMinSec, "time")
+                if workoutVM.currentHeartRate > 0 {
+                    stat("\(Int(workoutVM.currentHeartRate))", "bpm")
+                }
+            }
+            .foregroundColor(.secondary)
+
+            // Big number + slider. One affordance, one gesture.
+            VStack(spacing: 16) {
+                Text("\(effort)")
+                    .font(.system(size: 72, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: effort)
+                    .foregroundColor(.primary)
+
+                Slider(
+                    value: Binding(
+                        get: { Double(effort) },
+                        set: { effort = max(1, min(10, Int($0.rounded()))) }
+                    ),
+                    in: 1...10,
+                    step: 1
+                ) {
+                    Text("Effort")
+                } minimumValueLabel: {
+                    Text("1").font(.caption2).foregroundColor(.secondary)
+                } maximumValueLabel: {
+                    Text("10").font(.caption2).foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 4)
+            }
+            .sensoryFeedback(.selection, trigger: effort)
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 10) {
+                Button {
+                    onConfirm(Double(effort))
+                } label: {
+                    Text("Save Workout")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .sensoryFeedback(.success, trigger: 0)
+
+                Button("Skip rating") {
+                    onConfirm(nil)
+                }
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            }
+        }
+        .padding(20)
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.subheadline.bold().monospacedDigit())
+                .foregroundColor(.primary)
+            Text(label)
+                .font(.caption2)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func effortLabel(_ score: Int) -> String {
+        switch score {
+        case 1...2: return "Easy"
+        case 3...4: return "Light"
+        case 5...6: return "Moderate"
+        case 7...8: return "Hard"
+        case 9: return "Very Hard"
+        default: return "All Out"
+        }
     }
 }

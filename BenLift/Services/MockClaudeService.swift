@@ -72,6 +72,39 @@ actor MockClaudeCoachService: CoachServiceProtocol {
         )
     }
 
+    func streamRecommendAndPlan(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String
+    ) -> AsyncThrowingStream<RecommendAndPlanStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    // Simulate streamed delivery: recommendation first,
+                    // then exercises one-by-one, then complete. Useful for
+                    // SwiftUI previews and tests of the row-fade-in path.
+                    let full = try await self.recommendAndPlan(
+                        systemPrompt: systemPrompt,
+                        userPrompt: userPrompt,
+                        model: model
+                    )
+                    continuation.yield(.recommendation(full.asRecommendation))
+                    for exercise in full.exercises {
+                        try await Task.sleep(nanoseconds: 250_000_000)
+                        continuation.yield(.exercise(exercise))
+                    }
+                    if let strategy = full.sessionStrategy {
+                        continuation.yield(.strategy(strategy))
+                    }
+                    continuation.yield(.complete(full))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
     func recommendAndPlan(systemPrompt: String, userPrompt: String, model: String) async throws -> RecommendAndPlanResponse {
         try await Task.sleep(nanoseconds: delay)
         let plan = try await generateDailyPlan(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model)

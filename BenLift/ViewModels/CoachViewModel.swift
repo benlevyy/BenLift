@@ -279,28 +279,102 @@ class CoachViewModel {
         let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
         print("[BenLift/Coach] recommendAndPlan: feeling=\(feeling), model=\(model)")
 
+        // Don't wipe the visible plan up front — refresh feels slow when
+        // the screen flashes through empty/skeleton even though the old
+        // plan was perfectly fine to look at while the new one builds.
+        // We hold the existing rows on screen (UI dims them via
+        // `isGenerating`) and only replace them when the new
+        // recommendation event lands. Cold-start case is unaffected:
+        // editedExercises is already empty, so the skeleton shows
+        // automatically until first event.
+
         do {
-            let response = try await coachService.recommendAndPlan(
+            let stream = coachService.streamRecommendAndPlan(
                 systemPrompt: system,
                 userPrompt: user,
                 model: model
             )
+            var finalResponse: RecommendAndPlanResponse?
+            var didClearOldPlan = false
 
-            // Populate both halves of the view model atomically.
-            recommendation = response.asRecommendation
-            targetMuscleGroups = response.recommendedFocus.compactMap { MuscleGroup(rawValue: $0) }
-            currentSessionName = response.recommendedSessionName
+            for try await event in stream {
+                switch event {
+                case .recommendation(let rec):
+                    // First event — atomically: clear old plan, set new
+                    // recommendation, dismiss skeleton. Wrapped in
+                    // withAnimation so the swap is one smooth transition,
+                    // not three discrete renders.
+                    withAnimation(.smooth(duration: 0.4)) {
+                        editedExercises = []
+                        currentPlan = nil
+                        recommendation = rec
+                        targetMuscleGroups = rec.recommendedFocus.compactMap { MuscleGroup(rawValue: $0) }
+                        currentSessionName = rec.recommendedSessionName
+                        isLoadingRecommendation = false
+                    }
+                    didClearOldPlan = true
 
+                case .exercise(let exercise):
+                    // Defensive: if for some reason the recommendation
+                    // event was skipped (malformed prefix), still clear
+                    // the old plan before appending so we don't mix old
+                    // and new exercises.
+                    if !didClearOldPlan {
+                        withAnimation(.smooth(duration: 0.4)) {
+                            editedExercises = []
+                        }
+                        didClearOldPlan = true
+                    }
+                    // Append as-it-arrives. pickStartingWeight runs the
+                    // same sanitization (history > LLM > default) used by
+                    // the non-streaming path so partial state is never
+                    // worse than full state.
+                    editedExercises.append(pickStartingWeight(exercise))
+
+                case .strategy(let strategy):
+                    // We don't have the full DailyPlanResponse yet, so
+                    // park the strategy on a placeholder currentPlan.
+                    // It'll get replaced on .complete with the real
+                    // typed object.
+                    currentPlan = DailyPlanResponse(
+                        exercises: editedExercises,
+                        sessionStrategy: strategy,
+                        estimatedDuration: nil,
+                        deloadNote: nil
+                    )
+
+                case .complete(let response):
+                    finalResponse = response
+                }
+            }
+
+            guard let response = finalResponse else {
+                throw ClaudeError.noContent
+            }
+
+            // Final sync: source of truth is the complete response.
+            // Anything the scanner missed (rare malformed-prefix case)
+            // gets backfilled here so the saved plan is always atomic.
+            if recommendation == nil {
+                recommendation = response.asRecommendation
+                targetMuscleGroups = response.recommendedFocus.compactMap { MuscleGroup(rawValue: $0) }
+                currentSessionName = response.recommendedSessionName
+            }
             let plan = response.asPlan
             currentPlan = plan
-
-            // Starting weight: trust user history > sanitized LLM suggestion > library default.
-            // The LLM has hallucinated absurd weights (e.g. 15000 lb) in prior sessions;
-            // we never let those reach the watch.
+            // Reconcile streamed exercises against the canonical list —
+            // identical in the happy path; the canonical list wins on any
+            // diff (e.g. if the model patched an earlier exercise mid-stream).
             editedExercises = plan.exercises.map(pickStartingWeight)
 
             // Fresh plan → fresh adjustment history.
             planAdjustments = []
+
+            // Concerns were one-shot intent ("go heavy today", "shoulder
+            // sore") — once a plan absorbs them they're stale. Clear on
+            // the VM before snapshotting so `isPlanStale` measures against
+            // the post-consumption state and the UI text field empties.
+            concerns = ""
 
             // Capture the inputs that produced this plan. `isPlanStale`
             // compares live values to this snapshot to decide whether to
@@ -318,7 +392,7 @@ class CoachViewModel {
             clearAllMuscleOverrides()
 
             markGenerated(modelContext: modelContext)
-            print("[BenLift/Coach] ✅ recommendAndPlan: \(response.recommendedSessionName) — \(editedExercises.count) exercises")
+            print("[BenLift/Coach] ✅ recommendAndPlan (streamed): \(response.recommendedSessionName) — \(editedExercises.count) exercises")
         } catch {
             if Self.isCancellation(error) {
                 print("[BenLift/Coach] recommendAndPlan cancelled (superseded by reload)")
@@ -393,6 +467,9 @@ class CoachViewModel {
             planAdjustments = []
             // Starting weight: trust user history > sanitized LLM suggestion > library default.
             editedExercises = plan.exercises.map(pickStartingWeight)
+            // Concerns consumed by the plan — clear before snapshotting so
+            // the text field empties and the Refresh pill rests correctly.
+            concerns = ""
             // Same snapshot dance as `getRecommendationAndPlan` so the
             // Refresh pill clears after an iteration refresh too.
             planInputSnapshot = InputSnapshot(
@@ -551,6 +628,21 @@ class CoachViewModel {
 
     func moveExercise(from source: IndexSet, to destination: Int) {
         editedExercises.move(fromOffsets: source, toOffset: destination)
+    }
+
+    /// Custom-drag reorder: pluck the named exercise and re-insert at the
+    /// final desired position. `targetIndex` is the position the user
+    /// wants the item to occupy in the resulting array — NOT a "drop
+    /// before this index" semantic. Bounds are clamped so callers can
+    /// pass any int and we'll snap it to a valid slot.
+    @MainActor
+    func moveExercise(named name: String, toIndex targetIndex: Int) {
+        guard let from = editedExercises.firstIndex(where: { $0.name == name }) else { return }
+        guard from != targetIndex else { return }
+        let item = editedExercises.remove(at: from)
+        let clamped = max(0, min(targetIndex, editedExercises.count))
+        editedExercises.insert(item, at: clamped)
+        persistCachedGeneration()
     }
 
     /// Add an exercise to the current plan. If a matching `exerciseOut`

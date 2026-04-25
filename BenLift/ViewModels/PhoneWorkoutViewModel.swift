@@ -185,8 +185,40 @@ class PhoneWorkoutViewModel {
     }
     var isWorkoutActive: Bool { snapshot?.isActive ?? false }
     var workoutStartDate: Date? { snapshot?.workoutStartDate }
-    var currentHeartRate: Double { snapshot?.currentHeartRate ?? 0 }
-    var activeCalories: Double { snapshot?.activeCalories ?? 0 }
+    /// Live vitals from the watch's sensor-only HK session during a phone-
+    /// owned workout. Injected via `applyLiveVitals` when a WCSession
+    /// "vitals" message lands. Falls through to the snapshot value (which
+    /// is the right source in watch-owned mode — the watch populates HR on
+    /// every broadcast) when no live stream is active.
+    private(set) var livePhoneHR: Double = 0
+    private(set) var livePhoneCalories: Double = 0
+    /// Last time a vitals message arrived. After this goes stale (watch
+    /// reachability drop), we fall back to the snapshot's HR so the UI
+    /// doesn't pin to an old value.
+    private var lastVitalsAt: Date = .distantPast
+    private let vitalsStaleWindow: TimeInterval = 10
+
+    var currentHeartRate: Double {
+        if livePhoneHR > 0, Date().timeIntervalSince(lastVitalsAt) < vitalsStaleWindow {
+            return livePhoneHR
+        }
+        return snapshot?.currentHeartRate ?? 0
+    }
+    var activeCalories: Double {
+        if livePhoneCalories > 0, Date().timeIntervalSince(lastVitalsAt) < vitalsStaleWindow {
+            return livePhoneCalories
+        }
+        return snapshot?.activeCalories ?? 0
+    }
+
+    /// Receive one vitals sample from the watch. Called by the mirroring
+    /// controller on every "vitals" WCSession message (~every 5s).
+    @MainActor
+    func applyLiveVitals(hr: Double, calories: Double) {
+        livePhoneHR = hr
+        livePhoneCalories = calories
+        lastVitalsAt = Date()
+    }
 
     var activeExercise: SnapshotExercise? {
         guard let idx = activeExerciseIndex, idx < exerciseStates.count else { return nil }
@@ -381,7 +413,16 @@ class PhoneWorkoutViewModel {
             currentWeight = next.displayWeight
             currentReps = Double(next.reps)
         } else {
-            currentWeight = ex.lastWeight ?? ex.suggestedWeight
+            // Prefer the most recent WORKING set from this session — the
+            // user is almost always lifting the same weight set-to-set
+            // (or adjusting from it). Falling back to last-session/plan
+            // weight meant that navigating away and back reset the wheel
+            // to 0 for bodyweight exercises or anything without history.
+            if let recent = ex.loggedSets.last(where: { !$0.isWarmup }) {
+                currentWeight = recent.weight
+            } else {
+                currentWeight = ex.lastWeight ?? ex.suggestedWeight
+            }
             currentReps = 0
         }
     }
@@ -502,7 +543,14 @@ class PhoneWorkoutViewModel {
                 currentWeight = next.displayWeight
                 currentReps = Double(next.reps)
             } else {
-                currentWeight = state.lastWeight ?? state.suggestedWeight
+                // Carry over weight from the most recent working set in
+                // THIS session — see `initializeInputWheelsForViewing`
+                // for the full rationale.
+                if let recent = state.loggedSets.last(where: { !$0.isWarmup }) {
+                    currentWeight = recent.weight
+                } else {
+                    currentWeight = state.lastWeight ?? state.suggestedWeight
+                }
                 currentReps = 0
             }
         }
@@ -873,8 +921,10 @@ class PhoneWorkoutViewModel {
     // MARK: - Finish Workout
 
     /// Saves the workout to SwiftData using the data in the LATEST snapshot, then
-    /// sends `.end` to the watch so it shuts down its session.
-    func finishWorkout(modelContext: ModelContext, feeling: Int?, concerns: String?) {
+    /// sends `.end(effortScore:)` to the watch so it shuts down its session and
+    /// attaches the user's effort rating to the HKWorkout. `effortScore` is a
+    /// 1...10 Apple Workout Effort value (nil = user skipped the prompt).
+    func finishWorkout(modelContext: ModelContext, feeling: Int?, concerns: String?, effortScore: Double? = nil) {
         guard let snap = snapshot, snap.isActive else { return }
 
         let duration = elapsedTime
@@ -943,14 +993,17 @@ class PhoneWorkoutViewModel {
         // End Live Activity
         LiveActivityManager.shared.endActivity(finalState: buildContentState())
 
-        // Only tell the watch to shut down if we were actually mirroring
-        // one — sending `.end` with no mirrored session would just fail
-        // silently. sendWorkoutEnded (WCSession) is fine either way; it's
-        // a no-op signal when nothing is listening.
-        if workoutMode == .mirroredFromWatch {
-            sendCommand(.end)
-            WatchSyncService.shared.sendWorkoutEnded()
-        }
+        // Tell the watch to shut down its HK session and save the workout +
+        // effort to Apple Health. We fire the command in BOTH modes now:
+        //   - .mirroredFromWatch: watch owns the workout; .end(effort) lands
+        //     in processCommand and rides through HKLiveWorkoutBuilder save.
+        //   - .standalone: watch is running a sensor-only HK session on
+        //     behalf of the phone-owned workout; .end(effort) tells it to
+        //     finalize and attach the effort rating.
+        // sendWorkoutEnded (WCSession) is fine either way; it's a no-op
+        // signal when nothing is listening.
+        sendCommand(.end(effortScore: effortScore))
+        WatchSyncService.shared.sendWorkoutEnded()
         stopPendingSweep()
 
         // Local notification summary + clear abandon reminder
@@ -1058,7 +1111,11 @@ class PhoneWorkoutViewModel {
                     currentWeight = next.displayWeight
                     currentReps = Double(next.reps)
                 } else {
-                    currentWeight = ex.lastWeight ?? ex.suggestedWeight
+                    if let recent = ex.loggedSets.last(where: { !$0.isWarmup }) {
+                        currentWeight = recent.weight
+                    } else {
+                        currentWeight = ex.lastWeight ?? ex.suggestedWeight
+                    }
                     currentReps = 0
                 }
             }
@@ -1317,12 +1374,12 @@ class PhoneWorkoutViewModel {
             addExercise(info)
         case .adaptExercise(let idx, let replacement):
             replaceExerciseCommand(at: idx, with: replacement)
-        case .end:
+        case .end(let effort):
             // The watch asked to end. We need a modelContext to save —
             // the VM is injected with one at app launch; fall back to
             // just clearing state if for some reason it isn't.
             if let ctx = modelContext {
-                finishWorkout(modelContext: ctx, feeling: nil, concerns: nil)
+                finishWorkout(modelContext: ctx, feeling: nil, concerns: nil, effortScore: effort)
             } else {
                 print("[BenLift/Phone] ⚠️ Remote .end with no modelContext; state won't persist")
             }

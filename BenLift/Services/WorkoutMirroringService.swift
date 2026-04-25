@@ -115,8 +115,8 @@ class WorkoutMirroringService: NSObject, HKWorkoutSessionDelegate {
             return "adaptExercise:\(i):\(replacement.name)"
         case .addExercise(let info):
             return "addExercise:\(info.name)"
-        case .end:
-            return "end"
+        case .end(let effort):
+            return "end:\(effort.map { String($0) } ?? "nil")"
         case .requestSnapshot:
             return "requestSnapshot"
         case .skipExercise(let i):

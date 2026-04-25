@@ -31,6 +31,7 @@ struct PhoneExerciseDetailView: View {
                 let isDisabled = invalidReps || !viewingMatchesActive
 
                 Button {
+                    Haptics.impact(.medium)
                     workoutVM.logSet()
                 } label: {
                     Text("Log Set")
@@ -120,33 +121,35 @@ struct PhoneExerciseDetailView: View {
                 .font(.caption.bold())
                 .foregroundColor(.secondaryText)
 
-            HStack(spacing: 24) {
-                Button {
+            HStack(spacing: 20) {
+                RepeatingStepperButton {
                     workoutVM.adjustWeight(by: -workoutVM.effectiveWeightIncrement)
                 } label: {
                     Image(systemName: "minus")
-                        .font(.title3.bold())
-                        .frame(width: 48, height: 48)
+                        .font(.title2.bold())
+                        .frame(width: 64, height: 64)
                         .background(Color.cardSurface)
                         .clipShape(Circle())
                 }
 
                 VStack(spacing: 0) {
                     Text("\(Int(workoutVM.currentWeight))")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .font(.system(size: 54, weight: .bold, design: .rounded))
                         .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: workoutVM.currentWeight)
                     Text("lbs")
                         .font(.caption)
                         .foregroundColor(.secondaryText)
                 }
-                .frame(minWidth: 100)
+                .frame(minWidth: 110)
 
-                Button {
+                RepeatingStepperButton {
                     workoutVM.adjustWeight(by: workoutVM.effectiveWeightIncrement)
                 } label: {
                     Image(systemName: "plus")
-                        .font(.title3.bold())
-                        .frame(width: 48, height: 48)
+                        .font(.title2.bold())
+                        .frame(width: 64, height: 64)
                         .background(Color.cardSurface)
                         .clipShape(Circle())
                 }
@@ -166,42 +169,50 @@ struct PhoneExerciseDetailView: View {
                 .foregroundColor(.secondaryText)
 
             HStack(spacing: 20) {
-                Button {
+                RepeatingStepperButton {
                     workoutVM.adjustReps(by: -1)
                 } label: {
-                    Image(systemName: "minus.circle.fill")
-                        .font(.title)
-                        .foregroundColor(.secondaryText)
+                    Image(systemName: "minus")
+                        .font(.title2.bold())
+                        .frame(width: 64, height: 64)
+                        .background(Color.cardSurface)
+                        .clipShape(Circle())
                 }
 
                 Text(workoutVM.currentReps.formattedReps)
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
+                    .font(.system(size: 54, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(
                         workoutVM.currentReps.truncatingRemainder(dividingBy: 1) != 0
                             ? .failedRed : .primary
                     )
-                    .frame(minWidth: 80)
+                    .frame(minWidth: 90)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: workoutVM.currentReps)
 
-                Button {
+                RepeatingStepperButton {
                     workoutVM.adjustReps(by: 1)
                 } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title)
-                        .foregroundColor(.secondaryText)
+                    Image(systemName: "plus")
+                        .font(.title2.bold())
+                        .frame(width: 64, height: 64)
+                        .background(Color.cardSurface)
+                        .clipShape(Circle())
                 }
 
-                // Failed rep toggle
+                // Failed rep toggle — kept distinct (smaller, destructive tint)
+                // so it reads as an annotation, not a primary stepper.
                 Button {
+                    Haptics.warning()
                     workoutVM.toggleFailedRep()
                 } label: {
                     Text("F")
-                        .font(.headline.bold())
+                        .font(.title3.bold())
                         .foregroundColor(
                             workoutVM.currentReps.truncatingRemainder(dividingBy: 1) != 0
                                 ? .white : .failedRed
                         )
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .background(
                             workoutVM.currentReps.truncatingRemainder(dividingBy: 1) != 0
                                 ? Color.failedRed : Color.failedRed.opacity(0.15)
