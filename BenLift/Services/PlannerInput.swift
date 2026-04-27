@@ -147,8 +147,11 @@ extension PlannerInput {
         let isoDay = ISO8601DateFormatter.dayOnly
         let today = cal.startOfDay(for: now)
 
+        // Strict future only — today's pin is already represented in
+        // `targetMuscle`. Including it in futurePins would be redundant
+        // and could confuse the LLM's volume-distribution reasoning.
         let futurePins = pins
-            .filter { cal.startOfDay(for: $0.date) >= today }
+            .filter { cal.startOfDay(for: $0.date) > today }
             .compactMap { pin -> FuturePin? in
                 guard let m = pin.muscleGroup else { return nil }
                 return FuturePin(date: isoDay.string(from: pin.date), muscle: m.rawValue)

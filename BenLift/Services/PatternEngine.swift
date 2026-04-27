@@ -180,6 +180,13 @@ struct PatternEngine {
             return (m, .pinned, 1.0)
         }
 
+        // Avoid muscles the user has already committed to in the next 2 days
+        // — picking the same muscle today and tomorrow burns the stimulus
+        // (and ignores the user's calendar intent). The avoid set is "soft":
+        // if the modal/seed has no non-conflicting alternative, we still
+        // emit the conflicting muscle so the user isn't left with `?`.
+        let nearPinned = nearbyPinnedMuscles(pins: pins, within: 2, of: today, cal: cal)
+
         // Pattern from rolling window.
         let windowStart = cal.date(byAdding: .day, value: -lookbackDays, to: today) ?? today
         let recent = sessions.filter { $0.date >= windowStart }
@@ -192,19 +199,40 @@ struct PatternEngine {
             }
         }
 
-        if let (modal, conf) = modalMuscle(in: sameDayofWeek, primaryByID: primaryByID),
+        if let (modal, conf) = modalMuscle(in: sameDayofWeek, primaryByID: primaryByID, avoid: nearPinned),
            sameDayofWeek.count >= minPatternSamples {
             return (modal, .predicted, conf)
         }
 
-        // Seed fallback.
+        // Seed fallback — also respects the avoid set.
         if let seed = seedPatterns.first(where: { $0.weekday == weekday }),
-           let m = seed.muscleGroup {
+           let m = seed.muscleGroup,
+           !nearPinned.contains(m) {
             return (m, .fallback, 0.5)
         }
 
         // Nothing — caller (deterministic engine) handles this case.
         return (nil, .fallback, nil)
+    }
+
+    /// Muscles pinned within ±`window` days of `date` (excluding date
+    /// itself). Used as a soft-avoid set when picking muscles by pattern
+    /// or seed: if the user committed to chest tomorrow, today should
+    /// prefer something else.
+    static func nearbyPinnedMuscles(
+        pins: [MuscleGroupPin],
+        within window: Int,
+        of date: Date,
+        cal: Calendar
+    ) -> Set<MuscleGroup> {
+        let target = cal.startOfDay(for: date)
+        return Set(pins.compactMap { pin -> MuscleGroup? in
+            let p = cal.startOfDay(for: pin.date)
+            guard p != target else { return nil }
+            let delta = abs(cal.dateComponents([.day], from: p, to: target).day ?? 999)
+            guard delta <= window else { return nil }
+            return pin.muscleGroup
+        })
     }
 
     // MARK: - Cell construction
@@ -283,25 +311,49 @@ struct PatternEngine {
             if let ai = aiTargetMuscle {
                 return DayIntent(date: date, muscle: ai, label: nil, source: .today, note: nil)
             }
+            let avoid = adjacentPinnedMuscles(of: date, cal: cal, pinsByDay: pinsByDay)
             let m = predict(
                 for: date, cal: cal,
                 sessionsByWeekday: sessionsByWeekday,
                 primaryByID: primaryByID,
-                seedByWeekday: seedByWeekday
+                seedByWeekday: seedByWeekday,
+                avoid: avoid
             )
             return DayIntent(date: date, muscle: m, label: nil, source: .today, note: nil)
         }
 
-        // 5. Future cell, no pin → predict (or unknown).
+        // 5. Future cell, no pin → predict (or unknown). Avoids muscles
+        // pinned on adjacent days so the strip doesn't predict chest Mon
+        // and chest Tue when the user already pinned chest Wed.
+        let avoid = adjacentPinnedMuscles(of: date, cal: cal, pinsByDay: pinsByDay)
         if let m = predict(
             for: date, cal: cal,
             sessionsByWeekday: sessionsByWeekday,
             primaryByID: primaryByID,
-            seedByWeekday: seedByWeekday
+            seedByWeekday: seedByWeekday,
+            avoid: avoid
         ) {
             return DayIntent(date: date, muscle: m, label: nil, source: .predicted, note: nil)
         }
         return DayIntent(date: date, muscle: nil, label: nil, source: .unknown, note: nil)
+    }
+
+    /// Muscles pinned on the day before / after `date` (excluding `date`
+    /// itself). Used as the avoid set when predicting `date`'s cell so the
+    /// strip respects the user's calendar intent across days.
+    private static func adjacentPinnedMuscles(
+        of date: Date,
+        cal: Calendar,
+        pinsByDay: [Date: MuscleGroupPin]
+    ) -> Set<MuscleGroup> {
+        var muscles: Set<MuscleGroup> = []
+        for offset in [-1, 1] {
+            guard let neighbor = cal.date(byAdding: .day, value: offset, to: date) else { continue }
+            if let m = pinsByDay[cal.startOfDay(for: neighbor)]?.muscleGroup {
+                muscles.insert(m)
+            }
+        }
+        return muscles
     }
 
     /// Compact label for a HealthKit activity cell. Capitalize and add
@@ -329,20 +381,23 @@ struct PatternEngine {
         cal: Calendar,
         sessionsByWeekday: [Int: [WorkoutSession]],
         primaryByID: [UUID: MuscleGroup],
-        seedByWeekday: [Int: SeedPattern]
+        seedByWeekday: [Int: SeedPattern],
+        avoid: Set<MuscleGroup> = []
     ) -> MuscleGroup? {
         let wd = cal.component(.weekday, from: date)
 
         // Real data path — needs minPatternSamples (3) candidates so a one-
-        // off Tuesday doesn't become "your Tuesday plan."
+        // off Tuesday doesn't become "your Tuesday plan." `avoid` skips
+        // muscles already pinned for adjacent days so adjacent cells don't
+        // both predict the same muscle.
         if let bucket = sessionsByWeekday[wd], bucket.count >= minPatternSamples {
-            if let (modal, _) = modalMuscle(in: bucket, primaryByID: primaryByID) {
+            if let (modal, _) = modalMuscle(in: bucket, primaryByID: primaryByID, avoid: avoid) {
                 return modal
             }
         }
 
         // Seed fallback — only fires if the bootstrap LLM has populated it.
-        if let seed = seedByWeekday[wd], let m = seed.muscleGroup {
+        if let seed = seedByWeekday[wd], let m = seed.muscleGroup, !avoid.contains(m) {
             return m
         }
 
@@ -354,9 +409,15 @@ struct PatternEngine {
     /// (exercise-count-derived) rather than `muscleGroups.first` so the
     /// pattern signal reflects what the user actually trained, not metadata
     /// ordering. Ties broken alphabetically for determinism.
+    ///
+    /// `avoid` is a soft-avoid set: if any non-avoided muscle has data,
+    /// pick the highest-frequency one of those. If every muscle in the
+    /// bucket is in `avoid`, fall back to the global top — `avoid` is a
+    /// preference, not a hard ban.
     private static func modalMuscle(
         in sessions: [WorkoutSession],
-        primaryByID: [UUID: MuscleGroup]
+        primaryByID: [UUID: MuscleGroup],
+        avoid: Set<MuscleGroup> = []
     ) -> (MuscleGroup, Double)? {
         guard !sessions.isEmpty else { return nil }
         var counts: [MuscleGroup: Int] = [:]
@@ -365,13 +426,14 @@ struct PatternEngine {
                 counts[m, default: 0] += 1
             }
         }
-        guard let best = counts.max(by: { lhs, rhs in
+        guard !counts.isEmpty else { return nil }
+        let ranked = counts.sorted { lhs, rhs in
             lhs.value != rhs.value
-                ? lhs.value < rhs.value
-                : lhs.key.rawValue > rhs.key.rawValue  // alpha ascending → break to lower name
-        }) else { return nil }
-        let confidence = Double(best.value) / Double(sessions.count)
-        return (best.key, confidence)
+                ? lhs.value > rhs.value
+                : lhs.key.rawValue < rhs.key.rawValue
+        }
+        let pick = ranked.first(where: { !avoid.contains($0.key) }) ?? ranked.first!
+        return (pick.key, Double(pick.value) / Double(sessions.count))
     }
 }
 
