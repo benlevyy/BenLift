@@ -1,10 +1,13 @@
 import SwiftUI
+import SwiftData
 
-// MARK: - Mock Model
+// MARK: - Day model
 //
-// Backend wiring (pattern engine, persistence, planner integration) is being
-// designed by another agent. For now this view ships with self-contained mock
-// state so we can iterate on look + interactions before the data layer lands.
+// View-layer representation of one cell in the strip. Built by
+// `PatternEngine.computeWeek(...)` from raw SwiftData (sessions + pins +
+// seed patterns). The view itself never decides what a cell shows — that
+// logic lives in the engine, where it's testable and stays consistent
+// with the planner's `targetMuscleForToday(...)` decision.
 
 enum DaySource: String {
     /// Logged session — read from history.
@@ -32,16 +35,34 @@ struct DayIntent: Identifiable, Equatable {
 
 // MARK: - Strip View
 
-/// Horizontal scroll of day cells: past 3 days + today + next 3-4. Past +
-/// today are read-only; future cells open a sheet to pin a muscle / add a
-/// freeform note. ~80pt tall — sits above the check-in card on Today.
+/// Horizontal scroll of day cells: past 3 days + today + next 3 days. Past +
+/// today (when logged) are read-only; today (when not logged) and future
+/// cells open a sheet to pin a muscle / add a freeform note. ~100pt tall —
+/// sits above the check-in card on Today.
+///
+/// Data flow: SwiftData @Query for sessions / pins / seed patterns →
+/// `PatternEngine.computeWeek(...)` → `[DayIntent]`. The engine is the
+/// single source of truth — the view never derives cell state itself.
 struct WeekStripView: View {
-    @State private var days: [DayIntent] = WeekStripView.makeMockDays()
+    @Environment(\.modelContext) private var modelContext
+
+    @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
+    @Query private var pins: [MuscleGroupPin]
+    @Query private var seedPatterns: [SeedPattern]
+
     @State private var selectedDayID: DayIntent.ID?
 
     private let cellWidth: CGFloat = 78
     private let cellHeight: CGFloat = 100
     private let cellSpacing: CGFloat = 10
+
+    private var days: [DayIntent] {
+        PatternEngine.computeWeek(
+            sessions: sessions,
+            pins: pins,
+            seedPatterns: seedPatterns
+        )
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -71,9 +92,7 @@ struct WeekStripView: View {
         .frame(height: cellHeight + 16)
         .sheet(item: bindingForSelectedDay()) { day in
             PinDaySheet(day: day) { updated in
-                if let i = days.firstIndex(where: { $0.id == updated.id }) {
-                    days[i] = updated
-                }
+                applyPinEdit(updated)
                 selectedDayID = nil
             } onCancel: {
                 selectedDayID = nil
@@ -97,25 +116,41 @@ struct WeekStripView: View {
         )
     }
 
-    // MARK: - Mock Seed
+    // MARK: - Persistence
 
-    /// Reasonable demo state: some recent completed days, today's plan,
-    /// a few future predictions, one already-pinned day.
-    private static func makeMockDays() -> [DayIntent] {
+    /// Apply a pin-sheet result by upserting (or deleting) the matching
+    /// `MuscleGroupPin` row. The strip re-renders automatically via @Query.
+    ///
+    /// "Clear pin" is signalled by the sheet flipping `source` back to
+    /// `.predicted` — that's our cue to delete the row entirely so the
+    /// pattern engine takes over again.
+    private func applyPinEdit(_ updated: DayIntent) {
         let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        func day(_ offset: Int) -> Date { cal.date(byAdding: .day, value: offset, to: today)! }
+        let day = cal.startOfDay(for: updated.date)
+        let existing = pins.first { cal.isDate($0.date, inSameDayAs: day) }
 
-        return [
-            DayIntent(date: day(-3), muscle: .back,    label: nil, source: .completed),
-            DayIntent(date: day(-2), muscle: nil,      label: "Rest", source: .completed),
-            DayIntent(date: day(-1), muscle: .quads,   label: nil, source: .completed),
-            DayIntent(date: day( 0), muscle: .chest,   label: nil, source: .today),
-            DayIntent(date: day( 1), muscle: .back,    label: nil, source: .predicted),
-            DayIntent(date: day( 2), muscle: .shoulders, label: nil, source: .pinned, note: "going light"),
-            DayIntent(date: day( 3), muscle: .hamstrings, label: nil, source: .predicted),
-            DayIntent(date: day( 4), muscle: nil,      label: nil, source: .unknown),
-        ]
+        if updated.source == .predicted {
+            // User cleared the pin.
+            if let row = existing { modelContext.delete(row) }
+            try? modelContext.save()
+            return
+        }
+
+        // User pinned. Upsert.
+        if let row = existing {
+            row.muscleGroup = updated.muscle
+            row.label = updated.label
+            row.note = updated.note
+        } else {
+            let row = MuscleGroupPin(
+                date: day,
+                muscleGroup: updated.muscle,
+                label: updated.label,
+                note: updated.note
+            )
+            modelContext.insert(row)
+        }
+        try? modelContext.save()
     }
 }
 

@@ -29,6 +29,11 @@ struct BenLiftApp: App {
             // lifecycled AI-discovered patterns.
             UserRule.self,
             UserObservation.self,
+            // Calendar / Week Strip — MuscleGroupPin is the user's explicit
+            // override for a specific day; SeedPattern is the bootstrap LLM's
+            // weekday-default seed used until real session history takes over.
+            MuscleGroupPin.self,
+            SeedPattern.self,
         ])
         let config = ModelConfiguration(isStoredInMemoryOnly: false)
         container = try! ModelContainer(for: schema, configurations: config)
