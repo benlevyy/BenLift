@@ -57,6 +57,10 @@ struct WeekStripView: View {
     @Query private var exercises: [Exercise]
 
     @State private var selectedDayID: DayIntent.ID?
+    /// HealthKit cross-training (climbing, running, etc.) for the past 21
+    /// days. Refreshed on appear — used to color past empty days as the
+    /// activity that actually happened, not "Rest."
+    @State private var activities: [PatternEngine.ActivityRecord] = []
 
     private let cellWidth: CGFloat = 78
     private let cellHeight: CGFloat = 100
@@ -74,6 +78,7 @@ struct WeekStripView: View {
             sessions: sessions,
             pins: pins,
             seedPatterns: seedPatterns,
+            activities: activities,
             exerciseMuscleLookup: exerciseMuscleLookup
         )
     }
@@ -101,6 +106,13 @@ struct WeekStripView: View {
                 if let todayID = days.first(where: { $0.source == .today })?.id {
                     proxy.scrollTo(todayID, anchor: .center)
                 }
+            }
+            .task {
+                // Pull HealthKit cross-training so past days that were
+                // climbing / running / etc. don't render as "Rest". Failures
+                // (no auth, no data) are silent — the strip degrades to
+                // session-only rendering, which is the prior behavior.
+                activities = await HealthKitService.shared.fetchRecentActivities(days: PatternEngine.lookbackDays)
             }
         }
         .frame(height: cellHeight + 16)

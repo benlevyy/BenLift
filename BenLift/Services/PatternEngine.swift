@@ -24,6 +24,20 @@ import Foundation
 struct PatternEngine {
     static let lookbackDays = 21
     static let strongConfidence = 0.6
+    /// Modal-by-weekday needs at least this many sessions in the bucket to
+    /// claim a pattern. Below this, we don't predict — better to show `?`
+    /// and let the user pin than to alternate weak guesses (which is what
+    /// happened on Ben's sparse 21-day window: 1–2 sessions per weekday
+    /// flipped between quads/shoulders depending on which one happened
+    /// to be most recent).
+    static let minPatternSamples = 3
+
+    /// Cross-training record from HealthKit (climbing, running, etc.).
+    /// Same shape as `HealthKitService.fetchRecentActivities()` returns.
+    typealias ActivityRecord = (
+        type: String, date: Date, duration: TimeInterval,
+        calories: Double?, source: String
+    )
 
     /// Produce the strip's day list — past 3, today, next 3 days (7 total).
     /// `now` is injected for testability; pass `Date()` from the call site.
@@ -36,6 +50,7 @@ struct PatternEngine {
         sessions: [WorkoutSession],
         pins: [MuscleGroupPin],
         seedPatterns: [SeedPattern],
+        activities: [ActivityRecord] = [],
         exerciseMuscleLookup: [String: MuscleGroup] = [:],
         now: Date = Date()
     ) -> [DayIntent] {
@@ -46,6 +61,13 @@ struct PatternEngine {
         // rolling window. The pattern signal lives in this bucket.
         let windowStart = cal.date(byAdding: .day, value: -lookbackDays, to: today) ?? today
         let recentSessions = sessions.filter { $0.date >= windowStart }
+
+        // Index HealthKit activities by startOfDay. Used to color past days
+        // that were "training" (climbing, running) even though no
+        // WorkoutSession was logged. Lifted sessions still beat activities.
+        let activitiesByDay: [Date: [ActivityRecord]] = activities.reduce(into: [:]) { acc, act in
+            acc[cal.startOfDay(for: act.date), default: []].append(act)
+        }
 
         // Pre-compute primary muscle per session ONCE — costs O(entries) per
         // session, much cheaper than recomputing per cell / per pattern call.
@@ -92,9 +114,9 @@ struct PatternEngine {
                 sessions: recentSessions,
                 sessionsByWeekday: sessionsByWeekday,
                 primaryByID: primaryByID,
+                activitiesByDay: activitiesByDay,
                 pinsByDay: pinsByDay,
-                seedByWeekday: seedByWeekday,
-                mostRecentByMuscle: mostRecentByMuscle
+                seedByWeekday: seedByWeekday
             ))
         }
         return days
@@ -164,7 +186,7 @@ struct PatternEngine {
         }
 
         if let (modal, conf) = modalMuscle(in: sameDayofWeek, primaryByID: primaryByID),
-           sameDayofWeek.count >= 2 {
+           sameDayofWeek.count >= minPatternSamples {
             return (modal, .predicted, conf)
         }
 
@@ -188,9 +210,9 @@ struct PatternEngine {
         sessions: [WorkoutSession],
         sessionsByWeekday: [Int: [WorkoutSession]],
         primaryByID: [UUID: MuscleGroup],
+        activitiesByDay: [Date: [ActivityRecord]],
         pinsByDay: [Date: MuscleGroupPin],
-        seedByWeekday: [Int: SeedPattern],
-        mostRecentByMuscle: [MuscleGroup: Date]
+        seedByWeekday: [Int: SeedPattern]
     ) -> DayIntent {
         // 1. Past or today with a logged session → completed cell.
         // Primary muscle from exercise-count, not `muscleGroups.first` — see
@@ -207,15 +229,25 @@ struct PatternEngine {
             )
         }
 
-        // 2. Past day, no logged session → REST cell (not a prediction).
-        // Predictions are forward-looking; the past doesn't get re-guessed.
-        // The user said "it can say rest" — that's the intended UX.
+        // 2. Past day, no lifted session → check HealthKit cross-activity.
+        // A 60-min climb counts as a real training day for the purposes of
+        // visualizing the user's week. Pick the longest activity if multiple.
         if offset < 0 {
+            if let acts = activitiesByDay[date], let longest = acts.max(by: { $0.duration < $1.duration }) {
+                return DayIntent(
+                    date: date,
+                    muscle: nil,
+                    label: activityLabel(longest),
+                    source: .completed,
+                    note: nil
+                )
+            }
+            // Genuinely empty past day → rest.
             return DayIntent(
                 date: date,
                 muscle: nil,
                 label: "Rest",
-                source: .completed,  // styled as past, just unmuscled
+                source: .completed,
                 note: nil
             )
         }
@@ -235,65 +267,70 @@ struct PatternEngine {
         // This is the strip's anchor cell — show the prediction with the
         // .today styling so the user can immediately tap to lock it.
         if offset == 0 {
-            let (m, _) = predict(
+            let m = predict(
                 for: date, cal: cal,
                 sessionsByWeekday: sessionsByWeekday,
                 primaryByID: primaryByID,
-                seedByWeekday: seedByWeekday,
-                mostRecentByMuscle: mostRecentByMuscle
+                seedByWeekday: seedByWeekday
             )
             return DayIntent(date: date, muscle: m, label: nil, source: .today, note: nil)
         }
 
         // 5. Future cell, no pin → predict (or unknown).
-        let (m, _) = predict(
+        if let m = predict(
             for: date, cal: cal,
             sessionsByWeekday: sessionsByWeekday,
             primaryByID: primaryByID,
-            seedByWeekday: seedByWeekday,
-            mostRecentByMuscle: mostRecentByMuscle
-        )
-        if m == nil {
-            return DayIntent(date: date, muscle: nil, label: nil, source: .unknown, note: nil)
+            seedByWeekday: seedByWeekday
+        ) {
+            return DayIntent(date: date, muscle: m, label: nil, source: .predicted, note: nil)
         }
-        return DayIntent(date: date, muscle: m, label: nil, source: .predicted, note: nil)
+        return DayIntent(date: date, muscle: nil, label: nil, source: .unknown, note: nil)
+    }
+
+    /// Compact label for a HealthKit activity cell. Capitalize and add
+    /// minutes if non-trivial (≥10 min). e.g., "Climbing 65m".
+    private static func activityLabel(_ act: ActivityRecord) -> String {
+        let title = act.type.split(separator: "_")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+        let minutes = Int(act.duration / 60)
+        return minutes >= 10 ? "\(title) \(minutes)m" : title
     }
 
     // MARK: - Prediction
 
-    /// Returns the predicted muscle and a 0–1 confidence for `date`.
-    /// Order: weekday-modal (real data) → seed → least-recently-trained.
+    /// Returns the predicted muscle for `date`, or nil when the signal is
+    /// too weak to claim. Order: weekday-modal (real data, ≥3 sessions) →
+    /// seed pattern → nil (cell renders as `?`).
+    ///
+    /// Why no "least recently trained" fallback: with sparse data, that
+    /// path alternates between muscles as days pass and creates the
+    /// "every day is quads/shoulders" oscillation Ben observed. Better
+    /// to show `?` and let the user pin than to invent confidence.
     private static func predict(
         for date: Date,
         cal: Calendar,
         sessionsByWeekday: [Int: [WorkoutSession]],
         primaryByID: [UUID: MuscleGroup],
-        seedByWeekday: [Int: SeedPattern],
-        mostRecentByMuscle: [MuscleGroup: Date]
-    ) -> (MuscleGroup?, Double?) {
+        seedByWeekday: [Int: SeedPattern]
+    ) -> MuscleGroup? {
         let wd = cal.component(.weekday, from: date)
 
-        // Real data path — needs ≥2 candidates to be a "pattern" not a coincidence.
-        if let bucket = sessionsByWeekday[wd], bucket.count >= 2 {
-            if let (modal, conf) = modalMuscle(in: bucket, primaryByID: primaryByID) {
-                return (modal, conf)
+        // Real data path — needs minPatternSamples (3) candidates so a one-
+        // off Tuesday doesn't become "your Tuesday plan."
+        if let bucket = sessionsByWeekday[wd], bucket.count >= minPatternSamples {
+            if let (modal, _) = modalMuscle(in: bucket, primaryByID: primaryByID) {
+                return modal
             }
         }
 
-        // Seed fallback — flat 0.5 confidence, since it's a guess from goals.
+        // Seed fallback — only fires if the bootstrap LLM has populated it.
         if let seed = seedByWeekday[wd], let m = seed.muscleGroup {
-            return (m, 0.5)
+            return m
         }
 
-        // Last resort — pick the least-recently-trained muscle so we suggest
-        // "even rotation" rather than nothing. Confidence stays low (0.4)
-        // so the cell renders soft.
-        if !mostRecentByMuscle.isEmpty {
-            let oldest = mostRecentByMuscle.min { $0.value < $1.value }
-            return (oldest?.key, 0.4)
-        }
-
-        return (nil, nil)
+        return nil
     }
 
     /// Find the most-frequent primary muscle across a session bucket, plus
