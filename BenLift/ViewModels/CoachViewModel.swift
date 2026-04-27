@@ -227,6 +227,20 @@ class CoachViewModel {
     /// full daily plan. ~2.2x faster than the legacy two-step flow.
     @MainActor
     func getRecommendationAndPlan(modelContext: ModelContext, program: TrainingProgram?) async {
+        // V2 escalation gate (Option B). The deterministic baseline planner
+        // handles routine days for free; the LLM (daily_plan_v5) only fires
+        // when there's a flagged condition (injury, low readiness, cold
+        // start). Set `usePlannerLegacy=true` in UserDefaults to force the
+        // original single-call recommend+plan flow. Falls through to legacy
+        // when V2 can't build a PlannerInput (literal first session, no
+        // bootstrap seed yet).
+        if !UserDefaults.standard.bool(forKey: "usePlannerLegacy") {
+            if await planForToday(modelContext: modelContext, program: program) {
+                return
+            }
+            print("[BenLift/Coach] V2 had no PlannerInput — falling through to legacy")
+        }
+
         isLoadingRecommendation = true
         isGenerating = true
         planError = nil
@@ -431,6 +445,161 @@ class CoachViewModel {
 
         isLoadingRecommendation = false
         isGenerating = false
+    }
+
+    // MARK: - V2: Escalation gate (deterministic baseline + LLM on edge cases)
+    //
+    // Option B in the planner architecture: most days, BaselinePlanner
+    // produces today's plan in pure Swift (instant, $0). On flagged days
+    // (active injury, low readiness, true cold start), we escalate to
+    // daily_plan_v5 — the LLM with extended thinking that scored 5/5 on
+    // the safety fixtures. The user feels the same flow either way; the
+    // bill is what changes.
+    //
+    // Returns true if it produced a plan, false if PlannerInput.build
+    // came back nil (true cold start — no calendar signal, no AI rec yet).
+    // Caller falls through to the legacy v1 path on false.
+
+    @MainActor
+    func planForToday(modelContext: ModelContext, program: TrainingProgram?) async -> Bool {
+        isLoadingRecommendation = true
+        isGenerating = true
+        planError = nil
+
+        // PlannerInput needs HK context + activities for the recovery block
+        // and to color past-day muscle state. Fetched in parallel.
+        async let healthContextTask = HealthKitService.shared.fetchHealthContext()
+        async let activitiesTask = HealthKitService.shared.fetchRecentActivities(days: 7)
+        let healthContext = await healthContextTask
+        let activities = await activitiesTask
+
+        // combinedConcerns folds muscle-override taps into the freeform
+        // concerns string the AI reads — same trick as the legacy path.
+        let concernsForInput = combinedConcerns()
+
+        guard let input = PlannerInput.build(
+            modelContext: modelContext,
+            feeling: feeling,
+            availableTime: availableTime,
+            concerns: concernsForInput,
+            healthContext: healthContext,
+            recentActivities: activities,
+            now: Date()
+        ) else {
+            isLoadingRecommendation = false
+            isGenerating = false
+            return false
+        }
+
+        let escalate = Self.shouldEscalate(input: input)
+        let reason = Self.escalationReason(input: input)
+        print("[BenLift/Coach] planForToday target=\(input.targetMuscle) source=\(input.targetMuscleSource) escalate=\(escalate) reason=\(reason)")
+
+        do {
+            let plan: DailyPlanResponse
+            let rec: RecoveryRecommendation
+
+            if escalate {
+                let model = UserDefaults.standard.string(forKey: "modelDailyPlanV5") ?? "claude-haiku-4-5-20251001"
+                let v5 = try await coachService.dailyPlanV5(input: input, model: model)
+                plan = Self.convertV5ToPlan(v5)
+                rec = Self.synthesizeRecommendation(input: input, narrative: v5.recommendation, escalated: true, reason: reason)
+            } else {
+                let library = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+                plan = BaselinePlanner.plan(input: input, library: library)
+                rec = Self.synthesizeRecommendation(input: input, narrative: nil, escalated: false, reason: reason)
+            }
+
+            currentPlan = plan
+            editedExercises = plan.exercises
+            recommendation = rec
+            targetMuscleGroups = MuscleGroup(rawValue: input.targetMuscle).map { [$0] } ?? []
+            currentSessionName = rec.recommendedSessionName
+            markGenerated(modelContext: modelContext)
+        } catch {
+            if Self.isCancellation(error) {
+                print("[BenLift/Coach] planForToday cancelled (superseded)")
+            } else {
+                print("[BenLift/Coach] ❌ planForToday failed: \(error)")
+                planError = "Plan failed: \(error.localizedDescription)"
+            }
+        }
+
+        isLoadingRecommendation = false
+        isGenerating = false
+        return true
+    }
+
+    /// Decides whether the LLM (daily_plan_v5) should fire. The truth table:
+    /// - Active injury → always (safety-critical, requires adjudication)
+    /// - feeling ≤ 2 → low readiness, hard rule #1 territory
+    /// - low HRV (<40) AND short sleep (<6h) → combined low-readiness signal
+    /// - Cold start (no rituals + thin strength data) → AI seeds better than
+    ///   a baseline that has nothing to pick from
+    /// Otherwise → deterministic baseline.
+    static func shouldEscalate(input: PlannerInput) -> Bool {
+        if let inj = input.constraints.injuries, !inj.isEmpty { return true }
+        if input.recovery.feeling <= 2 { return true }
+        let lowSleep = (input.recovery.sleepHours ?? 8.0) < 6.0
+        let lowHRV = (input.recovery.hrv ?? 100) < 40
+        if lowSleep && lowHRV { return true }
+        if input.rituals.isEmpty && input.strength.count < 3 { return true }
+        return false
+    }
+
+    /// Human-readable trigger label for logs / analytics. "routine" when
+    /// no escalation condition fired.
+    private static func escalationReason(input: PlannerInput) -> String {
+        if let inj = input.constraints.injuries, !inj.isEmpty { return "injury" }
+        if input.recovery.feeling <= 2 { return "low_feeling" }
+        let lowSleep = (input.recovery.sleepHours ?? 8.0) < 6.0
+        let lowHRV = (input.recovery.hrv ?? 100) < 40
+        if lowSleep && lowHRV { return "low_hrv_sleep" }
+        if input.rituals.isEmpty && input.strength.count < 3 { return "cold_start" }
+        return "routine"
+    }
+
+    /// Map v5 plan response → user-facing DailyPlanResponse. Drops the
+    /// audit-only weightAnchor + selfCheck fields — they're useful for
+    /// debugging and evals but not displayed on Today.
+    private static func convertV5ToPlan(_ v5: DailyPlanV5Response) -> DailyPlanResponse {
+        DailyPlanResponse(
+            exercises: v5.exercises.map { plannedFromV5($0, fallbackRepScheme: nil) },
+            sessionStrategy: v5.strategy,
+            estimatedDuration: v5.estimatedDuration,
+            deloadNote: v5.deloadNote
+        )
+    }
+
+    /// The new prompts don't return a RecoveryRecommendation (the calendar
+    /// owns that decision now). We synthesize one for the existing UI's
+    /// header. Reasoning text comes from the v5 `recommendation` field
+    /// when escalated; for routine days, we write a one-liner that names
+    /// the muscle and notes the source (pattern vs pin vs LLM-pick).
+    private static func synthesizeRecommendation(
+        input: PlannerInput,
+        narrative: String?,
+        escalated: Bool,
+        reason: String
+    ) -> RecoveryRecommendation {
+        let muscle = MuscleGroup(rawValue: input.targetMuscle)?.displayName ?? input.targetMuscle.capitalized
+        let name = "\(muscle) Day"
+        let reasoning: String
+        if let n = narrative, !n.isEmpty {
+            reasoning = n
+        } else {
+            switch input.targetMuscleSource {
+            case "pinned":     reasoning = "Pinned: \(muscle.lowercased()) today."
+            case "predicted":  reasoning = "Based on your typical pattern, today's a \(muscle.lowercased()) day."
+            default:           reasoning = "Today's focus: \(muscle.lowercased())."
+            }
+        }
+        return RecoveryRecommendation(
+            muscleGroupStatus: [],
+            recommendedFocus: [input.targetMuscle],
+            recommendedSessionName: name,
+            reasoning: reasoning
+        )
     }
 
     // MARK: - Step 2: Generate Plan (Haiku)
