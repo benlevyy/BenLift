@@ -56,6 +56,13 @@ struct WeekStripView: View {
     @Query private var seedPatterns: [SeedPattern]
     @Query private var exercises: [Exercise]
 
+    /// Today's muscle picked by the LLM (CoachViewModel.targetMuscleGroups
+    /// .first). When non-nil and there's no pin or logged session for today,
+    /// this overrides the pattern engine's prediction for the today cell.
+    /// The strip stays a deterministic data view; the AI's signal flows in
+    /// from the parent so the engine doesn't need to know about CoachVM.
+    let aiTargetMuscleForToday: MuscleGroup?
+
     @State private var selectedDayID: DayIntent.ID?
     /// HealthKit cross-training (climbing, running, etc.) for the past 21
     /// days. Refreshed on appear — used to color past empty days as the
@@ -79,7 +86,8 @@ struct WeekStripView: View {
             pins: pins,
             seedPatterns: seedPatterns,
             activities: activities,
-            exerciseMuscleLookup: exerciseMuscleLookup
+            exerciseMuscleLookup: exerciseMuscleLookup,
+            aiTargetMuscle: aiTargetMuscleForToday
         )
     }
 
@@ -493,7 +501,7 @@ private struct PinDaySheet: View {
 
 #Preview {
     VStack(alignment: .leading) {
-        WeekStripView()
+        WeekStripView(aiTargetMuscleForToday: nil)
         Spacer()
     }
     .background(Color.appBackground)

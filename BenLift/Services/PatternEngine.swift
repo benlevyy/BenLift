@@ -52,6 +52,12 @@ struct PatternEngine {
         seedPatterns: [SeedPattern],
         activities: [ActivityRecord] = [],
         exerciseMuscleLookup: [String: MuscleGroup] = [:],
+        /// LLM-picked muscle for today, when present. Used for the today
+        /// cell ONLY when there's no pin and no logged session. Lets the
+        /// AI's recovery-aware reasoning trump the pattern engine's
+        /// modal-by-weekday signal — important during cold start (sparse
+        /// session history) when the engine would otherwise emit `?`.
+        aiTargetMuscle: MuscleGroup? = nil,
         now: Date = Date()
     ) -> [DayIntent] {
         let cal = Calendar.current
@@ -116,7 +122,8 @@ struct PatternEngine {
                 primaryByID: primaryByID,
                 activitiesByDay: activitiesByDay,
                 pinsByDay: pinsByDay,
-                seedByWeekday: seedByWeekday
+                seedByWeekday: seedByWeekday,
+                aiTargetMuscle: aiTargetMuscle
             ))
         }
         return days
@@ -212,7 +219,8 @@ struct PatternEngine {
         primaryByID: [UUID: MuscleGroup],
         activitiesByDay: [Date: [ActivityRecord]],
         pinsByDay: [Date: MuscleGroupPin],
-        seedByWeekday: [Int: SeedPattern]
+        seedByWeekday: [Int: SeedPattern],
+        aiTargetMuscle: MuscleGroup?
     ) -> DayIntent {
         // 1. Past or today with a logged session → completed cell.
         // Primary muscle from exercise-count, not `muscleGroups.first` — see
@@ -263,10 +271,18 @@ struct PatternEngine {
             )
         }
 
-        // 4. Today, no pin, no logged session → predicted muscle for today.
-        // This is the strip's anchor cell — show the prediction with the
-        // .today styling so the user can immediately tap to lock it.
+        // 4. Today, no pin, no logged session → AI pick (preferred) →
+        // pattern prediction (fallback).
+        //
+        // Today is the most decision-relevant cell, and the AI integrates
+        // signals (recovery, cross-activity, weekly volume) the deterministic
+        // pattern engine doesn't. So when an AI recommendation is in flight
+        // or settled, it owns the today cell. The pattern engine only fires
+        // for today before the AI has spoken (cold app launch, no cached rec).
         if offset == 0 {
+            if let ai = aiTargetMuscle {
+                return DayIntent(date: date, muscle: ai, label: nil, source: .today, note: nil)
+            }
             let m = predict(
                 for: date, cal: cal,
                 sessionsByWeekday: sessionsByWeekday,
