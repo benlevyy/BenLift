@@ -207,7 +207,20 @@ struct PatternEngine {
             )
         }
 
-        // 2. Pin (today or future) wins over prediction.
+        // 2. Past day, no logged session → REST cell (not a prediction).
+        // Predictions are forward-looking; the past doesn't get re-guessed.
+        // The user said "it can say rest" — that's the intended UX.
+        if offset < 0 {
+            return DayIntent(
+                date: date,
+                muscle: nil,
+                label: "Rest",
+                source: .completed,  // styled as past, just unmuscled
+                note: nil
+            )
+        }
+
+        // 3. Pin (today or future) wins over prediction.
         if let pin = pinsByDay[date] {
             return DayIntent(
                 date: date,
@@ -218,7 +231,7 @@ struct PatternEngine {
             )
         }
 
-        // 3. Today, no pin, no logged session → predicted muscle for today.
+        // 4. Today, no pin, no logged session → predicted muscle for today.
         // This is the strip's anchor cell — show the prediction with the
         // .today styling so the user can immediately tap to lock it.
         if offset == 0 {
@@ -232,8 +245,8 @@ struct PatternEngine {
             return DayIntent(date: date, muscle: m, label: nil, source: .today, note: nil)
         }
 
-        // 4. Future cell, no pin → predict (or unknown).
-        let (m, conf) = predict(
+        // 5. Future cell, no pin → predict (or unknown).
+        let (m, _) = predict(
             for: date, cal: cal,
             sessionsByWeekday: sessionsByWeekday,
             primaryByID: primaryByID,
@@ -243,9 +256,6 @@ struct PatternEngine {
         if m == nil {
             return DayIntent(date: date, muscle: nil, label: nil, source: .unknown, note: nil)
         }
-        // Use predicted regardless of confidence — the cell visual softens
-        // when confidence is low, and the user can always pin to override.
-        _ = conf
         return DayIntent(date: date, muscle: m, label: nil, source: .predicted, note: nil)
     }
 

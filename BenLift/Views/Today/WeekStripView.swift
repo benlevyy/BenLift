@@ -23,7 +23,12 @@ enum DaySource: String {
 }
 
 struct DayIntent: Identifiable, Equatable {
-    let id = UUID()
+    /// Stable across recomputes — derived from the cell's calendar date so
+    /// `selectedDayID`-based sheet routing doesn't break when @Query
+    /// invalidates and `days` rebuilds. Using `UUID()` here was a bug:
+    /// every rebuild minted new IDs, so the tap → sheet flow lost its
+    /// reference within a single render cycle.
+    var id: TimeInterval { date.timeIntervalSince1970 }
     var date: Date
     var muscle: MuscleGroup?
     var label: String?       // freeform fallback ("rest", "travel")
