@@ -165,6 +165,116 @@ actor MockClaudeCoachService: CoachServiceProtocol {
         )
     }
 
+    // MARK: - v5 prompt suite mocks
+    //
+    // Minimal canned values — just enough to satisfy the protocol so the
+    // app builds and previews render. TODO: real mock once v5 ships.
+
+    func dailyPlanV5(input: PlannerInput, model: String) async throws -> DailyPlanV5Response {
+        // TODO: real mock
+        try await Task.sleep(nanoseconds: delay)
+        return DailyPlanV5Response(
+            recommendation: "Planning chest based on today's calendar slot. Cable Flys + Machine Press for variety since recent volume's been heavy.",
+            strategy: "Lead with the heaviest compound, finish with isolation.",
+            exercises: [
+                PlannedExerciseV5(
+                    name: "Bench Press",
+                    sets: 4,
+                    targetReps: "6-8",
+                    suggestedWeight: 175,
+                    weightAnchor: WeightAnchor(source: "Bench Press", rationale: "direct anchor from strength[]"),
+                    evidenceNote: "primary chest compound, working = 175",
+                    warmupSets: [WarmupSet(weight: 95, reps: 10), WarmupSet(weight: 135, reps: 5)],
+                    notes: nil,
+                    intent: "primary compound"
+                ),
+                PlannedExerciseV5(
+                    name: "DB Incline Press",
+                    sets: 3,
+                    targetReps: "8-10",
+                    suggestedWeight: 60,
+                    weightAnchor: WeightAnchor(source: "DB Incline Press", rationale: "direct anchor"),
+                    evidenceNote: "secondary chest compound",
+                    warmupSets: nil,
+                    notes: nil,
+                    intent: "secondary compound"
+                ),
+            ],
+            estimatedDuration: 50,
+            deloadNote: nil,
+            selfCheck: SelfCheckBlock(
+                setCountMath: "4+3 = 7 (budget 7, OK)",
+                ritualsOmitted: [],
+                hardRulesCheck: [
+                    "lowReadiness": "feeling=4 — n/a.",
+                    "injury": "no active injury — n/a.",
+                    "exerciseOut": "exerciseOut=[]; n/a.",
+                ]
+            )
+        )
+    }
+
+    func iterate(
+        currentPlan: DailyPlanResponse,
+        userRequest: String,
+        plannerInput: PlannerInput,
+        model: String
+    ) async throws -> IterateResponse {
+        // TODO: real mock
+        try await Task.sleep(nanoseconds: delay)
+        // Default to an "explain" response — cheapest mock that exercises
+        // the union decode path on the consuming side.
+        return .explain(IterateExplain(
+            responseType: "explain",
+            answer: "That exercise's in slot 1 because it's the heaviest compound for today's target muscle and you've been hitting it consistently."
+        ))
+    }
+
+    func bootstrap(input: BootstrapInput, model: String) async throws -> BootstrapResponse {
+        // TODO: real mock
+        try await Task.sleep(nanoseconds: delay)
+        return BootstrapResponse(
+            programName: "4-Day Upper/Lower Hypertrophy",
+            split: "upper_lower",
+            weeklyPattern: [
+                "monday": "chest, shoulders, triceps",
+                "tuesday": "quads, hamstrings, glutes",
+                "wednesday": "rest",
+                "thursday": "back, biceps",
+                "friday": "quads, hamstrings, glutes",
+                "saturday": "rest",
+                "sunday": "rest",
+            ],
+            rotationPerMuscle: [
+                "chest": ["Bench Press", "DB Incline Press", "Cable Flys"],
+                "back": ["Pull-ups (BW)", "Barbell Row", "Lat Pulldown"],
+                "shoulders": ["DB Shoulder Press", "Lateral Raises", "Face Pulls"],
+                "biceps": ["Barbell Curl", "Hammer Curl", "Cable Curl"],
+                "triceps": ["Close Grip Bench", "Tricep Pushdown", "Skull Crushers"],
+                "quads": ["Squat", "Leg Press", "Leg Extension"],
+                "hamstrings": ["Romanian Deadlift", "Hamstring Curl"],
+                "glutes": ["Hip Thrust"],
+                "calves": ["Standing Calf Raise"],
+                "core": ["Hanging Leg Raise (BW)"],
+            ],
+            weeklyVolumeTargets: [
+                "chest": BootstrapVolumeTarget(sets: 14, rationale: "intermediate hypertrophy band"),
+                "back": BootstrapVolumeTarget(sets: 16, rationale: "intermediate hypertrophy band"),
+                "shoulders": BootstrapVolumeTarget(sets: 12, rationale: "intermediate hypertrophy band"),
+                "biceps": BootstrapVolumeTarget(sets: 12, rationale: "arms minimum floor"),
+                "triceps": BootstrapVolumeTarget(sets: 12, rationale: "arms minimum floor"),
+                "quads": BootstrapVolumeTarget(sets: 14, rationale: "intermediate hypertrophy band"),
+                "hamstrings": BootstrapVolumeTarget(sets: 12, rationale: "intermediate hypertrophy band"),
+            ],
+            progressionScheme: ProgressionScheme(
+                compounds: "+5lb when you hit top of rep range across all working sets",
+                isolation: "+rep at same weight, +2.5lb when rep ceiling hit"
+            ),
+            ruleOuts: [],
+            rationale: "Upper/Lower at 4 days delivers 2x/week frequency on every major muscle, matching your hypertrophy goal at the intermediate level."
+        )
+    }
+
     func generateWeeklyReview(systemPrompt: String, userPrompt: String, model: String) async throws -> WeeklyReviewResponse {
         try await Task.sleep(nanoseconds: delay)
         return WeeklyReviewResponse(

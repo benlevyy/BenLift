@@ -12,6 +12,16 @@ protocol CoachServiceProtocol: Sendable {
     func analyzePostWorkout(systemPrompt: String, userPrompt: String, model: String) async throws -> PostWorkoutAnalysisResponse
     func generateWeeklyReview(systemPrompt: String, userPrompt: String, model: String) async throws -> WeeklyReviewResponse
     func refreshIntelligence(systemPrompt: String, userPrompt: String, model: String) async throws -> IntelligenceRefreshResponse
+
+    // MARK: - v5 prompt suite (calendar-driven planner)
+    //
+    // These three methods own template substitution + request shape internally
+    // — callers don't pass system/user prompts, just the structured input.
+    // `dailyPlanV5` uses extended thinking; `iterate` and `bootstrap` are cheap
+    // non-thinking calls.
+    func dailyPlanV5(input: PlannerInput, model: String) async throws -> DailyPlanV5Response
+    func iterate(currentPlan: DailyPlanResponse, userRequest: String, plannerInput: PlannerInput, model: String) async throws -> IterateResponse
+    func bootstrap(input: BootstrapInput, model: String) async throws -> BootstrapResponse
 }
 
 /// Events emitted while a `recommendAndPlan` call is streaming. Order is
@@ -94,6 +104,16 @@ struct SystemBlock: Encodable {
 private struct ClaudeMessage: Encodable {
     let role: String
     let content: String
+}
+
+/// The iterate prompt's `INPUT_JSON` slot is a SUBSET of PlannerInput —
+/// just strength, rituals, and constraints. The other PlannerInput fields
+/// (recentDays, recovery, etc.) aren't needed for single-exercise edits and
+/// would bloat the prompt.
+private struct IterateInputSubset: Encodable {
+    let strength: [String: PlannerInput.StrengthEntry]
+    let rituals: [String]
+    let constraints: PlannerInput.Constraints
 }
 
 private struct ClaudeAPIResponse: Decodable {
@@ -327,6 +347,271 @@ actor ClaudeCoachService: CoachServiceProtocol {
     func refreshIntelligence(systemPrompt: String, userPrompt: String, model: String) async throws -> IntelligenceRefreshResponse {
         print("[BenLift/API] refreshIntelligence called with model: \(model)")
         return try await sendRequest(systemPrompt: systemPrompt, userPrompt: userPrompt, model: model, maxTokens: 2048, label: "refreshIntelligence")
+    }
+
+    // MARK: - v5 prompt suite
+
+    /// daily_plan_v5 — fired on flagged conditions (injury, low readiness,
+    /// user-triggered iteration). Routine days use the deterministic Swift
+    /// planner. Uses extended thinking; `temperature = 1.0` is required when
+    /// thinking is enabled. `max_tokens` must be ≥ thinking_budget + visible
+    /// response budget so the JSON isn't truncated after the thinking block.
+    func dailyPlanV5(input: PlannerInput, model: String) async throws -> DailyPlanV5Response {
+        print("[BenLift/API] dailyPlanV5 called with model: \(model)")
+
+        let inputJSON = try Self.encodeJSON(input)
+        let todayDate = Self.todayDateString()
+        let system = Prompts.DailyPlanV5.system
+            .replacingOccurrences(of: "{{INPUT_JSON}}", with: inputJSON)
+            .replacingOccurrences(of: "{{EXERCISE_LIBRARY}}", with: Prompts.exerciseLibrary)
+            .replacingOccurrences(of: "{{TODAY_DATE}}", with: todayDate)
+        let user = Prompts.DailyPlanV5.user
+
+        let thinkingBudget = Prompts.DailyPlanV5.thinkingBudget
+        let maxTokens = thinkingBudget + 4096
+
+        return try await sendThinkingRequest(
+            systemPrompt: system,
+            userPrompt: user,
+            model: model,
+            maxTokens: maxTokens,
+            thinkingBudget: thinkingBudget,
+            label: "dailyPlanV5"
+        )
+    }
+
+    /// iterate — surgical edit OR conversational answer. Cheap (no thinking).
+    /// The `INPUT_JSON` slot is a SUBSET of PlannerInput per the prompt
+    /// (just strength, rituals, constraints) — built inline below.
+    func iterate(
+        currentPlan: DailyPlanResponse,
+        userRequest: String,
+        plannerInput: PlannerInput,
+        model: String
+    ) async throws -> IterateResponse {
+        print("[BenLift/API] iterate called with model: \(model)")
+
+        // Iterate prompt only needs strength, rituals, and constraints from
+        // PlannerInput — encode just that subset to keep the payload tight.
+        let subset = IterateInputSubset(
+            strength: plannerInput.strength,
+            rituals: plannerInput.rituals,
+            constraints: plannerInput.constraints
+        )
+        let inputJSON = try Self.encodeJSON(subset)
+        let currentPlanJSON = try Self.encodeJSON(currentPlan)
+
+        let system = Prompts.Iterate.system
+            .replacingOccurrences(of: "{{CURRENT_PLAN_JSON}}", with: currentPlanJSON)
+            .replacingOccurrences(of: "{{INPUT_JSON}}", with: inputJSON)
+            .replacingOccurrences(of: "{{USER_REQUEST}}", with: userRequest)
+        let user = Prompts.Iterate.user
+
+        return try await sendRequest(
+            systemPrompt: system,
+            userPrompt: user,
+            model: model,
+            maxTokens: 1024,
+            label: "iterate"
+        )
+    }
+
+    /// bootstrap — one-time program design from onboarding answers. Seeds
+    /// calendar pattern, rotation, weekly volume, progression scheme. Cheap
+    /// (no thinking — pattern engine corrects this over the first 2-3 weeks
+    /// of real workouts).
+    func bootstrap(input: BootstrapInput, model: String) async throws -> BootstrapResponse {
+        print("[BenLift/API] bootstrap called with model: \(model)")
+
+        let onboardingJSON = try Self.encodeJSON(input)
+        let system = Prompts.Bootstrap.system
+            .replacingOccurrences(of: "{{ONBOARDING_JSON}}", with: onboardingJSON)
+            .replacingOccurrences(of: "{{EXERCISE_LIBRARY}}", with: Prompts.exerciseLibrary)
+        let user = Prompts.Bootstrap.user
+
+        return try await sendRequest(
+            systemPrompt: system,
+            userPrompt: user,
+            model: model,
+            maxTokens: 2048,
+            label: "bootstrap"
+        )
+    }
+
+    // MARK: - Helpers for v5 suite
+
+    /// Encode any Codable to a pretty JSON string. Used to inline structured
+    /// input into the prompt template's `{{...}}` slots.
+    private static func encodeJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(value)
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func todayDateString() -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withFullDate]
+        return f.string(from: Date())
+    }
+
+    /// Variant of `sendRequest` that enables Anthropic extended thinking.
+    /// Uses raw JSON serialization (rather than `ClaudeRequest`) because the
+    /// thinking config + temperature override don't fit the existing struct.
+    private func sendThinkingRequest<T: Decodable>(
+        systemPrompt: String,
+        userPrompt: String,
+        model: String,
+        maxTokens: Int,
+        thinkingBudget: Int,
+        label: String,
+        retryCount: Int = 0
+    ) async throws -> T {
+        guard let apiKey = KeychainService.load(key: KeychainService.apiKeyKey), !apiKey.isEmpty else {
+            print("[BenLift/API] ❌ No API key found in Keychain")
+            throw ClaudeError.invalidAPIKey
+        }
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        request.setValue("prompt-caching-2024-07-31", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.timeoutInterval = 90  // thinking adds latency
+
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "temperature": 1.0,  // required when thinking is enabled
+            "thinking": [
+                "type": "enabled",
+                "budget_tokens": thinkingBudget,
+            ],
+            "system": [
+                ["type": "text", "text": TrainingKnowledgeBase.knowledgeBase, "cache_control": ["type": "ephemeral"]],
+                ["type": "text", "text": systemPrompt],
+            ],
+            "messages": [
+                ["role": "user", "content": userPrompt],
+            ],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        print("[BenLift/API] → \(label): model=\(model), maxTokens=\(maxTokens), thinking=\(thinkingBudget)")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            print("[BenLift/API] ❌ Network error: \(error)")
+            throw ClaudeError.networkError(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClaudeError.serverError(0, "Not an HTTP response")
+        }
+
+        print("[BenLift/API] ← \(label): HTTP \(httpResponse.statusCode), \(data.count) bytes")
+
+        if httpResponse.statusCode != 200 {
+            let errorBody = String(data: data, encoding: .utf8) ?? "(not utf8)"
+            print("[BenLift/API] ❌ Error body: \(errorBody)")
+        }
+
+        if httpResponse.statusCode == 429 && retryCount < 1 {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            return try await sendThinkingRequest(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                maxTokens: maxTokens,
+                thinkingBudget: thinkingBudget,
+                label: label,
+                retryCount: retryCount + 1
+            )
+        }
+        if (500...503).contains(httpResponse.statusCode) && retryCount < 1 {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            return try await sendThinkingRequest(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                model: model,
+                maxTokens: maxTokens,
+                thinkingBudget: thinkingBudget,
+                label: label,
+                retryCount: retryCount + 1
+            )
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? ""
+            if httpResponse.statusCode == 401 { throw ClaudeError.invalidAPIKey }
+            if httpResponse.statusCode == 429 { throw ClaudeError.rateLimited }
+            let friendlyMessage = Self.extractErrorMessage(from: data) ?? errorBody
+            throw ClaudeError.serverError(httpResponse.statusCode, friendlyMessage)
+        }
+
+        let apiResponse: ClaudeAPIResponse
+        do {
+            apiResponse = try JSONDecoder().decode(ClaudeAPIResponse.self, from: data)
+        } catch {
+            let rawBody = String(data: data, encoding: .utf8) ?? "(not utf8)"
+            print("[BenLift/API] ❌ Failed to decode API response: \(error)")
+            print("[BenLift/API] Raw response: \(rawBody.prefix(500))")
+            throw ClaudeError.malformedResponse("API response decode error: \(error.localizedDescription)")
+        }
+
+        // Thinking responses interleave `thinking` + `text` content blocks —
+        // we want the final visible text block.
+        guard let textBlock = apiResponse.content.first(where: { $0.type == "text" }),
+              let text = textBlock.text else {
+            throw ClaudeError.noContent
+        }
+
+        if let usage = apiResponse.usage {
+            print("[BenLift/API] ✓ Tokens: \(usage.inputTokens) in, \(usage.outputTokens) out")
+        }
+
+        return try Self.parseJSONResponse(text: text, label: label)
+    }
+
+    /// Strip markdown fences and decode the JSON object boundary. Shared
+    /// between the thinking and non-thinking paths.
+    private static func parseJSONResponse<T: Decodable>(text: String, label: String) throws -> T {
+        let stripped = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let cleanedText: String
+        if let firstBrace = stripped.firstIndex(of: "{"),
+           let lastBrace = stripped.lastIndex(of: "}") {
+            cleanedText = String(stripped[firstBrace...lastBrace])
+        } else {
+            cleanedText = stripped
+        }
+
+        print("[BenLift/API] \(label) response (\(cleanedText.count) chars): \(cleanedText.prefix(300))...")
+
+        guard let jsonData = cleanedText.data(using: .utf8) else {
+            throw ClaudeError.malformedResponse("Could not convert to data")
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        do {
+            let result = try decoder.decode(T.self, from: jsonData)
+            print("[BenLift/API] ✅ \(label) decoded successfully")
+            return result
+        } catch {
+            print("[BenLift/API] ❌ JSON decode error for \(T.self): \(error)")
+            print("[BenLift/API] Full JSON was: \(cleanedText)")
+            throw ClaudeError.malformedResponse("\(T.self) decode: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Core Request

@@ -365,6 +365,156 @@ struct WatchExerciseItem: Codable, Identifiable {
     let defaultWeight: Double?
 }
 
+// MARK: - daily_plan_v5 Response
+
+/// Response shape for the v5 daily-plan prompt. Calendar decides muscle
+/// upstream — this prompt only designs the session (exercises, sets, reps,
+/// loads, order) with safety adjudication and weight anchoring.
+struct DailyPlanV5Response: Codable {
+    let recommendation: String
+    let strategy: String
+    let exercises: [PlannedExerciseV5]
+    let estimatedDuration: Int
+    let deloadNote: String?
+    let selfCheck: SelfCheckBlock?
+}
+
+struct PlannedExerciseV5: Codable {
+    let name: String
+    let sets: Int
+    let targetReps: String
+    let suggestedWeight: Double?
+    let weightAnchor: WeightAnchor
+    let evidenceNote: String?
+    let warmupSets: [WarmupSet]?
+    let notes: String?
+    let intent: String
+}
+
+struct WeightAnchor: Codable {
+    let source: String      // exercise name | "bodyweight" | "no_history"
+    let rationale: String
+}
+
+/// Slim subset of the prompt's verbose `selfCheck`. We capture the fields
+/// we want to log/audit (set-count math, ritual omissions, hard-rule
+/// evidence) and let the rest decode-skip via Codable's permissive default.
+struct SelfCheckBlock: Codable {
+    let setCountMath: String?
+    let ritualsOmitted: [RitualOmission]?
+    /// Map of rule name (lowReadiness | injury | exerciseOut) → literal
+    /// evidence string. Kept as `[String: String]` so we don't have to
+    /// model the rule-name keys statically.
+    let hardRulesCheck: [String: String]?
+}
+
+struct RitualOmission: Codable {
+    let ritual: String
+    let safe: Bool
+    let reason: String
+}
+
+// MARK: - iterate Response
+//
+// Two-shape union: either a plan-edit (swap/prioritize/load_adjust/
+// add_finisher/remove) or a conversational explain. The decoder switches
+// on the `responseType` discriminator. Encode round-trips through the
+// inner case so downstream code can mutate and re-emit.
+
+enum IterateResponse: Codable {
+    case edit(IterateEdit)
+    case explain(IterateExplain)
+
+    private enum CodingKeys: String, CodingKey { case responseType }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decode(String.self, forKey: .responseType)
+        let single = try decoder.singleValueContainer()
+        switch kind {
+        case "edit":
+            self = .edit(try single.decode(IterateEdit.self))
+        case "explain":
+            self = .explain(try single.decode(IterateExplain.self))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .responseType,
+                in: c,
+                debugDescription: "Unknown iterate responseType: \(kind)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var single = encoder.singleValueContainer()
+        switch self {
+        case .edit(let e): try single.encode(e)
+        case .explain(let e): try single.encode(e)
+        }
+    }
+}
+
+struct IterateEdit: Codable {
+    let responseType: String   // "edit"
+    let editKind: String       // "swap" | "prioritize" | "load_adjust" | "add_finisher" | "remove"
+    let edits: [PlanEdit]
+    let rationale: String
+    let watchOuts: String?
+}
+
+struct PlanEdit: Codable {
+    let action: String                       // "replace" | "insert" | "delete" | "modify"
+    let targetExerciseName: String?
+    let newExercise: PlannedExerciseV5?      // null for delete
+}
+
+struct IterateExplain: Codable {
+    let responseType: String   // "explain"
+    let answer: String
+}
+
+// MARK: - bootstrap Response
+//
+// One-time program design from onboarding answers. Seeds calendar pattern,
+// exercise rotation per muscle, weekly volume targets, progression scheme.
+
+struct BootstrapResponse: Codable {
+    let programName: String
+    let split: String                              // full_body | upper_lower | ppl | ppl_ul | custom
+    let weeklyPattern: [String: String]            // "monday" → "chest, shoulders, triceps"
+    let rotationPerMuscle: [String: [String]]
+    let weeklyVolumeTargets: [String: BootstrapVolumeTarget]
+    let progressionScheme: ProgressionScheme
+    let ruleOuts: [String]
+    let rationale: String
+}
+
+/// Distinct from the existing `VolumeTarget` (which carries `sets` + `repRange`
+/// for the older program-generation flow). Bootstrap volume targets have a
+/// `rationale` string instead of a rep range.
+struct BootstrapVolumeTarget: Codable {
+    let sets: Int
+    let rationale: String
+}
+
+struct ProgressionScheme: Codable {
+    let compounds: String
+    let isolation: String
+}
+
+/// Onboarding input passed to the bootstrap prompt. Codable so we can
+/// serialize directly to JSON for the `{{ONBOARDING_JSON}}` template slot.
+struct BootstrapInput: Codable {
+    let goal: String              // "hypertrophy" | "strength" | "general_fitness" | "sport_specific"
+    let daysPerWeek: Int          // 3 | 4 | 5 | 6
+    let experience: String        // "never" | "<1yr" | "1-3yr" | "3+yr"
+    let equipment: String         // "full_gym" | "home_dumbbells" | "bodyweight"
+    let focusAreas: [String]
+    let injuriesOrAvoid: String?
+    let crossTraining: String?
+    let preferences: String?
+}
+
 // MARK: - Health Context (sent to Claude)
 
 struct HealthContext: Codable {

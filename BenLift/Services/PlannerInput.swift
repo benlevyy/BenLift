@@ -187,8 +187,12 @@ extension PlannerInput {
             now: now
         )
 
+        let injuriesText: String? = {
+            guard let s = intelligence?.injuries, !s.isEmpty else { return nil }
+            return s
+        }()
         let constraints = Constraints(
-            injuries: intelligence?.injuries.flatMap { $0.isEmpty ? nil : $0 },
+            injuries: injuriesText,
             exerciseOut: exerciseOut
         )
         let userProfile = UserProfile(
