@@ -79,6 +79,14 @@ struct TodayView: View {
                         if !coachVM.editedExercises.isEmpty {
                             planSection
                                 .transition(.opacity)
+                            // Customize entry point — sits just below the
+                            // plan, complements the existing refresh pill.
+                            // Long-press on a row still owns per-exercise
+                            // swaps; this opens the more general iterate
+                            // flow ("prioritize pull-ups", "why squat
+                            // first?", "lighten bench, shoulder tight").
+                            customizeButton
+                                .transition(.opacity)
                         }
                     }
 
@@ -340,6 +348,10 @@ struct TodayView: View {
 
     @State private var showAddExercise = false
     @State private var showWatchAlert = false
+    /// Drives the Customize sheet (IterateSheet). Distinct from quickSwap —
+    /// iterate is plan-wide ("prioritize pull-ups", "lighten the bench") via
+    /// a single LLM round-trip that returns either an edit or an answer.
+    @State private var showIterateSheet = false
 
     // MARK: - Button Styles
 
@@ -739,6 +751,38 @@ struct TodayView: View {
         }
         .buttonStyle(.plain)
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    // MARK: - Customize Plan Entry
+
+    /// Text-link style entry point to the iterate sheet. Sits below the
+    /// plan list, deliberately quieter than the prominent blue refresh
+    /// pill — refresh is the heavy "regenerate everything" action;
+    /// customize is the lightweight "tweak this with words" action.
+    private var customizeButton: some View {
+        Button {
+            Haptics.selection()
+            showIterateSheet = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.caption)
+                Text("Customize plan")
+                    .font(.subheadline.bold())
+            }
+            .foregroundColor(.accentBlue)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+            .background(Color.accentBlue.opacity(0.08))
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showIterateSheet) {
+            IterateSheet(coachVM: coachVM)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private func feelingLabel(_ level: Int) -> String {

@@ -12,6 +12,33 @@ class CoachViewModel {
     var isGenerating: Bool = false
     var planError: String?
 
+    // MARK: - Iterate (Customize plan) state
+    //
+    // Backs the IterateSheet's request lifecycle. The sheet is the only
+    // reader; we keep it on the VM so the sheet can dismiss/recreate
+    // without losing in-flight state. Reset on sheet dismiss.
+
+    /// Result of the last successful iterate call. Set in `iterate(...)`,
+    /// consumed by the sheet to render either an edit confirmation or an
+    /// answer card. Nil between requests.
+    var iterateLastResult: IterateResultDisplay?
+
+    /// User-facing error string from the last iterate call. Surfaced inline
+    /// in the sheet with a Retry button. Nil on success.
+    var iterateError: String?
+
+    /// True while an iterate request is in flight. Drives the sheet's
+    /// spinner + disables the submit button.
+    var isIterating: Bool = false
+
+    /// What the iterate sheet should render. Wraps the two service-side
+    /// shapes so the view doesn't have to know about IterateResponse's
+    /// codable discriminator dance.
+    enum IterateResultDisplay {
+        case edit(IterateEdit)
+        case explain(IterateExplain)
+    }
+
     /// In-memory log of quick swaps the user has accepted on the current plan.
     /// Cleared when a new plan is generated. Fed back into subsequent swap prompts
     /// so the model can spot patterns (e.g., 3 pressing swaps -> likely shoulder issue).
@@ -758,6 +785,152 @@ class CoachViewModel {
             if Self.isCancellation(error) { return }
             print("[BenLift/Coach] ❌ quickSwap failed: \(error)")
         }
+    }
+
+    // MARK: - Iterate (general plan customization)
+    //
+    // Routes a freeform user request ("prioritize pull-ups", "lighten
+    // bench, shoulder feels tight", "why is squat first?") through the
+    // iterate prompt, which returns either a structured plan edit or a
+    // conversational explanation. Distinct from quickSwap, which is the
+    // per-row "replace this exercise" flow.
+
+    /// Run an iterate request against the current plan. Updates VM state
+    /// for the sheet to read: `isIterating` while in-flight,
+    /// `iterateLastResult` on success (edit applied + explainer cached),
+    /// `iterateError` on failure.
+    @MainActor
+    func iterate(request: String, modelContext: ModelContext) async {
+        guard let plan = currentPlan else {
+            iterateError = "No active plan to iterate on."
+            return
+        }
+        // Pull HealthKit recovery + recent activities before building
+        // PlannerInput so the iterate prompt sees the same readiness
+        // context the v5 daily-plan call would. We don't need to be
+        // surgical here — iterate is a cheap call.
+        let healthContext = await HealthKitService.shared.fetchHealthContext()
+        let activities = await HealthKitService.shared.fetchRecentActivities(days: 7)
+        // PlannerInput.build expects PatternEngine.ActivityRecord — the
+        // same type fetchRecentActivities returns, so this is a direct
+        // pass-through.
+        guard let plannerInput = PlannerInput.build(
+            modelContext: modelContext,
+            feeling: feeling,
+            availableTime: availableTime,
+            concerns: combinedConcerns(),
+            healthContext: healthContext,
+            recentActivities: activities,
+            now: Date()
+        ) else {
+            iterateError = "Couldn't build planner context for this request."
+            return
+        }
+
+        isIterating = true
+        iterateError = nil
+        defer { isIterating = false }
+
+        // Iterate is a cheap, non-thinking call — Haiku is the right model.
+        let model = UserDefaults.standard.string(forKey: "modelIterate")
+            ?? "claude-haiku-4-5-20251001"
+        print("[BenLift/Coach] iterate request: \"\(request)\"")
+
+        do {
+            let response = try await coachService.iterate(
+                currentPlan: plan,
+                userRequest: request,
+                plannerInput: plannerInput,
+                model: model
+            )
+            switch response {
+            case .edit(let edit):
+                applyIterateEdits(edit.edits)
+                planAdjustments.append(AdjustmentRecord(
+                    kind: .swap,
+                    summary: "Iterate (\(edit.editKind)): \(edit.rationale.prefix(80))"
+                ))
+                persistCachedGeneration()
+                iterateLastResult = .edit(edit)
+                print("[BenLift/Coach] ✅ iterate applied \(edit.edits.count) edit(s) — \(edit.editKind)")
+            case .explain(let explain):
+                iterateLastResult = .explain(explain)
+                print("[BenLift/Coach] ✅ iterate explanation returned (\(explain.answer.count) chars)")
+            }
+        } catch {
+            if Self.isCancellation(error) {
+                print("[BenLift/Coach] iterate cancelled")
+            } else {
+                print("[BenLift/Coach] ❌ iterate failed: \(error)")
+                iterateError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Apply the structured edits from an `IterateEdit` to `editedExercises`
+    /// and rebuild `currentPlan`. PlannedExerciseV5 → PlannedExercise:
+    /// most fields map directly; weightAnchor + evidenceNote are audit
+    /// trail and dropped.
+    @MainActor
+    private func applyIterateEdits(_ edits: [PlanEdit]) {
+        for edit in edits {
+            switch edit.action {
+            case "replace", "modify":
+                guard let target = edit.targetExerciseName,
+                      let v5 = edit.newExercise,
+                      let idx = editedExercises.firstIndex(where: { $0.name == target })
+                else { continue }
+                // Keep the user's original repScheme on replace if the LLM
+                // didn't re-emit one — same defensiveness as quickSwap.
+                let original = editedExercises[idx]
+                editedExercises[idx] = pickStartingWeight(
+                    Self.plannedFromV5(v5, fallbackRepScheme: original.repScheme)
+                )
+
+            case "insert":
+                guard let v5 = edit.newExercise else { continue }
+                editedExercises.append(pickStartingWeight(
+                    Self.plannedFromV5(v5, fallbackRepScheme: nil)
+                ))
+
+            case "delete":
+                guard let target = edit.targetExerciseName else { continue }
+                editedExercises.removeAll { $0.name == target }
+
+            default:
+                print("[BenLift/Coach] iterate: unknown edit action \"\(edit.action)\" — ignored")
+            }
+        }
+        // Rebuild currentPlan with the mutated exercise list. Strategy /
+        // duration / deloadNote are unchanged by an iterate edit — they
+        // belong to the parent plan, not the per-exercise edits.
+        if let plan = currentPlan {
+            currentPlan = DailyPlanResponse(
+                exercises: editedExercises,
+                sessionStrategy: plan.sessionStrategy,
+                estimatedDuration: plan.estimatedDuration,
+                deloadNote: plan.deloadNote
+            )
+        }
+    }
+
+    /// Map the v5 schema's exercise into the user-facing PlannedExercise.
+    /// Drops weightAnchor + evidenceNote (audit-only fields). intent is
+    /// non-optional in v5 but optional in PlannedExercise — pass through.
+    private static func plannedFromV5(
+        _ v5: PlannedExerciseV5,
+        fallbackRepScheme: String?
+    ) -> PlannedExercise {
+        PlannedExercise(
+            name: v5.name,
+            sets: v5.sets,
+            targetReps: v5.targetReps,
+            suggestedWeight: v5.suggestedWeight,
+            repScheme: fallbackRepScheme,
+            warmupSets: v5.warmupSets,
+            notes: v5.notes,
+            intent: v5.intent
+        )
     }
 
     // MARK: - Recommendation Cache
