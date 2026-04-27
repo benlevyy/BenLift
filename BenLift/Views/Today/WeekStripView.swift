@@ -49,6 +49,7 @@ struct WeekStripView: View {
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
     @Query private var pins: [MuscleGroupPin]
     @Query private var seedPatterns: [SeedPattern]
+    @Query private var exercises: [Exercise]
 
     @State private var selectedDayID: DayIntent.ID?
 
@@ -56,11 +57,19 @@ struct WeekStripView: View {
     private let cellHeight: CGFloat = 100
     private let cellSpacing: CGFloat = 10
 
+    /// Exercise → primary muscle group map. The pattern engine uses this to
+    /// derive each session's primary muscle from actual entries (not the
+    /// non-deterministic `muscleGroups[]` ordering).
+    private var exerciseMuscleLookup: [String: MuscleGroup] {
+        Dictionary(uniqueKeysWithValues: exercises.map { ($0.name, $0.muscleGroup) })
+    }
+
     private var days: [DayIntent] {
         PatternEngine.computeWeek(
             sessions: sessions,
             pins: pins,
-            seedPatterns: seedPatterns
+            seedPatterns: seedPatterns,
+            exerciseMuscleLookup: exerciseMuscleLookup
         )
     }
 

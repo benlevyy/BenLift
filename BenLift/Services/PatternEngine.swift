@@ -27,10 +27,16 @@ struct PatternEngine {
 
     /// Produce the strip's day list — past 3, today, next 3 days (7 total).
     /// `now` is injected for testability; pass `Date()` from the call site.
+    /// `exerciseMuscleLookup` maps an exercise's display name to its primary
+    /// muscle group — used to derive a session's primary muscle from actual
+    /// training volume rather than from the order of `muscleGroups[]` (which
+    /// is non-deterministic depending on whether the session came from the
+    /// AI plan, manual entry, or watch sync).
     static func computeWeek(
         sessions: [WorkoutSession],
         pins: [MuscleGroupPin],
         seedPatterns: [SeedPattern],
+        exerciseMuscleLookup: [String: MuscleGroup] = [:],
         now: Date = Date()
     ) -> [DayIntent] {
         let cal = Calendar.current
@@ -40,6 +46,15 @@ struct PatternEngine {
         // rolling window. The pattern signal lives in this bucket.
         let windowStart = cal.date(byAdding: .day, value: -lookbackDays, to: today) ?? today
         let recentSessions = sessions.filter { $0.date >= windowStart }
+
+        // Pre-compute primary muscle per session ONCE — costs O(entries) per
+        // session, much cheaper than recomputing per cell / per pattern call.
+        let primaryByID: [UUID: MuscleGroup] = recentSessions.reduce(into: [:]) { acc, s in
+            if let m = primaryMuscle(of: s, lookup: exerciseMuscleLookup) {
+                acc[s.id] = m
+            }
+        }
+
         let sessionsByWeekday: [Int: [WorkoutSession]] = Dictionary(grouping: recentSessions) {
             cal.component(.weekday, from: $0.date)
         }
@@ -57,12 +72,12 @@ struct PatternEngine {
             acc[seed.weekday] = seed
         }
 
-        // Most-recent-completed-day-per-muscle index, used for the fallback
-        // "least recently trained" pick when neither pattern nor seed apply.
+        // Most-recent-completed-day-per-muscle index — uses derived primary
+        // (not the muscleGroups[] array) so cross-muscle days are scored
+        // by what they actually trained most.
         let mostRecentByMuscle: [MuscleGroup: Date] = recentSessions.reduce(into: [:]) { acc, s in
-            for mg in s.muscleGroups {
-                if (acc[mg] ?? .distantPast) < s.date { acc[mg] = s.date }
-            }
+            guard let m = primaryByID[s.id] else { return }
+            if (acc[m] ?? .distantPast) < s.date { acc[m] = s.date }
         }
 
         // Build the 7-cell window: 3 days back → today → 3 days forward.
@@ -76,6 +91,7 @@ struct PatternEngine {
                 cal: cal,
                 sessions: recentSessions,
                 sessionsByWeekday: sessionsByWeekday,
+                primaryByID: primaryByID,
                 pinsByDay: pinsByDay,
                 seedByWeekday: seedByWeekday,
                 mostRecentByMuscle: mostRecentByMuscle
@@ -84,12 +100,46 @@ struct PatternEngine {
         return days
     }
 
+    // MARK: - Primary muscle inference
+    //
+    // A session's "primary muscle" is the muscle hit by the most exercises
+    // (one-vote-per-exercise), NOT `muscleGroups.first`. The `muscleGroups`
+    // array is metadata: its order depends on whether the session came from
+    // the AI plan, manual entry, or watch sync, so it's not a reliable
+    // primary signal. Counting actual exercises is — a "push" session with
+    // 4 chest exercises and 1 lateral-raise should read as chest, not
+    // shoulders.
+    //
+    // Tie-break: alphabetical for determinism. Fallback to muscleGroups[0]
+    // when no exercises (or no entries match the lookup), then to
+    // category-derived guess for legacy sessions.
+    static func primaryMuscle(of session: WorkoutSession, lookup: [String: MuscleGroup]) -> MuscleGroup? {
+        if !session.entries.isEmpty && !lookup.isEmpty {
+            var counts: [MuscleGroup: Int] = [:]
+            for entry in session.entries {
+                if let m = lookup[entry.exerciseName] {
+                    counts[m, default: 0] += 1
+                }
+            }
+            if let best = counts.max(by: { lhs, rhs in
+                lhs.value != rhs.value
+                    ? lhs.value < rhs.value
+                    : lhs.key.rawValue > rhs.key.rawValue
+            }) {
+                return best.key
+            }
+        }
+        if let first = session.muscleGroups.first { return first }
+        return nil
+    }
+
     /// Convenience for the planner pipeline — extract today's targetMuscle
     /// without rebuilding the full strip.
     static func targetMuscleForToday(
         sessions: [WorkoutSession],
         pins: [MuscleGroupPin],
         seedPatterns: [SeedPattern],
+        exerciseMuscleLookup: [String: MuscleGroup] = [:],
         now: Date = Date()
     ) -> (muscle: MuscleGroup?, source: PlannerMuscleSource, confidence: Double?) {
         let cal = Calendar.current
@@ -107,7 +157,14 @@ struct PatternEngine {
         let weekday = cal.component(.weekday, from: today)
         let sameDayofWeek = recent.filter { cal.component(.weekday, from: $0.date) == weekday }
 
-        if let (modal, conf) = modalMuscle(in: sameDayofWeek), sameDayofWeek.count >= 2 {
+        let primaryByID: [UUID: MuscleGroup] = sameDayofWeek.reduce(into: [:]) { acc, s in
+            if let m = primaryMuscle(of: s, lookup: exerciseMuscleLookup) {
+                acc[s.id] = m
+            }
+        }
+
+        if let (modal, conf) = modalMuscle(in: sameDayofWeek, primaryByID: primaryByID),
+           sameDayofWeek.count >= 2 {
             return (modal, .predicted, conf)
         }
 
@@ -130,16 +187,17 @@ struct PatternEngine {
         cal: Calendar,
         sessions: [WorkoutSession],
         sessionsByWeekday: [Int: [WorkoutSession]],
+        primaryByID: [UUID: MuscleGroup],
         pinsByDay: [Date: MuscleGroupPin],
         seedByWeekday: [Int: SeedPattern],
         mostRecentByMuscle: [MuscleGroup: Date]
     ) -> DayIntent {
         // 1. Past or today with a logged session → completed cell.
+        // Primary muscle from exercise-count, not `muscleGroups.first` — see
+        // `primaryMuscle(of:)` rationale.
         if offset <= 0,
            let logged = sessions.first(where: { cal.isDate($0.date, inSameDayAs: date) }) {
-            // Take the first muscle group as primary; multi-muscle is shown
-            // by the cell as the first chip + an underline hint.
-            let primary = logged.muscleGroups.first
+            let primary = primaryByID[logged.id]
             return DayIntent(
                 date: date,
                 muscle: primary,
@@ -167,6 +225,7 @@ struct PatternEngine {
             let (m, _) = predict(
                 for: date, cal: cal,
                 sessionsByWeekday: sessionsByWeekday,
+                primaryByID: primaryByID,
                 seedByWeekday: seedByWeekday,
                 mostRecentByMuscle: mostRecentByMuscle
             )
@@ -177,6 +236,7 @@ struct PatternEngine {
         let (m, conf) = predict(
             for: date, cal: cal,
             sessionsByWeekday: sessionsByWeekday,
+            primaryByID: primaryByID,
             seedByWeekday: seedByWeekday,
             mostRecentByMuscle: mostRecentByMuscle
         )
@@ -197,6 +257,7 @@ struct PatternEngine {
         for date: Date,
         cal: Calendar,
         sessionsByWeekday: [Int: [WorkoutSession]],
+        primaryByID: [UUID: MuscleGroup],
         seedByWeekday: [Int: SeedPattern],
         mostRecentByMuscle: [MuscleGroup: Date]
     ) -> (MuscleGroup?, Double?) {
@@ -204,7 +265,7 @@ struct PatternEngine {
 
         // Real data path — needs ≥2 candidates to be a "pattern" not a coincidence.
         if let bucket = sessionsByWeekday[wd], bucket.count >= 2 {
-            if let (modal, conf) = modalMuscle(in: bucket) {
+            if let (modal, conf) = modalMuscle(in: bucket, primaryByID: primaryByID) {
                 return (modal, conf)
             }
         }
@@ -226,18 +287,19 @@ struct PatternEngine {
     }
 
     /// Find the most-frequent primary muscle across a session bucket, plus
-    /// the share-of-bucket confidence. Ties broken by alphabetical order
-    /// for determinism.
-    private static func modalMuscle(in sessions: [WorkoutSession]) -> (MuscleGroup, Double)? {
+    /// the share-of-bucket confidence. Uses the pre-computed `primaryByID`
+    /// (exercise-count-derived) rather than `muscleGroups.first` so the
+    /// pattern signal reflects what the user actually trained, not metadata
+    /// ordering. Ties broken alphabetically for determinism.
+    private static func modalMuscle(
+        in sessions: [WorkoutSession],
+        primaryByID: [UUID: MuscleGroup]
+    ) -> (MuscleGroup, Double)? {
         guard !sessions.isEmpty else { return nil }
         var counts: [MuscleGroup: Int] = [:]
         for s in sessions {
-            // Use first listed muscle as primary — matches the strip's "one
-            // muscle per cell" model. Multi-muscle session days lose the
-            // tail muscles in the pattern signal; that's an accepted
-            // trade-off (the user's MODAL Mon focus is what matters).
-            if let first = s.muscleGroups.first {
-                counts[first, default: 0] += 1
+            if let m = primaryByID[s.id] {
+                counts[m, default: 0] += 1
             }
         }
         guard let best = counts.max(by: { lhs, rhs in
