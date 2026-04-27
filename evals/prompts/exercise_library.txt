@@ -1,0 +1,11 @@
+Chest: Bench Press, DB Incline Press, DB Flat Press, Machine Press, Incline Barbell Press, Landmine Press, Single Arm DB Floor Press, Machine Incline Press, Svend Press, Cable Flys, Cable Fly (3 Height), Pec Deck
+Back: Pull-ups (BW), Chin-ups (BW), Lat Pulldown, One Arm Lat Pulldown, Straight Arm Pulldown, Neutral Grip Lat Pulldown, Seated Row, Chest Supported Row, Barbell Row, DB Row, T-Bar Row, Meadows Row, Pendlay Row, Seal Row, Machine Row, Inverted Row (BW), Single Arm Cable Row, Rack Pull, Kayak Row, Prone Y-T-W Raises, Band Pull-Apart (BW), Kelso Shrug, Snatch Grip Barbell Shrug
+Shoulders: DB Shoulder Press, Overhead Press, Machine Shoulder Press, Lateral Raises, Cable Lateral Raise, Rear Delt Fly, Cable Y-Raise, Lu Raises, Cable Front Raise, Plate Bus Driver, Banded Shoulder Dislocate (BW), Face Pulls, Reverse Pec Deck, Face Pull w/ External Rotation, Cable External Rotation
+Biceps: Barbell Curl, Hammer Curl, Incline Hammer Curl, Preacher Curl, Incline Curl, Cable Curl, Spider Curl, EZ Bar Curl, Concentration Curl, Bayesian Curl
+Triceps: Close Grip Bench, Skull Crushers, Tricep Pushdown, Tricep Overhead Extension, Dips (BW), Tricep Kickback, JM Press, Cable Tricep Kickback, Diamond Push-ups (BW), Single Arm Tricep Pushdown, French Press, Bench Dips (BW)
+Forearms: Wrist Curl, Reverse Curl
+Quads: Squat, Front Squat, Hack Squat, Leg Press, Goblet Squat, Leg Extension, Bulgarian Split Squat, Split Squat, Step Ups, Walking Lunge
+Hamstrings: Romanian Deadlift, Hamstring Curl, Nordic Curl (BW), Stiff Leg Deadlift, Good Mornings, Seated Leg Curl
+Glutes: Hip Thrust, Barbell Glute Bridge, Cable Kickback, Glute Ham Raise (BW)
+Calves: Standing Calf Raise, Seated Calf Raise, Donkey Calf Raise
+Core: Plank (BW), Hanging Leg Raise (BW), Cable Crunch, Pallof Press, Ab Wheel (BW), Dead Bug (BW)

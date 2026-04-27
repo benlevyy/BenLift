@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "id": "03_ben_low_readiness",
+    "description": "Low readiness: feeling 2, poor sleep (5.2h), HRV -1.4 SD below baseline. Hard Rule #1 kicks in.",
+    "must_check": [
+      "Does NOT program heavy barbell compounds: no Squat, Front Squat, Deadlift, Romanian Deadlift, Overhead Press, heavy Bench",
+      "Working sets cut 30-50% vs. normal — if usual target would be ~14, this session should land around 7-10",
+      "Exercises favor machines, cables, isolation (e.g., Leg Extension, Hack Squat, Hamstring Curl, Cable Flys, Machine Press)",
+      "Reasoning explicitly references the low readiness signals (feeling 2, sleep 5.2h, HRV depressed)",
+      "Does NOT rationalize a heavy compound as 'lower CNS'"
+    ]
+  },
+  "userState": {
+    "today": {
+      "feeling": 2,
+      "availableTime": 45,
+      "concerns": "Feeling wiped, didn't sleep well.",
+      "muscleOverrides": {},
+      "targetWorkingSets": 10
+    },
+    "constraints": {
+      "injuries": null,
+      "userNotes": null,
+      "goal": "Hypertrophy",
+      "experience": "Intermediate",
+      "daysPerWeek": 4
+    },
+    "preferences": {
+      "rituals": ["Bench Press", "Lateral Raises", "Tricep Pushdown", "DB Incline Press"],
+      "rotation": {
+        "chest": ["Cable Flys", "Machine Press"],
+        "shoulders": ["DB Shoulder Press", "Rear Delt Fly"],
+        "triceps": ["Skull Crushers", "Tricep Overhead Extension", "Dips"],
+        "back": ["Pull-ups", "Lat Pulldown", "Seated Row"],
+        "biceps": ["Hammer Curl", "Preacher Curl"],
+        "quads": ["Squat", "Hack Squat", "Leg Extension"],
+        "hamstrings": ["Romanian Deadlift", "Hamstring Curl"]
+      },
+      "sessionShape": {"avgExercises": 6, "avgSetsPerExercise": 3, "preferredRestSeconds": 150},
+      "style": ["push-to-failure (uses fractional-rep logging)"]
+    },
+    "strength": {
+      "Bench Press":          {"e1rm": 205, "working": 175, "lastTrained": "5d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "DB Incline Press":     {"e1rm": 145, "working": 60,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Lateral Raises":       {"e1rm": 0,   "working": 22,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Tricep Pushdown":      {"e1rm": 0,   "working": 60,  "lastTrained": "5d", "trend4wk": "+2.5 lb / 4wk","bodyweight": false},
+      "Pull-ups":             {"e1rm": 0,   "working": 0,   "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": true},
+      "Lat Pulldown":         {"e1rm": 195, "working": 150, "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Squat":                {"e1rm": 245, "working": 205, "lastTrained": "2d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "Romanian Deadlift":    {"e1rm": 215, "working": 165, "lastTrained": "2d", "trend4wk": "flat",        "bodyweight": false},
+      "Leg Extension":        {"e1rm": 0,   "working": 160, "lastTrained": "2d", "trend4wk": "flat",        "bodyweight": false},
+      "Hack Squat":           {"e1rm": 0,   "working": 60,  "lastTrained": "2d", "trend4wk": "flat",        "bodyweight": false},
+      "Hamstring Curl":       {"e1rm": 0,   "working": 95,  "lastTrained": "2d", "trend4wk": "flat",        "bodyweight": false}
+    },
+    "muscleState": {
+      "chest":     {"lastTrained": "5d", "setsThisWeek": 0,  "status": "fresh",      "lastSource": "strength"},
+      "shoulders": {"lastTrained": "5d", "setsThisWeek": 3,  "status": "fresh",      "lastSource": "strength"},
+      "triceps":   {"lastTrained": "5d", "setsThisWeek": 0,  "status": "fresh",      "lastSource": "strength"},
+      "back":      {"lastTrained": "3d", "setsThisWeek": 11, "status": "ready",      "lastSource": "strength"},
+      "biceps":    {"lastTrained": "3d", "setsThisWeek": 6,  "status": "ready",      "lastSource": "strength"},
+      "quads":     {"lastTrained": "2d", "setsThisWeek": 8,  "status": "recovering", "lastSource": "strength"},
+      "hamstrings":{"lastTrained": "2d", "setsThisWeek": 6,  "status": "recovering", "lastSource": "strength"}
+    },
+    "recent": [
+      {"date": "2d", "focus": ["quads", "hamstrings"], "feeling": 3, "duration": 62, "volume": 17800,
+       "topLifts": {"Squat": "205×6", "Romanian Deadlift": "165×8"}},
+      {"date": "3d", "focus": ["back", "biceps"], "feeling": 4, "duration": 55, "volume": 13400,
+       "topLifts": {"Lat Pulldown": "150×8", "Pull-ups": "BW×7"}},
+      {"date": "5d", "focus": ["chest", "shoulders", "triceps"], "feeling": 3, "duration": 55, "volume": 10100,
+       "topLifts": {"Bench Press": "175×6", "DB Incline Press": "60×8"}}
+    ],
+    "recovery": {
+      "sleep7d": 6.8,
+      "hrv7d": 37,
+      "rhrBaseline": 58,
+      "sleepTrend": "declining",
+      "hrvTrend": "declining"
+    },
+    "crossActivity": [],
+    "observations": [
+      {"kind": "recovery", "subject": "sleep", "text": "Performance drops ~10% on days following <6h sleep", "confidence": "high", "lastSeenAgo": "14d"}
+    ],
+    "rules": []
+  },
+  "extraContext": {
+    "lastNightSleepHours": 5.2,
+    "todayHRV": 36,
+    "hrvBaseline": 48,
+    "hrvStdDev": 8,
+    "note": "HRV is ~-1.5 SD below baseline, sleep <6h. Hard rule #1 triggered."
+  }
+}

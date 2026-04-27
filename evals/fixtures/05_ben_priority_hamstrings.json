@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "id": "05_ben_priority_hamstrings",
+    "description": "User flags hamstrings as lagging and asks to prioritize. Hard Rule #3: hamstring primary exercise goes in slot 1 even if it displaces the usual compound.",
+    "must_check": [
+      "Exercise slot 1 is a hamstring-primary movement (Romanian Deadlift, Stiff Leg Deadlift, or Nordic Curl) — NOT Squat even though Squat is Ben's usual leg opener",
+      "Hamstrings receive noticeably more volume than quads in this session",
+      "Reasoning references the priority request explicitly and cites the exercise-order rationale (first-lift effect / Nunes 2021 is fine, but evidence-anchored language expected)",
+      "Total working sets close to targetWorkingSets (14)",
+      "Quads are still trained as secondary — not skipped entirely"
+    ]
+  },
+  "userState": {
+    "today": {
+      "feeling": 4,
+      "availableTime": 55,
+      "concerns": "Hamstrings have been lagging — want to prioritize them today. Put them first.",
+      "muscleOverrides": {},
+      "targetWorkingSets": 14
+    },
+    "constraints": {
+      "injuries": null,
+      "userNotes": null,
+      "goal": "Hypertrophy",
+      "experience": "Intermediate",
+      "daysPerWeek": 4
+    },
+    "preferences": {
+      "rituals": ["Bench Press", "Squat", "Lateral Raises", "Tricep Pushdown"],
+      "rotation": {
+        "quads": ["Squat", "Hack Squat", "Leg Extension", "Bulgarian Split Squat"],
+        "hamstrings": ["Romanian Deadlift", "Hamstring Curl", "Stiff Leg Deadlift"],
+        "glutes": ["Hip Thrust", "Barbell Glute Bridge"]
+      },
+      "sessionShape": {"avgExercises": 6, "avgSetsPerExercise": 3, "preferredRestSeconds": 150},
+      "style": ["push-to-failure (uses fractional-rep logging)"]
+    },
+    "strength": {
+      "Squat":                {"e1rm": 245, "working": 205, "lastTrained": "5d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "Romanian Deadlift":    {"e1rm": 215, "working": 165, "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Leg Extension":        {"e1rm": 0,   "working": 160, "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Hamstring Curl":       {"e1rm": 0,   "working": 95,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Hack Squat":           {"e1rm": 0,   "working": 55,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Bulgarian Split Squat":{"e1rm": 0,   "working": 35,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Bench Press":          {"e1rm": 205, "working": 175, "lastTrained": "2d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "Lat Pulldown":         {"e1rm": 195, "working": 150, "lastTrained": "4d", "trend4wk": "flat",        "bodyweight": false}
+    },
+    "muscleState": {
+      "chest":     {"lastTrained": "2d", "setsThisWeek": 9,  "status": "recovering", "lastSource": "strength"},
+      "shoulders": {"lastTrained": "2d", "setsThisWeek": 5,  "status": "recovering", "lastSource": "strength"},
+      "triceps":   {"lastTrained": "2d", "setsThisWeek": 6,  "status": "recovering", "lastSource": "strength"},
+      "back":      {"lastTrained": "4d", "setsThisWeek": 11, "status": "fresh",      "lastSource": "strength"},
+      "quads":     {"lastTrained": "5d", "setsThisWeek": 8,  "status": "fresh",      "lastSource": "strength"},
+      "hamstrings":{"lastTrained": "5d", "setsThisWeek": 3,  "status": "fresh",      "lastSource": "strength"},
+      "glutes":    {"lastTrained": "5d", "setsThisWeek": 3,  "status": "fresh",      "lastSource": "strength"}
+    },
+    "recent": [
+      {"date": "2d", "focus": ["chest", "shoulders", "triceps"], "feeling": 4, "duration": 55, "volume": 10100,
+       "topLifts": {"Bench Press": "175×7"}},
+      {"date": "4d", "focus": ["back", "biceps"], "feeling": 4, "duration": 55, "volume": 13500,
+       "topLifts": {"Lat Pulldown": "150×8"}},
+      {"date": "5d", "focus": ["quads", "hamstrings"], "feeling": 3, "duration": 60, "volume": 17200,
+       "topLifts": {"Squat": "205×6", "Romanian Deadlift": "165×8"}}
+    ],
+    "recovery": {"sleep7d": 7.4, "hrv7d": 49, "rhrBaseline": 58, "sleepTrend": "stable", "hrvTrend": "stable"},
+    "crossActivity": [],
+    "observations": [
+      {"kind": "preference", "subject": "hamstrings", "text": "User has flagged hamstrings as lagging in prior sessions", "confidence": "medium", "lastSeenAgo": "12d"}
+    ],
+    "rules": []
+  }
+}

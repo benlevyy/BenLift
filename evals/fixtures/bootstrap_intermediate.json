@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "id": "bootstrap_intermediate",
+    "description": "Intermediate hypertrophy lifter, 4 days/week, full gym, climbing 2x/week, no injuries. Bootstrap should produce a clean upper/lower or PPL+ split, climbing-aware pull volume reduction, mid-volume targets.",
+    "must_check": [
+      "Split matches 4 days/week (4 non-rest days in weeklyPattern)",
+      "Volume targets are mid-range (12–18 sets/muscle/week) given intermediate experience",
+      "Pull volume reduced by ~20% vs default to account for climbing",
+      "rotationPerMuscle has 3–5 exercises per muscle, all from the library",
+      "ruleOuts is empty (no injuries reported)",
+      "selfCheck strings are literal show-your-work, not just 'OK'"
+    ]
+  },
+  "input": {
+    "goal": "hypertrophy",
+    "daysPerWeek": 4,
+    "experience": "1-3yr",
+    "equipment": "full_gym",
+    "focusAreas": [],
+    "injuriesOrAvoid": null,
+    "crossTraining": "bouldering 2x/week, ~1hr each session",
+    "preferences": "I like compound lifts, hate cardio"
+  }
+}

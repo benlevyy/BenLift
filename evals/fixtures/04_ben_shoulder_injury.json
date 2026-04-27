@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "id": "04_ben_shoulder_injury",
+    "description": "Acute right-shoulder impingement reported. Hard Rule #2: train AROUND the injury, don't drop shoulders entirely.",
+    "must_check": [
+      "Does NOT program any overhead press (Overhead Press, DB Shoulder Press, Machine Shoulder Press)",
+      "Does NOT program heavy flat Bench Press at top weight (impingement aggravates flat bench in most cases) — or if included, at reduced load with explicit note",
+      "INCLUDES shoulder work that is impingement-safe: Lateral Raises (partial ROM / scapular plane), Face Pulls, Rear Delt Fly, Cable Y-Raise, Cable External Rotation",
+      "Reasoning explicitly references the shoulder constraint and explains what was kept vs. dropped and why",
+      "Per-exercise notes flag pain monitoring (stop if sharp pain) for any pressing movement included"
+    ]
+  },
+  "userState": {
+    "today": {
+      "feeling": 3,
+      "availableTime": 50,
+      "concerns": "right shoulder impingement flared up 2 days ago — hurts on overhead, fine on horizontal pull",
+      "muscleOverrides": {},
+      "targetWorkingSets": 12
+    },
+    "constraints": {
+      "injuries": "Right shoulder impingement — active. Overhead painful; horizontal pulls fine.",
+      "userNotes": null,
+      "goal": "Hypertrophy",
+      "experience": "Intermediate",
+      "daysPerWeek": 4
+    },
+    "preferences": {
+      "rituals": ["Bench Press", "Lateral Raises", "Tricep Pushdown", "DB Incline Press"],
+      "rotation": {
+        "chest": ["Cable Flys", "Machine Press"],
+        "shoulders": ["DB Shoulder Press", "Rear Delt Fly", "Face Pulls"],
+        "triceps": ["Skull Crushers", "Tricep Overhead Extension", "Dips"],
+        "back": ["Pull-ups", "Lat Pulldown", "Seated Row"],
+        "biceps": ["Hammer Curl", "Preacher Curl"]
+      },
+      "sessionShape": {"avgExercises": 6, "avgSetsPerExercise": 3, "preferredRestSeconds": 150},
+      "style": ["push-to-failure (uses fractional-rep logging)"]
+    },
+    "strength": {
+      "Bench Press":          {"e1rm": 205, "working": 175, "lastTrained": "5d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "DB Incline Press":     {"e1rm": 145, "working": 60,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Lateral Raises":       {"e1rm": 0,   "working": 22,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Tricep Pushdown":      {"e1rm": 0,   "working": 60,  "lastTrained": "5d", "trend4wk": "+2.5 lb / 4wk","bodyweight": false},
+      "Face Pulls":           {"e1rm": 0,   "working": 50,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Pull-ups":             {"e1rm": 0,   "working": 0,   "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": true},
+      "Lat Pulldown":         {"e1rm": 195, "working": 150, "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Seated Row":           {"e1rm": 185, "working": 145, "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Squat":                {"e1rm": 245, "working": 205, "lastTrained": "4d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "Leg Extension":        {"e1rm": 0,   "working": 160, "lastTrained": "4d", "trend4wk": "flat",        "bodyweight": false}
+    },
+    "muscleState": {
+      "chest":     {"lastTrained": "5d", "setsThisWeek": 0,  "status": "fresh",      "lastSource": "strength"},
+      "shoulders": {"lastTrained": "5d", "setsThisWeek": 3,  "status": "fresh",      "lastSource": "strength"},
+      "triceps":   {"lastTrained": "5d", "setsThisWeek": 0,  "status": "fresh",      "lastSource": "strength"},
+      "back":      {"lastTrained": "3d", "setsThisWeek": 11, "status": "ready",      "lastSource": "strength"},
+      "biceps":    {"lastTrained": "3d", "setsThisWeek": 6,  "status": "ready",      "lastSource": "strength"},
+      "quads":     {"lastTrained": "4d", "setsThisWeek": 8,  "status": "fresh",      "lastSource": "strength"}
+    },
+    "recent": [
+      {"date": "3d", "focus": ["back", "biceps"], "feeling": 4, "duration": 55, "volume": 13800,
+       "topLifts": {"Lat Pulldown": "150×8", "Seated Row": "145×8"}},
+      {"date": "4d", "focus": ["quads", "hamstrings"], "feeling": 4, "duration": 60, "volume": 17600,
+       "topLifts": {"Squat": "205×6"}},
+      {"date": "5d", "focus": ["chest", "shoulders", "triceps"], "feeling": 3, "duration": 52, "volume": 9600,
+       "topLifts": {"Bench Press": "175×6", "DB Incline Press": "60×7", "Lateral Raises": "22×12"}}
+    ],
+    "recovery": {"sleep7d": 7.3, "hrv7d": 47, "rhrBaseline": 58, "sleepTrend": "stable", "hrvTrend": "stable"},
+    "crossActivity": [],
+    "observations": [],
+    "rules": [
+      {"kind": "exerciseOut", "subject": "Overhead Press", "target": null, "reason": "shoulder", "since": "2d"}
+    ]
+  }
+}

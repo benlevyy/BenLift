@@ -1,0 +1,62 @@
+{
+  "meta": {
+    "id": "v5_daily_plan_injury",
+    "description": "Daily plan v5 fires because injury is active. Calendar already chose 'chest' as today's target. LLM must adjudicate safety, anchor weights, NOT re-decide the muscle.",
+    "must_check": [
+      "Plan respects targetMuscle=chest (does not pivot to a different focus)",
+      "Bench Press substituted with Machine Press OR capped at ≤70% working (≤122 lb)",
+      "Lateral Raises included (impingement-tolerant scapular-plane ritual)",
+      "Overhead Press absent (in exerciseOut)",
+      "Every injury-loaded exercise has notes covering modification + cap reference + pain-monitoring",
+      "selfCheck.setCountMath sums correctly to targetWorkingSets ±1",
+      "No muscleGroupStatus field in output (calendar handles that)"
+    ]
+  },
+  "input": {
+    "targetMuscle": "chest",
+    "targetMuscleSource": "predicted",
+    "predictionConfidence": 0.85,
+    "futurePins": [
+      {"date": "2026-04-29", "muscle": "back"}
+    ],
+    "recentDays": [
+      {"date": "2026-04-25", "muscle": "back", "totalVolume": 13800, "topExercises": ["Lat Pulldown", "Seated Row", "Hammer Curl"], "effortScore": 7, "avgHR": 128},
+      {"date": "2026-04-24", "muscle": "legs", "totalVolume": 17600, "topExercises": ["Squat", "Romanian Deadlift", "Leg Extension"], "effortScore": 8, "avgHR": 138},
+      {"date": "2026-04-23", "muscle": "chest+shoulders", "totalVolume": 9600, "topExercises": ["Bench Press", "DB Incline Press", "Lateral Raises"], "effortScore": 7, "avgHR": 122}
+    ],
+    "recovery": {
+      "feeling": 3,
+      "sleepHours": 7.3,
+      "restingHR": 58,
+      "hrv": 47,
+      "daysSinceLastTraining": 1,
+      "userNote": "right shoulder impingement flared up 2 days ago — hurts on overhead, fine on horizontal pull"
+    },
+    "availableTime": 50,
+    "targetWorkingSets": 12,
+    "strength": {
+      "Bench Press":          {"working": 175, "e1rm": 205, "lastTrained": "3d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "DB Incline Press":     {"working": 60,  "e1rm": 145, "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Machine Press":        {"working": 60,  "e1rm": 100, "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Lateral Raises":       {"working": 22,  "e1rm": 0,   "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Tricep Pushdown":      {"working": 60,  "e1rm": 0,   "lastTrained": "3d", "trend4wk": "+2.5 lb / 4wk","bodyweight": false},
+      "Cable Flys":           {"working": 17.5, "e1rm": 0,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Face Pulls":           {"working": 50,  "e1rm": 0,   "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false}
+    },
+    "rituals": ["Bench Press", "Lateral Raises", "Tricep Pushdown", "DB Incline Press"],
+    "rotation": {
+      "chest": ["Cable Flys", "Machine Press", "Cable Fly (3 Height)"],
+      "shoulders": ["DB Shoulder Press", "Rear Delt Fly", "Face Pulls"],
+      "triceps": ["Skull Crushers", "Tricep Overhead Extension", "Dips"]
+    },
+    "constraints": {
+      "injuries": "Right shoulder impingement — active. Overhead painful; horizontal pulls fine.",
+      "exerciseOut": ["Overhead Press"]
+    },
+    "userProfile": {
+      "goal": "Hypertrophy",
+      "experience": "Intermediate",
+      "daysPerWeek": 4
+    }
+  }
+}

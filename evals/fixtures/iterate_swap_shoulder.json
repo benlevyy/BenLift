@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "id": "iterate_swap_shoulder",
+    "description": "User has a chest plan in front of them. Bench Press is in slot 1. They tap 'swap, my shoulder feels tight today'. Iterate prompt must propose a chest exercise that's gentler on the shoulder, with a real anchor.",
+    "must_check": [
+      "responseType is 'edit', editKind is 'swap'",
+      "targetExerciseName is 'Bench Press'",
+      "newExercise is a chest movement gentler on shoulders (Machine Press, DB Incline neutral grip, or Cable Flys — NOT another flat-grip barbell press)",
+      "weightAnchor.source references an exercise in strength[] (no fabricated number)",
+      "rationale cites the user's request and the principle (lower shoulder demand)"
+    ]
+  },
+  "currentPlan": {
+    "exercises": [
+      {"name": "Bench Press", "sets": 3, "targetReps": "6-8", "suggestedWeight": 175, "intent": "primary compound"},
+      {"name": "DB Incline Press", "sets": 3, "targetReps": "8-10", "suggestedWeight": 60, "intent": "secondary compound"},
+      {"name": "Lateral Raises", "sets": 3, "targetReps": "10-12", "suggestedWeight": 22, "intent": "isolation"},
+      {"name": "Tricep Pushdown", "sets": 3, "targetReps": "10-12", "suggestedWeight": 60, "intent": "isolation"},
+      {"name": "Cable Flys", "sets": 2, "targetReps": "12-15", "suggestedWeight": 17.5, "intent": "finisher"}
+    ]
+  },
+  "userRequest": "swap the bench press, my shoulder feels tight today",
+  "input": {
+    "strength": {
+      "Bench Press":      {"working": 175, "e1rm": 205, "lastTrained": "3d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "DB Incline Press": {"working": 60,  "e1rm": 145, "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Machine Press":    {"working": 60,  "e1rm": 100, "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Cable Flys":       {"working": 17.5, "e1rm": 0,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false}
+    },
+    "rituals": ["Bench Press", "Lateral Raises", "Tricep Pushdown", "DB Incline Press"],
+    "constraints": {
+      "injuries": null,
+      "exerciseOut": []
+    }
+  }
+}

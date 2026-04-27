@@ -1,0 +1,90 @@
+{
+  "meta": {
+    "id": "02_ben_post_climbing",
+    "description": "Climbed yesterday (65 min moderate bouldering). Pull muscles (back, biceps, forearms) taxed. AI should NOT program pull-lead; should lead with legs or push.",
+    "must_check": [
+      "Reasoning explicitly references yesterday's climbing and its effect on back/biceps/forearms",
+      "Does NOT pick pull as the primary focus (no pull-ups, rows, or lat pulldowns in slot 1)",
+      "Either legs OR chest/shoulders lead — not back/biceps",
+      "If any pull work is included at all, it's minimal isolation, not heavy compounds",
+      "muscleGroupStatus reflects back/biceps/forearms as recovering or sore"
+    ]
+  },
+  "userState": {
+    "today": {
+      "feeling": 4,
+      "availableTime": 55,
+      "concerns": null,
+      "muscleOverrides": {},
+      "targetWorkingSets": 14
+    },
+    "constraints": {
+      "injuries": null,
+      "userNotes": null,
+      "goal": "Hypertrophy",
+      "experience": "Intermediate",
+      "daysPerWeek": 4
+    },
+    "preferences": {
+      "rituals": ["Bench Press", "Lateral Raises", "Tricep Pushdown", "DB Incline Press"],
+      "rotation": {
+        "chest": ["Cable Flys", "Machine Press"],
+        "shoulders": ["DB Shoulder Press", "Rear Delt Fly"],
+        "triceps": ["Skull Crushers", "Tricep Overhead Extension", "Dips"],
+        "back": ["Pull-ups", "Lat Pulldown", "Seated Row"],
+        "biceps": ["Hammer Curl", "Preacher Curl"],
+        "quads": ["Squat", "Hack Squat", "Leg Extension"],
+        "hamstrings": ["Romanian Deadlift", "Hamstring Curl"]
+      },
+      "sessionShape": {"avgExercises": 6, "avgSetsPerExercise": 3, "preferredRestSeconds": 150},
+      "style": ["push-to-failure (uses fractional-rep logging)"]
+    },
+    "strength": {
+      "Bench Press":          {"e1rm": 205, "working": 175, "lastTrained": "3d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "DB Incline Press":     {"e1rm": 145, "working": 60,  "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "DB Shoulder Press":    {"e1rm": 115, "working": 45,  "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Lateral Raises":       {"e1rm": 0,   "working": 22,  "lastTrained": "3d", "trend4wk": "flat",        "bodyweight": false},
+      "Tricep Pushdown":      {"e1rm": 0,   "working": 60,  "lastTrained": "3d", "trend4wk": "+2.5 lb / 4wk","bodyweight": false},
+      "Pull-ups":             {"e1rm": 0,   "working": 0,   "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": true},
+      "Lat Pulldown":         {"e1rm": 195, "working": 150, "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Seated Row":           {"e1rm": 185, "working": 145, "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Hammer Curl":          {"e1rm": 0,   "working": 30,  "lastTrained": "5d", "trend4wk": "flat",        "bodyweight": false},
+      "Squat":                {"e1rm": 245, "working": 205, "lastTrained": "4d", "trend4wk": "+5 lb / 4wk", "bodyweight": false},
+      "Romanian Deadlift":    {"e1rm": 215, "working": 165, "lastTrained": "4d", "trend4wk": "flat",        "bodyweight": false},
+      "Leg Extension":        {"e1rm": 0,   "working": 160, "lastTrained": "4d", "trend4wk": "flat",        "bodyweight": false},
+      "Hamstring Curl":       {"e1rm": 0,   "working": 95,  "lastTrained": "4d", "trend4wk": "flat",        "bodyweight": false}
+    },
+    "muscleState": {
+      "chest":     {"lastTrained": "3d", "setsThisWeek": 9,  "status": "ready",      "lastSource": "strength"},
+      "shoulders": {"lastTrained": "3d", "setsThisWeek": 5,  "status": "ready",      "lastSource": "strength"},
+      "triceps":   {"lastTrained": "3d", "setsThisWeek": 6,  "status": "ready",      "lastSource": "strength"},
+      "back":      {"lastTrained": "1d", "setsThisWeek": 10, "status": "sore",       "lastSource": "climbing"},
+      "biceps":    {"lastTrained": "1d", "setsThisWeek": 6,  "status": "sore",       "lastSource": "climbing"},
+      "forearms":  {"lastTrained": "1d", "setsThisWeek": 0,  "status": "sore",       "lastSource": "climbing"},
+      "quads":     {"lastTrained": "4d", "setsThisWeek": 8,  "status": "fresh",      "lastSource": "strength"},
+      "hamstrings":{"lastTrained": "4d", "setsThisWeek": 6,  "status": "fresh",      "lastSource": "strength"},
+      "glutes":    {"lastTrained": "4d", "setsThisWeek": 3,  "status": "fresh",      "lastSource": "strength"},
+      "core":      {"lastTrained": "1d", "setsThisWeek": 0,  "status": "recovering", "lastSource": "climbing"}
+    },
+    "recent": [
+      {"date": "3d", "focus": ["chest", "shoulders", "triceps"], "feeling": 4, "duration": 57, "volume": 10200,
+       "topLifts": {"Bench Press": "175×7", "DB Incline Press": "60×8", "Lateral Raises": "22×12"}},
+      {"date": "4d", "focus": ["quads", "hamstrings"], "feeling": 4, "duration": 60, "volume": 18000,
+       "topLifts": {"Squat": "205×6", "Romanian Deadlift": "165×8"}},
+      {"date": "5d", "focus": ["back", "biceps"], "feeling": 3, "duration": 52, "volume": 13500,
+       "topLifts": {"Lat Pulldown": "150×8", "Seated Row": "145×8", "Hammer Curl": "30×10"}}
+    ],
+    "recovery": {
+      "sleep7d": 7.2,
+      "hrv7d": 46,
+      "rhrBaseline": 59,
+      "sleepTrend": "stable",
+      "hrvTrend": "stable"
+    },
+    "crossActivity": [
+      {"type": "climbing", "when": "1d", "durationMin": 65, "kcalPerMin": 8, "intensity": "moderate"}
+    ],
+    "observations": [],
+    "rules": []
+  }
+}

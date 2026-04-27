@@ -38,6 +38,12 @@ struct TodayView: View {
                         phoneWorkoutBanner
                     }
 
+                    // Week strip — past/today/future muscle-group context.
+                    // Self-contained mock data for now; backend wiring lands
+                    // separately once the pattern engine + planner contract
+                    // are agreed.
+                    WeekStripView()
+
                     // Inline check-in — feeling + time + recovery + concerns.
                     // Changes stage locally; the plan regenerates only when
                     // the user taps the Refresh pill (or pull-to-refresh).
