@@ -83,6 +83,15 @@ struct TodayView: View {
                         futureConflictPill
                     }
 
+                    // Recovery-overlap pill — same muscle hit 3+ times in
+                    // the next 5 days. Different signal from above; both
+                    // can render if both fire.
+                    if let overlap = coachVM.recoveryOverlap,
+                       !coachVM.isGenerating,
+                       !coachVM.isAdjustingForRecoveryOverlap {
+                        recoveryOverlapPill(overlap)
+                    }
+
                     // Skeleton only on true cold start (no plan yet AND no
                     // recommendation). On refresh, the existing plan stays
                     // visible (dimmed) until the new recommendation event
@@ -822,6 +831,59 @@ struct TodayView: View {
             .cornerRadius(10)
         }
         .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    // MARK: - Recovery-overlap Pill
+
+    /// Visible when the same muscle shows up 3+ times in the next 5 days
+    /// (today + 4 future). Two-button row instead of a single tap because
+    /// the user might genuinely want to keep the load (sport-specific
+    /// peaking, etc.) — we surface concern, not an objection.
+    /// "Redistribute" routes through iterate. "I'll keep it" records a
+    /// per-week dismissal so the pill doesn't reappear until the next ISO
+    /// week rolls over.
+    private func recoveryOverlapPill(_ overlap: CoachViewModel.RecoveryOverlap) -> some View {
+        let muscleLower = overlap.muscle.displayName.lowercased()
+        return HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.bubble")
+                .foregroundColor(.white)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(muscleLower.capitalized) \(overlap.hits)× this week")
+                    .font(.subheadline.bold())
+                    .foregroundColor(.white)
+                Text("Typical recovery is 48–72h")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            Spacer()
+            Button("Keep it") {
+                Haptics.selection()
+                coachVM.dismissRecoveryOverlap()
+            }
+            .font(.caption.bold())
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.15))
+            .cornerRadius(6)
+            Button("Redistribute") {
+                Haptics.impact(.light)
+                Task {
+                    await coachVM.adjustForRecoveryOverlap(modelContext: modelContext)
+                }
+            }
+            .font(.caption.bold())
+            .foregroundColor(.accentBlue)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white)
+            .cornerRadius(6)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.accentBlue)
+        .cornerRadius(10)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 

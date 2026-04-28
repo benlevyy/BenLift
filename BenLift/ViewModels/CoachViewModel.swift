@@ -64,6 +64,48 @@ class CoachViewModel {
         let daysOut: Int  // 1 = tomorrow, 2 = day after
     }
 
+    // MARK: - Recovery overlap pattern
+    //
+    // Surfaced when the next 5 days (today + 4 future) hit the same muscle
+    // 3+ times — typical recovery is 48–72h, so 3 hits in 5 days is
+    // borderline overtraining. We don't refuse; we surface a pill that
+    // routes through iterate to redistribute. Per-week dismissal so the
+    // user isn't nagged after they've explicitly chosen to keep the load.
+
+    var recoveryOverlap: RecoveryOverlap?
+    var isAdjustingForRecoveryOverlap: Bool = false
+
+    struct RecoveryOverlap: Identifiable {
+        let id = UUID()
+        let muscle: MuscleGroup
+        let hits: Int          // count in the 5-day window
+        let windowDays: Int    // currently always 5; carried for messaging
+    }
+
+    /// ISO week identifier of the last dismissal, scoped per muscle. Lets
+    /// the pill self-suppress after the user explicitly says "I'll keep it"
+    /// without nagging again until the calendar week rolls over.
+    /// Stored in UserDefaults so dismissals survive app launches.
+    private static let dismissalKey = "recoveryOverlapDismissals"
+
+    private static func dismissedThisWeek(muscle: MuscleGroup, now: Date = Date()) -> Bool {
+        let map = UserDefaults.standard.dictionary(forKey: dismissalKey) as? [String: String] ?? [:]
+        guard let stored = map[muscle.rawValue] else { return false }
+        return stored == Self.weekKey(for: now)
+    }
+
+    private static func recordDismissal(muscle: MuscleGroup, now: Date = Date()) {
+        var map = UserDefaults.standard.dictionary(forKey: dismissalKey) as? [String: String] ?? [:]
+        map[muscle.rawValue] = Self.weekKey(for: now)
+        UserDefaults.standard.set(map, forKey: dismissalKey)
+    }
+
+    private static func weekKey(for date: Date) -> String {
+        let cal = Calendar(identifier: .iso8601)
+        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+        return "\(comps.yearForWeekOfYear ?? 0)-W\(comps.weekOfYear ?? 0)"
+    }
+
     /// Snapshot of the user inputs (feeling, time, concerns, muscle
     /// overrides) at the moment the currently-shown plan was generated.
     /// Drives `isPlanStale` — when any of these drift from this snapshot,
@@ -560,6 +602,18 @@ class CoachViewModel {
                 input: input,
                 modelContext: modelContext
             )
+
+            // Detect recovery-overlap pattern across the 5-day window.
+            // This is a different signal than future-pin overlap: it fires
+            // when ANY single muscle (today's target included) shows up 3+
+            // times in 5 days, regardless of whether today's plan hits it
+            // directly. Same UX shape (pill + iterate adjust) but different
+            // intent — coaching the user about consecutive-day load, not
+            // about today's specific exercise selection.
+            recoveryOverlap = Self.detectRecoveryOverlap(
+                input: input,
+                modelContext: modelContext
+            )
         } catch {
             if Self.isCancellation(error) {
                 print("[BenLift/Coach] planForToday cancelled (superseded)")
@@ -643,6 +697,79 @@ class CoachViewModel {
             }
         }
         return conflicts
+    }
+
+    /// Look across the next 5 days (today + 4 future) and flag any muscle
+    /// that's hit 3+ times. Counts pulled from MuscleGroupPin (any pin
+    /// within the window) plus today's planned target muscles. The window
+    /// is non-overlapping with the 1–2 day future-conflict pill — overlap
+    /// surfaces a different concern (cumulative load vs. specific
+    /// today-tomorrow conflict) so both can fire if they're both true.
+    ///
+    /// Returns nil when no muscle crosses the threshold OR when the only
+    /// candidate has been dismissed this calendar week.
+    @MainActor
+    private static func detectRecoveryOverlap(
+        input: PlannerInput,
+        modelContext: ModelContext
+    ) -> RecoveryOverlap? {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let windowEnd = cal.date(byAdding: .day, value: 4, to: today) ?? today
+        let isoDay = ISO8601DateFormatter()
+        isoDay.formatOptions = [.withFullDate]
+
+        // Today's targets count once toward each muscle in the list.
+        var counts: [MuscleGroup: Int] = [:]
+        for raw in input.targetMuscles {
+            if let m = MuscleGroup(rawValue: raw) { counts[m, default: 0] += 1 }
+        }
+
+        // Future pins: each pin contributes its full muscle list.
+        for pin in input.futurePins {
+            guard let pinDate = isoDay.date(from: pin.date) else { continue }
+            let day = cal.startOfDay(for: pinDate)
+            guard day > today, day <= windowEnd else { continue }
+            for raw in pin.muscles {
+                if let m = MuscleGroup(rawValue: raw) { counts[m, default: 0] += 1 }
+            }
+        }
+
+        // Threshold: 3+ hits in 5 days. The recovery literature lands at
+        // 48–72h between heavy sessions for the same muscle; 3 in 5 days
+        // is the borderline that's worth surfacing without being preachy.
+        let threshold = 3
+        let candidates = counts
+            .filter { $0.value >= threshold }
+            .sorted { $0.value > $1.value }
+
+        for (muscle, hits) in candidates {
+            if dismissedThisWeek(muscle: muscle) { continue }
+            return RecoveryOverlap(muscle: muscle, hits: hits, windowDays: 5)
+        }
+        return nil
+    }
+
+    /// User tapped "Redistribute" on the recovery-overlap pill. Routes
+    /// through iterate so the LLM does the actual rebalancing.
+    @MainActor
+    func adjustForRecoveryOverlap(modelContext: ModelContext) async {
+        guard let overlap = recoveryOverlap else { return }
+        isAdjustingForRecoveryOverlap = true
+        let request = "I have \(overlap.muscle.displayName.lowercased()) showing up \(overlap.hits) times in the next 5 days. Reduce today's volume on \(overlap.muscle.displayName.lowercased()) and lean into less-fatigued muscles or movement variety so I don't burn that muscle out across the week."
+        await iterate(request: request, modelContext: modelContext)
+        recoveryOverlap = nil
+        isAdjustingForRecoveryOverlap = false
+    }
+
+    /// User tapped "I'll keep it" — record a per-week dismissal so the
+    /// pill doesn't reappear every app open. Resets when the calendar
+    /// week rolls over.
+    @MainActor
+    func dismissRecoveryOverlap() {
+        guard let overlap = recoveryOverlap else { return }
+        Self.recordDismissal(muscle: overlap.muscle)
+        recoveryOverlap = nil
     }
 
     /// User tapped the future-conflict pill. Routes through iterate so the
