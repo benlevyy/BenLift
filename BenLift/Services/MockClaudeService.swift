@@ -170,6 +170,28 @@ actor MockClaudeCoachService: CoachServiceProtocol {
     // Minimal canned values — just enough to satisfy the protocol so the
     // app builds and previews render. TODO: real mock once v5 ships.
 
+    nonisolated func streamDailyPlanV5(
+        input: PlannerInput,
+        model: String
+    ) -> AsyncThrowingStream<DailyPlanV5StreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task { [weak self] in
+                guard let self else {
+                    continuation.finish(throwing: ClaudeError.noContent)
+                    return
+                }
+                continuation.yield(.thinking)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                continuation.yield(.drafting)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if let response = try? await self.dailyPlanV5(input: input, model: model) {
+                    continuation.yield(.complete(response))
+                }
+                continuation.finish()
+            }
+        }
+    }
+
     func dailyPlanV5(input: PlannerInput, model: String) async throws -> DailyPlanV5Response {
         // TODO: real mock
         try await Task.sleep(nanoseconds: delay)

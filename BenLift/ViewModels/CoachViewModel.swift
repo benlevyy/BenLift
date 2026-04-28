@@ -134,6 +134,17 @@ class CoachViewModel {
     /// plan-generation time.
     var todayPinnedMusclesRaw: [String] = []
 
+    /// Phase of the in-flight V5 escalation, surfaced to the UI so the
+    /// thinking spinner can advance ("reasoning..." → "drafting..." →
+    /// done) instead of looking like one ~15-second hang. Nil when no V5
+    /// call is in flight or after `.complete`.
+    var planForTodayPhase: PlanForTodayPhase?
+
+    enum PlanForTodayPhase: Equatable {
+        case reasoning   // .thinking event from server
+        case drafting    // .drafting event — visible text streaming
+    }
+
     /// User-set muscle status overrides. The Training tab's muscle map
     /// lets the user tap a row and force a status (e.g. "actually my
     /// chest is sore today"). Backed by `MuscleOverrideStore` so they
@@ -578,7 +589,24 @@ class CoachViewModel {
 
             if escalate {
                 let model = UserDefaults.standard.string(forKey: "modelDailyPlanV5") ?? "claude-haiku-4-5-20251001"
-                let v5 = try await coachService.dailyPlanV5(input: input, model: model)
+                // Stream the v5 call so the UI can advance phase indicators
+                // (reasoning → drafting → ready) during the ~15s wait
+                // instead of showing a generic spinner the whole time. The
+                // `.complete` event carries the parsed response — we hold
+                // it in a local and use it after the stream ends.
+                var v5: DailyPlanV5Response?
+                let stream = coachService.streamDailyPlanV5(input: input, model: model)
+                for try await event in stream {
+                    switch event {
+                    case .thinking:  planForTodayPhase = .reasoning
+                    case .drafting:  planForTodayPhase = .drafting
+                    case .complete(let response): v5 = response
+                    }
+                }
+                planForTodayPhase = nil
+                guard let v5 else {
+                    throw ClaudeError.malformedResponse("dailyPlanV5 stream ended without .complete")
+                }
                 plan = Self.convertV5ToPlan(v5)
                 rec = Self.synthesizeRecommendation(input: input, narrative: v5.recommendation, escalated: true, reason: reason)
             } else {
@@ -623,6 +651,7 @@ class CoachViewModel {
             }
         }
 
+        planForTodayPhase = nil
         isLoadingRecommendation = false
         isGenerating = false
         return true

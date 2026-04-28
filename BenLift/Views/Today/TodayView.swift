@@ -103,10 +103,19 @@ struct TodayView: View {
                         && isLoading
 
                     if showSkeleton {
-                        ThinkingView(
-                            phase: coachVM.isLoadingRecommendation ? .analyzing : .building
-                        )
-                        .transition(.opacity)
+                        // Phase preference, in order:
+                        // 1. v5 stream phase (reasoning / drafting) when an
+                        //    escalated call is in flight — gives real signal
+                        //    about which half of the ~15s wait we're in.
+                        // 2. Legacy isLoadingRecommendation fallback.
+                        let thinkingPhase: ThinkingView.Phase = {
+                            if let phase = coachVM.planForTodayPhase {
+                                return phase == .reasoning ? .analyzing : .building
+                            }
+                            return coachVM.isLoadingRecommendation ? .analyzing : .building
+                        }()
+                        ThinkingView(phase: thinkingPhase)
+                            .transition(.opacity)
                     } else {
                         if let rec = coachVM.recommendation {
                             recommendationHeader(rec)

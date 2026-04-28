@@ -20,6 +20,7 @@ protocol CoachServiceProtocol: Sendable {
     // `dailyPlanV5` uses extended thinking; `iterate` and `bootstrap` are cheap
     // non-thinking calls.
     func dailyPlanV5(input: PlannerInput, model: String) async throws -> DailyPlanV5Response
+    func streamDailyPlanV5(input: PlannerInput, model: String) -> AsyncThrowingStream<DailyPlanV5StreamEvent, Error>
     func iterate(currentPlan: DailyPlanResponse, userRequest: String, plannerInput: PlannerInput, model: String) async throws -> IterateResponse
     func bootstrap(input: BootstrapInput, model: String) async throws -> BootstrapResponse
 }
@@ -35,6 +36,25 @@ enum RecommendAndPlanStreamEvent: Sendable {
     case strategy(String)
     case exercise(PlannedExercise)
     case complete(RecommendAndPlanResponse)
+}
+
+/// Streaming events for the v5 planner path.
+///
+/// v5 uses extended thinking, which the Anthropic SSE stream surfaces via
+/// `thinking_delta` events BEFORE any visible text starts. We project that
+/// directly to a `.thinking` phase so the Today UI can show "Coach is
+/// reasoning..." instead of a generic spinner. Once `content_block_delta`
+/// text events arrive, we emit `.drafting` once. The `.complete` event is
+/// the canonical final state and carries the parsed v5 response.
+///
+/// We don't emit per-field events (recommendation / exercise) the way the
+/// legacy v1 stream does — v5's response is a single JSON object the
+/// consumer wants atomically. Per-field would require a v5-specific
+/// scanner; the cost-benefit doesn't pencil out yet.
+enum DailyPlanV5StreamEvent: Sendable {
+    case thinking
+    case drafting
+    case complete(DailyPlanV5Response)
 }
 
 // MARK: - Errors
@@ -378,6 +398,154 @@ actor ClaudeCoachService: CoachServiceProtocol {
             thinkingBudget: thinkingBudget,
             label: "dailyPlanV5"
         )
+    }
+
+    /// Streaming variant of `dailyPlanV5`. Emits `.thinking` as soon as the
+    /// extended-thinking phase begins, `.drafting` when visible text starts
+    /// streaming, and `.complete` with the parsed response at the end.
+    /// Lets the Today UI advance phase indicators instead of staring at a
+    /// generic spinner for ~10–30s.
+    nonisolated func streamDailyPlanV5(
+        input: PlannerInput,
+        model: String
+    ) -> AsyncThrowingStream<DailyPlanV5StreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [weak self] in
+                guard let self else {
+                    continuation.finish(throwing: ClaudeError.noContent)
+                    return
+                }
+                do {
+                    try await self.runDailyPlanV5Stream(
+                        input: input,
+                        model: model,
+                        continuation: continuation
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func runDailyPlanV5Stream(
+        input: PlannerInput,
+        model: String,
+        continuation: AsyncThrowingStream<DailyPlanV5StreamEvent, Error>.Continuation
+    ) async throws {
+        guard let apiKey = KeychainService.load(key: KeychainService.apiKeyKey), !apiKey.isEmpty else {
+            throw ClaudeError.invalidAPIKey
+        }
+
+        let inputJSON = try Self.encodeJSON(input)
+        let todayDate = Self.todayDateString()
+        let system = Prompts.DailyPlanV5.system
+            .replacingOccurrences(of: "{{INPUT_JSON}}", with: inputJSON)
+            .replacingOccurrences(of: "{{EXERCISE_LIBRARY}}", with: Prompts.exerciseLibrary)
+            .replacingOccurrences(of: "{{TODAY_DATE}}", with: todayDate)
+        let user = Prompts.DailyPlanV5.user
+
+        let thinkingBudget = Prompts.DailyPlanV5.thinkingBudget
+        let maxTokens = thinkingBudget + 4096
+
+        var request = URLRequest(url: baseURL)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        request.setValue("prompt-caching-2024-07-31", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.timeoutInterval = 120  // longer for thinking budget
+
+        // Same shape as sendThinkingRequest but with stream:true and a
+        // singular system block (the v5 system already embeds INPUT_JSON
+        // and EXERCISE_LIBRARY — no separate cached knowledge base).
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "stream": true,
+            "temperature": 1.0,
+            "thinking": [
+                "type": "enabled",
+                "budget_tokens": thinkingBudget,
+            ],
+            "system": [
+                ["type": "text", "text": system, "cache_control": ["type": "ephemeral"]],
+            ],
+            "messages": [
+                ["role": "user", "content": user],
+            ],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        print("[BenLift/API] → streamDailyPlanV5: model=\(model)")
+
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeError.serverError(0, "Not an HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            var errorBody = Data()
+            for try await byte in bytes { errorBody.append(byte) }
+            let body = String(data: errorBody, encoding: .utf8) ?? ""
+            print("[BenLift/API] ❌ streamDailyPlanV5 error \(http.statusCode): \(body)")
+            if http.statusCode == 401 { throw ClaudeError.invalidAPIKey }
+            if http.statusCode == 429 { throw ClaudeError.rateLimited }
+            throw ClaudeError.serverError(http.statusCode, body)
+        }
+
+        var textBuffer = ""
+        var emittedThinking = false
+        var emittedDrafting = false
+        let decoder = JSONDecoder()
+
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+            guard !payload.isEmpty, payload != "[DONE]" else { continue }
+            guard let data = payload.data(using: .utf8),
+                  let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            let type = event["type"] as? String
+
+            // Phase detection. content_block_start tells us which kind of
+            // block (thinking / text) is starting — emit the matching
+            // phase event once per phase. content_block_delta carries the
+            // actual text we accumulate for the final parse.
+            if type == "content_block_start",
+               let block = event["content_block"] as? [String: Any] {
+                let blockType = block["type"] as? String
+                if blockType == "thinking", !emittedThinking {
+                    emittedThinking = true
+                    continuation.yield(.thinking)
+                } else if blockType == "text", !emittedDrafting {
+                    emittedDrafting = true
+                    continuation.yield(.drafting)
+                }
+            } else if type == "content_block_delta",
+                      let delta = event["delta"] as? [String: Any] {
+                // Accumulate visible text only — `thinking_delta` content
+                // is NOT included in the visible response and isn't useful
+                // to the consumer's final parse.
+                if let text = delta["text"] as? String {
+                    if !emittedDrafting {
+                        emittedDrafting = true
+                        continuation.yield(.drafting)
+                    }
+                    textBuffer += text
+                }
+            }
+        }
+
+        // Final atomic decode — single source of truth for the consumer.
+        let cleaned = Self.stripJSONFences(from: textBuffer)
+        guard let finalData = cleaned.data(using: .utf8) else {
+            throw ClaudeError.malformedResponse("Could not convert v5 buffer to data")
+        }
+        let final = try decoder.decode(DailyPlanV5Response.self, from: finalData)
+        continuation.yield(.complete(final))
     }
 
     /// iterate — surgical edit OR conversational answer. Cheap (no thinking).
