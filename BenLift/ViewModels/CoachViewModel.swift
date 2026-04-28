@@ -619,9 +619,13 @@ class CoachViewModel {
             guard let pinDate = isoDay.date(from: pin.date) else { continue }
             let daysOut = cal.dateComponents([.day], from: today, to: cal.startOfDay(for: pinDate)).day ?? 99
             guard daysOut >= 1, daysOut <= 2 else { continue }
-            guard let muscle = MuscleGroup(rawValue: pin.muscle) else { continue }
-            guard planMuscles.contains(muscle) else { continue }
-            conflicts.append(FutureConflict(muscle: muscle, date: pinDate, daysOut: daysOut))
+            // Multi-muscle pin: emit one conflict per overlapping muscle.
+            // The pill UI shows the first; the rest are still in the array
+            // for richer surfacing later.
+            let pinMuscles = pin.muscles.compactMap(MuscleGroup.init(rawValue:))
+            for muscle in pinMuscles where planMuscles.contains(muscle) {
+                conflicts.append(FutureConflict(muscle: muscle, date: pinDate, daysOut: daysOut))
+            }
         }
         return conflicts
     }

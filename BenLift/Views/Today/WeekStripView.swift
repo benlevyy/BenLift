@@ -30,12 +30,38 @@ struct DayIntent: Identifiable, Equatable {
     /// reference within a single render cycle.
     var id: TimeInterval { date.timeIntervalSince1970 }
     var date: Date
-    var muscle: MuscleGroup?
+    /// All muscles this day represents. A "push" day = [chest, shoulders,
+    /// triceps]. The cell renders the first as the headline muscle plus a
+    /// "+N" badge when there are more — full list visible in the pin sheet.
+    var muscles: [MuscleGroup]
     var label: String?       // freeform fallback ("rest", "travel")
     var source: DaySource
     /// Optional context note ("dumbbells only", "shoulders sore") that rides
     /// into the planner prompt for that day. Surfaced via the pin sheet.
     var note: String?
+
+    /// First muscle (headline) — most cell rendering still wants a single
+    /// muscle for the big text. nil when the day has no muscles (rest).
+    var muscle: MuscleGroup? { muscles.first }
+
+    /// Convenience for callers that produce a single-muscle DayIntent
+    /// (the engine path before / on cold-start).
+    init(date: Date, muscle: MuscleGroup?, label: String?, source: DaySource, note: String? = nil) {
+        self.date = date
+        self.muscles = muscle.map { [$0] } ?? []
+        self.label = label
+        self.source = source
+        self.note = note
+    }
+
+    /// Multi-muscle init for pin/seed paths that carry a real list.
+    init(date: Date, muscles: [MuscleGroup], label: String?, source: DaySource, note: String? = nil) {
+        self.date = date
+        self.muscles = muscles
+        self.label = label
+        self.source = source
+        self.note = note
+    }
 }
 
 // MARK: - Strip View
@@ -170,15 +196,15 @@ struct WeekStripView: View {
             return
         }
 
-        // User pinned. Upsert.
+        // User pinned. Upsert the full muscle list.
         if let row = existing {
-            row.muscleGroup = updated.muscle
+            row.muscleGroups = updated.muscles
             row.label = updated.label
             row.note = updated.note
         } else {
             let row = MuscleGroupPin(
                 date: day,
-                muscleGroup: updated.muscle,
+                muscleGroups: updated.muscles,
                 label: updated.label,
                 note: updated.note
             )
@@ -250,8 +276,24 @@ private struct DayCellView: View {
 
     private var muscleText: String {
         if let label = day.label, !label.isEmpty { return label }
-        if let m = day.muscle { return m.displayName }
-        return "—"
+        // Recognize common multi-muscle patterns and label them ("Push" /
+        // "Pull" / "Legs") instead of "Chest +2" — more readable at the
+        // cell's compact size.
+        if let preset = matchedPresetName(for: day.muscles) { return preset }
+        guard let m = day.muscle else { return "—" }
+        if day.muscles.count <= 1 { return m.displayName }
+        return "\(m.displayName) +\(day.muscles.count - 1)"
+    }
+
+    /// Match the day's muscle set against canonical presets so the cell
+    /// shows "Push" instead of a comma list. Order-insensitive.
+    private func matchedPresetName(for muscles: [MuscleGroup]) -> String? {
+        let s = Set(muscles)
+        if s == Set([.chest, .shoulders, .triceps]) { return "Push" }
+        if s == Set([.back, .biceps]) { return "Pull" }
+        if s == Set([.quads, .hamstrings, .glutes, .calves]) { return "Legs" }
+        if s == Set([.chest, .back, .shoulders, .biceps, .triceps]) { return "Upper" }
+        return nil
     }
 
     @ViewBuilder
@@ -342,24 +384,33 @@ private struct PinDaySheet: View {
     let onSave: (DayIntent) -> Void
     let onCancel: () -> Void
 
-    @State private var draftMuscle: MuscleGroup?
+    @State private var draftMuscles: Set<MuscleGroup>
     @State private var draftLabel: String?
     @State private var draftNote: String
 
-    /// Curated list — most users pick from this set 95% of the time. We
-    /// surface major lifts up top and a "Rest" escape hatch. The full
-    /// MuscleGroup enum is available via the "More" disclosure if needed.
-    private let primaryChips: [ChipOption] = [
-        .muscle(.chest), .muscle(.back), .muscle(.shoulders),
-        .muscle(.quads), .muscle(.hamstrings), .muscle(.biceps),
-        .muscle(.triceps), .label("Rest")
+    /// Curated quick-presets that map common training days to their muscle
+    /// stacks. One tap fills the multi-select, user can refine. "Rest" is
+    /// mutually exclusive with any muscles.
+    private let presets: [Preset] = [
+        .init(name: "Push",  muscles: [.chest, .shoulders, .triceps]),
+        .init(name: "Pull",  muscles: [.back, .biceps]),
+        .init(name: "Legs",  muscles: [.quads, .hamstrings, .glutes, .calves]),
+        .init(name: "Upper", muscles: [.chest, .back, .shoulders, .biceps, .triceps]),
+        .init(name: "Lower", muscles: [.quads, .hamstrings, .glutes, .calves]),
+    ]
+
+    /// Individual muscle chips for users who want to compose their own
+    /// set rather than pick a preset.
+    private let muscleChips: [MuscleGroup] = [
+        .chest, .back, .shoulders, .biceps, .triceps,
+        .quads, .hamstrings, .glutes, .calves, .core
     ]
 
     init(day: DayIntent, onSave: @escaping (DayIntent) -> Void, onCancel: @escaping () -> Void) {
         self.day = day
         self.onSave = onSave
         self.onCancel = onCancel
-        _draftMuscle = State(initialValue: day.muscle)
+        _draftMuscles = State(initialValue: Set(day.muscles))
         _draftLabel  = State(initialValue: day.label)
         _draftNote   = State(initialValue: day.note ?? "")
     }
@@ -368,11 +419,18 @@ private struct PinDaySheet: View {
         VStack(alignment: .leading, spacing: 20) {
             header
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Quick presets")
+                    .font(.caption.bold())
+                    .foregroundColor(.secondaryText)
+                presetRow
+
                 Text("What are you training?")
                     .font(.caption.bold())
                     .foregroundColor(.secondaryText)
-                chipGrid
+                muscleChipGrid
+
+                restButton
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -408,7 +466,10 @@ private struct PinDaySheet: View {
                 Button {
                     Haptics.impact(.medium)
                     var updated = day
-                    updated.muscle = draftMuscle
+                    // Stable order: follow the chip-grid order so the
+                    // headline muscle in the strip cell is deterministic
+                    // across edits.
+                    updated.muscles = muscleChips.filter { draftMuscles.contains($0) }
                     updated.label = draftLabel
                     updated.note = draftNote.isEmpty ? nil : draftNote
                     updated.source = .pinned
@@ -420,7 +481,7 @@ private struct PinDaySheet: View {
                         .padding(.vertical, 12)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(draftMuscle == nil && draftLabel == nil)
+                .disabled(draftMuscles.isEmpty && draftLabel == nil)
             }
         }
         .padding(20)
@@ -440,43 +501,69 @@ private struct PinDaySheet: View {
         switch day.source {
         case .predicted:
             if let m = day.muscle { return "AI guess: \(m.displayName) — pin to lock it in" }
-            return "Tap a chip to plan this day"
+            return "Tap chips to plan this day"
         case .pinned:    return "Pinned — change or clear below"
         case .unknown:   return "No prediction yet"
         default:         return ""
         }
     }
 
-    /// Adaptive grid keeps chips reflowing cleanly across phone widths
-    /// without manually breaking into rows.
-    private var chipGrid: some View {
-        let columns = [GridItem(.adaptive(minimum: 80), spacing: 8)]
-        return LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(primaryChips, id: \.self) { chip in
-                chipButton(chip)
+    /// Quick-preset row — horizontal scroll of "Push" / "Pull" / "Legs" /
+    /// "Upper" / "Lower". One tap replaces the muscle selection with the
+    /// preset's full set. Clears the rest-day label too.
+    private var presetRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(presets) { preset in
+                    presetChip(preset)
+                }
             }
         }
     }
 
-    private func chipButton(_ chip: ChipOption) -> some View {
-        let isSelected: Bool = {
-            switch chip {
-            case .muscle(let m): return draftMuscle == m && draftLabel == nil
-            case .label(let s):  return draftLabel == s
-            }
-        }()
+    private func presetChip(_ preset: Preset) -> some View {
+        // Preset is "selected" when its muscle set exactly matches the
+        // current draft (so the user sees which preset they're on).
+        let isSelected = draftMuscles == Set(preset.muscles) && draftLabel == nil
         return Button {
             Haptics.selection()
-            switch chip {
-            case .muscle(let m):
-                draftMuscle = m
-                draftLabel = nil
-            case .label(let s):
-                draftLabel = s
-                draftMuscle = nil
+            draftMuscles = Set(preset.muscles)
+            draftLabel = nil
+        } label: {
+            Text(preset.name)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(isSelected ? Color.accentBlue : Color.gray.opacity(0.12))
+                .foregroundColor(isSelected ? .white : .primary)
+                .cornerRadius(20)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Adaptive grid of muscle chips. Tapping toggles in/out of the
+    /// `draftMuscles` set — true multi-select.
+    private var muscleChipGrid: some View {
+        let columns = [GridItem(.adaptive(minimum: 80), spacing: 8)]
+        return LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(muscleChips, id: \.self) { muscle in
+                muscleChipButton(muscle)
+            }
+        }
+    }
+
+    private func muscleChipButton(_ muscle: MuscleGroup) -> some View {
+        let isSelected = draftMuscles.contains(muscle) && draftLabel == nil
+        return Button {
+            Haptics.selection()
+            draftLabel = nil
+            if isSelected {
+                draftMuscles.remove(muscle)
+            } else {
+                draftMuscles.insert(muscle)
             }
         } label: {
-            Text(chip.title)
+            Text(muscle.displayName)
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
@@ -485,6 +572,40 @@ private struct PinDaySheet: View {
                 .cornerRadius(10)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Standalone Rest button — mutually exclusive with any muscle
+    /// selection. Tapping clears muscles and sets label="Rest".
+    private var restButton: some View {
+        let isSelected = draftLabel == "Rest"
+        return Button {
+            Haptics.selection()
+            if isSelected {
+                draftLabel = nil
+            } else {
+                draftLabel = "Rest"
+                draftMuscles = []
+            }
+        } label: {
+            HStack {
+                Image(systemName: "moon.zzz.fill").font(.caption)
+                Text("Rest day")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(isSelected ? Color.accentBlue : Color.gray.opacity(0.12))
+            .foregroundColor(isSelected ? .white : .primary)
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Curated quick-presets — common training day shapes.
+    private struct Preset: Identifiable, Hashable {
+        var id: String { name }
+        let name: String
+        let muscles: [MuscleGroup]
     }
 
     private enum ChipOption: Hashable {

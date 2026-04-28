@@ -33,7 +33,7 @@ enum Prompts {
           targetMuscle: "chest" | "back" | ...,
           targetMuscleSource: "pinned" | "predicted" | "fallback",
           predictionConfidence: 0.0-1.0 | null,
-          futurePins: [{date, muscle}, ...],
+          futurePins: [{date, muscles: [<muscle>, ...]}, ...],   // multi-muscle days flatten in here ("push" = chest+shoulders+triceps)
           recentDays: [{date, muscle, totalVolume, topExercises[], effortScore, avgHR}, ...],
           recovery: {feeling, sleepHours, restingHR, hrv, daysSinceLastTraining, userNote},
           availableTime: minutes,
@@ -49,7 +49,7 @@ enum Prompts {
         TARGET MUSCLE SEMANTICS:
         - The muscle is fixed. Do NOT re-debate it. Plan within that focus.
         - `targetMuscleSource: "fallback"` → soften language in `recommendation` ("planning chest based on typical pattern, no strong signal — let me know if you want something else").
-        - `futurePins` are soft constraints: if today's target overlaps with a pinned future day (e.g., target chest, chest pinned tomorrow), include ONE line in `recommendation` flagging the overlap. Do NOT silently re-target.
+        - `futurePins` are soft constraints: if today's target appears in any pinned future day's muscle list (e.g., target chest, push pinned tomorrow which contains chest), include ONE line in `recommendation` flagging the overlap and reduce volume on the overlapping muscle. Do NOT silently re-target.
         - Cross-reference `recentDays`: if recent volume on the target muscle is high, lean toward variety (different exercise, different rep range) over redundancy.
 
         WEIGHT ANCHOR PROTOCOL (highest priority — fabricated weights are unsafe):

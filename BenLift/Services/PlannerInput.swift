@@ -41,7 +41,10 @@ struct PlannerInput: Codable {
 
     struct FuturePin: Codable {
         let date: String                        // ISO8601 date-only
-        let muscle: String
+        /// Full muscle list for the pin. The LLM sees the entire set so it
+        /// can reason about volume distribution across e.g. push-day's
+        /// chest+shoulders+triceps tomorrow when planning today.
+        let muscles: [String]
     }
 
     struct RecentDay: Codable {
@@ -150,11 +153,18 @@ extension PlannerInput {
         // Strict future only — today's pin is already represented in
         // `targetMuscle`. Including it in futurePins would be redundant
         // and could confuse the LLM's volume-distribution reasoning.
+        // Multi-muscle pins flatten into the FuturePin.muscles array so
+        // the LLM sees the full commitment ("push tomorrow = chest +
+        // shoulders + triceps").
         let futurePins = pins
             .filter { cal.startOfDay(for: $0.date) > today }
             .compactMap { pin -> FuturePin? in
-                guard let m = pin.muscleGroup else { return nil }
-                return FuturePin(date: isoDay.string(from: pin.date), muscle: m.rawValue)
+                let muscles = pin.muscleGroups
+                guard !muscles.isEmpty else { return nil }
+                return FuturePin(
+                    date: isoDay.string(from: pin.date),
+                    muscles: muscles.map(\.rawValue)
+                )
             }
             .sorted { $0.date < $1.date }
 

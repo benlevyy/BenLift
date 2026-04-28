@@ -239,8 +239,9 @@ struct PatternEngine {
 
     /// Muscles pinned within ±`window` days of `date` (excluding date
     /// itself). Used as a soft-avoid set when picking muscles by pattern
-    /// or seed: if the user committed to chest tomorrow, today should
-    /// prefer something else.
+    /// or seed: if the user committed to push (chest+shoulders+triceps)
+    /// tomorrow, today should prefer something other than any of those
+    /// three.
     static func nearbyPinnedMuscles(
         pins: [MuscleGroupPin],
         within window: Int,
@@ -248,13 +249,15 @@ struct PatternEngine {
         cal: Calendar
     ) -> Set<MuscleGroup> {
         let target = cal.startOfDay(for: date)
-        return Set(pins.compactMap { pin -> MuscleGroup? in
+        var out: Set<MuscleGroup> = []
+        for pin in pins {
             let p = cal.startOfDay(for: pin.date)
-            guard p != target else { return nil }
+            guard p != target else { continue }
             let delta = abs(cal.dateComponents([.day], from: p, to: target).day ?? 999)
-            guard delta <= window else { return nil }
-            return pin.muscleGroup
-        })
+            guard delta <= window else { continue }
+            for m in pin.muscleGroups { out.insert(m) }
+        }
+        return out
     }
 
     // MARK: - Cell construction
@@ -310,11 +313,13 @@ struct PatternEngine {
             )
         }
 
-        // 3. Pin (today or future) wins over prediction.
+        // 3. Pin (today or future) wins over prediction. Multi-muscle pins
+        // ride through here — the cell shows the first muscle as headline
+        // with a "+N" badge for the rest.
         if let pin = pinsByDay[date] {
             return DayIntent(
                 date: date,
-                muscle: pin.muscleGroup,
+                muscles: pin.muscleGroups,
                 label: pin.label,
                 source: offset == 0 ? .today : .pinned,
                 note: pin.note
@@ -361,8 +366,8 @@ struct PatternEngine {
     }
 
     /// Muscles pinned on the day before / after `date` (excluding `date`
-    /// itself). Used as the avoid set when predicting `date`'s cell so the
-    /// strip respects the user's calendar intent across days.
+    /// itself). Multi-muscle pins flatten — a "push" pin on neighbor day
+    /// adds chest, shoulders, AND triceps to the avoid set.
     private static func adjacentPinnedMuscles(
         of date: Date,
         cal: Calendar,
@@ -371,8 +376,8 @@ struct PatternEngine {
         var muscles: Set<MuscleGroup> = []
         for offset in [-1, 1] {
             guard let neighbor = cal.date(byAdding: .day, value: offset, to: date) else { continue }
-            if let m = pinsByDay[cal.startOfDay(for: neighbor)]?.muscleGroup {
-                muscles.insert(m)
+            if let pin = pinsByDay[cal.startOfDay(for: neighbor)] {
+                for m in pin.muscleGroups { muscles.insert(m) }
             }
         }
         return muscles
