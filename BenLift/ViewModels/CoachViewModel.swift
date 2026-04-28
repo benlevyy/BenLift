@@ -79,7 +79,18 @@ class CoachViewModel {
         /// / sore). Empty dict when the user hasn't overridden anything;
         /// the AI's own read governs.
         let muscleOverrides: [String: String]
+        /// Raw values of muscles pinned for today, ordered. Pinning a
+        /// different muscle for today drifts this list and trips
+        /// `isPlanStale`, surfacing the refresh pill — same UX as
+        /// changing the time chip or the concerns field.
+        let todayPinnedMuscles: [String]
     }
+
+    /// Current today-pin muscles, set by the view layer (TodayView observes
+    /// MuscleGroupPin via @Query and writes the today row's raw muscle
+    /// values here on change). Read by `isPlanStale` and snapshotted at
+    /// plan-generation time.
+    var todayPinnedMusclesRaw: [String] = []
 
     /// User-set muscle status overrides. The Training tab's muscle map
     /// lets the user tap a row and force a status (e.g. "actually my
@@ -138,11 +149,20 @@ class CoachViewModel {
     /// auto-regenerate that fired on every tap and felt fidgety.
     var isPlanStale: Bool {
         guard !editedExercises.isEmpty, let snap = planInputSnapshot else { return false }
-        return snap != InputSnapshot(
+        return snap != currentInputSnapshot()
+    }
+
+    /// Helper to build the current InputSnapshot — used both for the
+    /// staleness check and to record the snapshot at plan generation time.
+    /// Keeps the field list in one place so adding a new tracked input
+    /// (today pin, etc.) only needs one update site.
+    private func currentInputSnapshot() -> InputSnapshot {
+        InputSnapshot(
             feeling: feeling,
             availableTime: availableTime,
             concerns: concerns,
-            muscleOverrides: muscleOverridesForSnapshot
+            muscleOverrides: muscleOverridesForSnapshot,
+            todayPinnedMuscles: todayPinnedMusclesRaw
         )
     }
 
@@ -440,12 +460,7 @@ class CoachViewModel {
             // Capture the inputs that produced this plan. `isPlanStale`
             // compares live values to this snapshot to decide whether to
             // show the Refresh pill on Today.
-            planInputSnapshot = InputSnapshot(
-                feeling: feeling,
-                availableTime: availableTime,
-                concerns: concerns,
-                muscleOverrides: muscleOverridesForSnapshot
-            )
+            planInputSnapshot = currentInputSnapshot()
 
             // Overrides have now been absorbed into the plan — clear them
             // so tomorrow's plan isn't silently double-applying yesterday's
@@ -780,12 +795,7 @@ class CoachViewModel {
             concerns = ""
             // Same snapshot dance as `getRecommendationAndPlan` so the
             // Refresh pill clears after an iteration refresh too.
-            planInputSnapshot = InputSnapshot(
-                feeling: feeling,
-                availableTime: availableTime,
-                concerns: concerns,
-                muscleOverrides: muscleOverridesForSnapshot
-            )
+            planInputSnapshot = currentInputSnapshot()
             // Plan absorbed the overrides — reset so tomorrow starts fresh.
             clearAllMuscleOverrides()
             print("[BenLift/Coach] ✅ Plan generated: \(editedExercises.count) exercises")
@@ -1283,12 +1293,7 @@ class CoachViewModel {
         // Without this, `isPlanStale` always returned false (snapshot=nil)
         // and the pill never appeared — which is exactly what the user
         // reported as "refresh is just not there physically."
-        planInputSnapshot = InputSnapshot(
-            feeling: feeling,
-            availableTime: availableTime,
-            concerns: concerns,
-            muscleOverrides: muscleOverridesForSnapshot
-        )
+        planInputSnapshot = currentInputSnapshot()
     }
 
     // MARK: - Muscle Overrides

@@ -15,6 +15,12 @@ struct TodayView: View {
     @State private var analysisVM = AnalysisViewModel()
     @State private var savedSession: WorkoutSession?
 
+    /// Observed so changing today's pin in the Week Strip flips
+    /// `coachVM.isPlanStale` → surfaces the Refresh pill, same as adjusting
+    /// time / feeling / concerns. The view writes the today-row's muscle
+    /// list into `coachVM.todayPinnedMusclesRaw` whenever the query refreshes.
+    @Query private var pins: [MuscleGroupPin]
+
     // Check-in state — pulled from HealthKit on appear so the recovery strip
     // can render inline without requiring the user to open a separate sheet.
     @State private var healthContext: HealthContext?
@@ -28,6 +34,18 @@ struct TodayView: View {
     /// close the keyboard on iOS.
     @FocusState private var concernsFocused: Bool
 
+    /// Today's pin's muscles, raw values, ordered. Empty when no pin row
+    /// exists for today (the calendar engine then picks via modal/seed/
+    /// fallback). Pushed into coachVM so plan-staleness can detect when
+    /// the user changes today's muscle.
+    private var todayPinnedMuscleRawValues: [String] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        guard let pin = pins.first(where: { cal.isDate($0.date, inSameDayAs: today) }) else {
+            return []
+        }
+        return pin.muscleGroups.map(\.rawValue)
+    }
 
     var body: some View {
         NavigationStack {
@@ -138,6 +156,16 @@ struct TodayView: View {
                 programVM.loadCurrentProgram(modelContext: modelContext)
                 concernsDraft = coachVM.concerns
                 Task { healthContext = await HealthKitService.shared.fetchHealthContext() }
+                // Seed coachVM with today's currently-pinned muscles so the
+                // first staleness check has a baseline to compare against.
+                coachVM.todayPinnedMusclesRaw = todayPinnedMuscleRawValues
+            }
+            // Re-publish today's pinned muscles to coachVM whenever the
+            // underlying SwiftData query updates. The VM's snapshot
+            // comparison will diff this against what was current at plan-
+            // generation time → flips `isPlanStale` → refresh pill shows.
+            .onChange(of: todayPinnedMuscleRawValues) { _, newValue in
+                coachVM.todayPinnedMusclesRaw = newValue
             }
             // Keep the local draft in sync when the VM resets concerns
             // after a successful plan generation. Without this, the
@@ -693,10 +721,10 @@ struct TodayView: View {
     }
 
     private var concernsField: some View {
-        TextField("Anything to adjust? (e.g. shoulder sore, go heavy)",
+        TextField("Anything to adjust? (e.g. shoulder sore)",
                   text: $concernsDraft, axis: .vertical)
             .lineLimit(1...3)
-            .font(.caption)
+            .font(.footnote)
             .textFieldStyle(.roundedBorder)
             .focused($concernsFocused)
             .submitLabel(.done)

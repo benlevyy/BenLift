@@ -157,7 +157,7 @@ struct WeekStripView: View {
             } onCancel: {
                 selectedDayID = nil
             }
-            .presentationDetents([.height(360), .medium])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }
@@ -416,35 +416,40 @@ private struct PinDaySheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            header
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Quick presets")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                presetRow
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Quick presets")
+                            .font(.caption.bold())
+                            .foregroundColor(.secondaryText)
+                        presetRow
 
-                Text("What are you training?")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                muscleChipGrid
+                        Text("What are you training?")
+                            .font(.caption.bold())
+                            .foregroundColor(.secondaryText)
+                        muscleChipGrid
 
-                restButton
+                        restButton
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Anything else?")
+                            .font(.caption.bold())
+                            .foregroundColor(.secondaryText)
+                        TextField("e.g. dumbbells only, going heavy",
+                                  text: $draftNote, axis: .vertical)
+                            .lineLimit(1...3)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.subheadline)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
             }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Anything else?")
-                    .font(.caption.bold())
-                    .foregroundColor(.secondaryText)
-                TextField("e.g. dumbbells only, going heavy",
-                          text: $draftNote, axis: .vertical)
-                    .lineLimit(1...3)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.subheadline)
-            }
-
-            Spacer(minLength: 0)
 
             HStack(spacing: 10) {
                 if day.source == .pinned {
@@ -483,8 +488,11 @@ private struct PinDaySheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(draftMuscles.isEmpty && draftLabel == nil)
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+            .padding(.top, 8)
+            .background(Color.appBackground)
         }
-        .padding(20)
     }
 
     private var header: some View {
