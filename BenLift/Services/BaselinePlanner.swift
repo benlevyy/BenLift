@@ -16,103 +16,112 @@ struct BaselinePlanner {
     static func plan(input: PlannerInput, library: [Exercise]) -> DailyPlanResponse {
         let lowReadiness = isLowReadiness(input.recovery)
 
-        // Cut budget on low-readiness days. Floor at 4 sets so we never plan a
-        // session that's not worth showing up for.
+        // Cut total budget on low-readiness days. Floor at 4.
         let workingSetBudget: Int = {
             guard lowReadiness else { return input.targetWorkingSets }
             let cut = Int((Double(input.targetWorkingSets) * 0.6).rounded(.down))
             return max(4, cut)
         }()
 
-        let targetMG = MuscleGroup(rawValue: input.targetMuscle)
-        let libByName = Dictionary(uniqueKeysWithValues: library.map { ($0.name, $0) })
+        // Resolve targets — at least one. If the contract somehow gives us
+        // an empty list, return an empty plan and let the UI surface the
+        // error path. PlannerInput.build guards against this case upstream.
+        let targets: [MuscleGroup] = input.targetMuscles.compactMap { MuscleGroup(rawValue: $0) }
+        guard let primaryTarget = targets.first else {
+            return DailyPlanResponse(exercises: [], sessionStrategy: "No target muscle set.", estimatedDuration: 0, deloadNote: nil)
+        }
 
-        // Hard rule-outs: explicit user rules + injury keyword inference.
+        let libByName = Dictionary(uniqueKeysWithValues: library.map { ($0.name, $0) })
         let injuryBlockers = injuryKeywordBlockers(input.constraints.injuries)
         let outSet = Set(input.constraints.exerciseOut)
-
-        func isBarbellCompound(_ name: String) -> Bool {
-            barbellCompoundNames.contains(name)
-        }
 
         func isAllowed(_ name: String) -> Bool {
             if outSet.contains(name) { return false }
             if injuryBlockers.contains(where: { name.localizedCaseInsensitiveContains($0) }) {
                 return false
             }
-            // Low-readiness days: drop barbell compounds; they get substituted
-            // via library lookup further down.
-            if lowReadiness && isBarbellCompound(name) { return false }
+            if lowReadiness && barbellCompoundNames.contains(name) { return false }
             return true
         }
 
-        // Library entries scoped to the target muscle, used both for filling
-        // gaps and for substituting blocked barbell compounds.
-        let targetLibrary: [Exercise] = library.filter {
-            guard let mg = targetMG else { return false }
-            return $0.muscleGroup == mg && isAllowed($0.name)
-        }
+        // Per-muscle set budget via primary-weighted distribution. 1 muscle:
+        // all the sets. 2 muscles: 60/40. 3 muscles: 50/30/20. 4+: roughly
+        // even. The primary muscle (targets.first) always gets the largest
+        // share — its compound is the day's headline.
+        let perMuscleBudget = distributeBudget(workingSetBudget, across: targets.count)
 
-        // 1) Primary compound: prefer a ritual that hits the target muscle.
-        var picks: [Pick] = []
+        // Pick exercises per target muscle. Each muscle gets ≥1 exercise.
+        // Primary additionally gets isolation + finisher slots when budget
+        // allows; secondary muscles get one compound + isolation if their
+        // budget supports it.
+        var picks: [PickWithMuscle] = []
         var usedNames = Set<String>()
 
-        if let primary = pickPrimary(
-            rituals: input.rituals,
-            libByName: libByName,
-            targetMG: targetMG,
-            targetLibrary: targetLibrary,
-            isAllowed: isAllowed,
-            lowReadiness: lowReadiness
-        ) {
-            picks.append(Pick(exercise: primary, intent: .primaryCompound))
-            usedNames.insert(primary.name)
-        }
+        for (index, muscle) in targets.enumerated() {
+            let muscleBudget = perMuscleBudget[index]
+            let isPrimary = (index == 0)
+            let muscleLibrary = library.filter { $0.muscleGroup == muscle && isAllowed($0.name) }
 
-        // 2) Secondary: rotation entries for the target muscle (1–2).
-        let rotationNames = input.rotation[input.targetMuscle] ?? []
-        for name in rotationNames where picks.filter({ $0.intent == .secondaryCompound }).count < 2 {
-            guard !usedNames.contains(name), isAllowed(name), let ex = libByName[name] else { continue }
-            // Skip pure isolation-shaped rotation entries when we already have
-            // a primary; they belong in the isolation slot.
-            picks.append(Pick(exercise: ex, intent: .secondaryCompound))
-            usedNames.insert(name)
-        }
+            // 1) Compound (ritual preferred). Marked primaryCompound only
+            // for the day's lead muscle; everything else is secondary.
+            if let compound = pickCompound(
+                forMuscle: muscle,
+                rituals: input.rituals,
+                libByName: libByName,
+                muscleLibrary: muscleLibrary,
+                isAllowed: isAllowed,
+                usedNames: usedNames,
+                lowReadiness: lowReadiness
+            ) {
+                picks.append(PickWithMuscle(
+                    exercise: compound,
+                    intent: isPrimary ? .primaryCompound : .secondaryCompound,
+                    muscle: muscle
+                ))
+                usedNames.insert(compound.name)
+            }
 
-        // Fill secondary from library if rotation came up empty.
-        if !picks.contains(where: { $0.intent == .secondaryCompound }) {
-            if let secondary = targetLibrary.first(where: {
-                !usedNames.contains($0.name) && $0.equipment != .bodyweight
-            }) {
-                picks.append(Pick(exercise: secondary, intent: .secondaryCompound))
-                usedNames.insert(secondary.name)
+            // 2) Isolation slot — only worth it when the muscle has at
+            // least 4 sets in its share, otherwise the compound carries
+            // the volume on its own.
+            let isolationEquipment: Set<Equipment> = [.cable, .dumbbell, .machine]
+            if muscleBudget >= 4,
+               let iso = muscleLibrary.first(where: { ex in
+                   !usedNames.contains(ex.name) && isolationEquipment.contains(ex.equipment)
+               }) {
+                picks.append(PickWithMuscle(exercise: iso, intent: .isolation, muscle: muscle))
+                usedNames.insert(iso.name)
+            }
+
+            // 3) Finisher — primary muscle only, and only if its share is
+            // big enough for a third exercise.
+            let finisherEquipment: Set<Equipment> = [.cable, .bodyweight, .machine]
+            if isPrimary, muscleBudget >= 7,
+               let finisher = muscleLibrary.first(where: { ex in
+                   !usedNames.contains(ex.name) && finisherEquipment.contains(ex.equipment)
+               }) {
+                picks.append(PickWithMuscle(exercise: finisher, intent: .finisher, muscle: muscle))
+                usedNames.insert(finisher.name)
             }
         }
 
-        // 3) Isolation: prefer cable/dumbbell same-muscle work.
-        if let iso = targetLibrary.first(where: {
-            !usedNames.contains($0.name) && ($0.equipment == .cable || $0.equipment == .dumbbell || $0.equipment == .machine)
-        }) {
-            picks.append(Pick(exercise: iso, intent: .isolation))
-            usedNames.insert(iso.name)
+        // Distribute set counts within each muscle's slice. Inside a slice:
+        // compound gets the most, isolation less, finisher least. Then
+        // balance across the whole plan to match the total budget exactly
+        // (rounding from the per-muscle distribution can leave us off ±1).
+        var setCounts: [Int] = picks.map { _ in 1 }
+        for (index, _) in targets.enumerated() {
+            let muscleBudget = perMuscleBudget[index]
+            let muscle = targets[index]
+            let indices = picks.indices.filter { picks[$0].muscle == muscle }
+            distributeWithinMuscle(&setCounts, indices: indices, budget: muscleBudget, intents: indices.map { picks[$0].intent })
         }
-
-        // 4) Finisher: another isolation, ideally cable/bodyweight high-rep.
-        if let finisher = targetLibrary.first(where: {
-            !usedNames.contains($0.name) && ($0.equipment == .cable || $0.equipment == .bodyweight || $0.equipment == .machine)
-        }) {
-            picks.append(Pick(exercise: finisher, intent: .finisher))
-            usedNames.insert(finisher.name)
-        }
-
-        // Distribute set counts: 3/3/2/1 baseline → adjust to match budget.
-        var setCounts = defaultSetCounts(for: picks)
+        // Final reconciliation against total — handles rounding drift.
         balanceSets(&setCounts, target: workingSetBudget)
 
-        // Build PlannedExercise objects in canonical order.
         let planned: [PlannedExercise] = zip(picks, setCounts).map { pick, sets in
             buildPlannedExercise(
-                pick: pick,
+                pick: Pick(exercise: pick.exercise, intent: pick.intent),
                 sets: sets,
                 input: input,
                 libByName: libByName,
@@ -124,8 +133,8 @@ struct BaselinePlanner {
         let restSec = preferredRestSeconds()
         let duration = 5 + Int((Double(totalSets) * (1.0 + Double(restSec) / 60.0)).rounded())
 
-        let muscleDisplay = targetMG?.displayName ?? input.targetMuscle.capitalized
-        let strategy = "Hypertrophy session targeting \(muscleDisplay) — \(totalSets) working sets, compound-led."
+        let displayName = sessionDisplayName(for: targets, primary: primaryTarget)
+        let strategy = "Hypertrophy session targeting \(displayName) — \(totalSets) working sets, compound-led."
 
         let deload: String? = lowReadiness
             ? "Low readiness detected — barbell compounds swapped for machine/cable variants and weights pulled back ~10%."
@@ -137,6 +146,125 @@ struct BaselinePlanner {
             estimatedDuration: duration,
             deloadNote: deload
         )
+    }
+}
+
+// MARK: - Multi-target helpers
+
+private extension BaselinePlanner {
+
+    /// Like `Pick` but tagged with the target muscle that drove the slot,
+    /// so we can distribute set budgets per muscle instead of per slot.
+    struct PickWithMuscle {
+        let exercise: Exercise
+        let intent: ExerciseIntent
+        let muscle: MuscleGroup
+    }
+
+    /// Primary-weighted set distribution.
+    /// 1 muscle  → all sets to it.
+    /// 2 muscles → 60/40 (primary heavier).
+    /// 3 muscles → 50/30/20.
+    /// 4+ muscles → roughly even split with leftover going to primary.
+    static func distributeBudget(_ total: Int, across n: Int) -> [Int] {
+        guard n > 0 else { return [] }
+        switch n {
+        case 1:
+            return [total]
+        case 2:
+            let primary = Int((Double(total) * 0.6).rounded())
+            return [primary, max(0, total - primary)]
+        case 3:
+            let primary = Int((Double(total) * 0.5).rounded())
+            let second = Int((Double(total) * 0.3).rounded())
+            return [primary, second, max(0, total - primary - second)]
+        default:
+            let base = total / n
+            let rem = total - base * n
+            // Leftover sets concentrate on the primary so it stays
+            // recognisable as the day's lead.
+            return (0..<n).map { i in i == 0 ? base + rem : base }
+        }
+    }
+
+    /// Pick a compound for a specific muscle. Ritual hit > rotation hit >
+    /// best library entry. Marked compound vs isolation by the caller's
+    /// `intent`, not here.
+    static func pickCompound(
+        forMuscle muscle: MuscleGroup,
+        rituals: [String],
+        libByName: [String: Exercise],
+        muscleLibrary: [Exercise],
+        isAllowed: (String) -> Bool,
+        usedNames: Set<String>,
+        lowReadiness: Bool
+    ) -> Exercise? {
+        // Ritual that targets this muscle.
+        if let ritualHit = rituals.first(where: { name in
+            guard !usedNames.contains(name), isAllowed(name), let ex = libByName[name] else { return false }
+            return ex.muscleGroup == muscle
+        }), let ex = libByName[ritualHit] {
+            return ex
+        }
+        // Library compound — barbell/dumbbell preferred normally; machine/
+        // cable preferred on low-readiness days.
+        let preferred: [Equipment] = lowReadiness ? [.machine, .cable, .dumbbell] : [.barbell, .dumbbell, .machine]
+        for eq in preferred {
+            if let hit = muscleLibrary.first(where: { $0.equipment == eq && !usedNames.contains($0.name) }) {
+                return hit
+            }
+        }
+        return muscleLibrary.first(where: { !usedNames.contains($0.name) })
+    }
+
+    /// Within one muscle's slice, distribute its budget across its picks.
+    /// Compound gets the lion's share; isolation half of that; finisher the
+    /// remainder. Mutates `setCounts` in place by index.
+    static func distributeWithinMuscle(
+        _ setCounts: inout [Int],
+        indices: [Int],
+        budget: Int,
+        intents: [ExerciseIntent]
+    ) {
+        guard !indices.isEmpty, budget > 0 else { return }
+        // Initial allocation by intent weight.
+        let weights: [Double] = intents.map { intent in
+            switch intent {
+            case .primaryCompound:   return 1.0
+            case .secondaryCompound: return 0.85
+            case .isolation:         return 0.55
+            case .finisher:          return 0.35
+            }
+        }
+        let weightSum = weights.reduce(0, +)
+        var allocated = 0
+        for (slot, idx) in indices.enumerated() {
+            let share = Int((Double(budget) * weights[slot] / weightSum).rounded())
+            setCounts[idx] = max(1, share)
+            allocated += setCounts[idx]
+        }
+        // Reconcile against the muscle's budget — push remainder onto the
+        // first slot (the compound).
+        if allocated != budget, let first = indices.first {
+            setCounts[first] += (budget - allocated)
+            if setCounts[first] < 1 { setCounts[first] = 1 }
+        }
+    }
+
+    /// Best-fit name for the session header.
+    /// Matches canonical presets first ("Push" / "Pull" / "Legs" / "Upper"
+    /// / "Lower"), then "Chest + Shoulders" for two-muscle days, falls back
+    /// to the primary muscle's name.
+    static func sessionDisplayName(for targets: [MuscleGroup], primary: MuscleGroup) -> String {
+        let s = Set(targets)
+        if s == Set([.chest, .shoulders, .triceps]) { return "Push" }
+        if s == Set([.back, .biceps]) { return "Pull" }
+        if s == Set([.quads, .hamstrings, .glutes, .calves]) { return "Legs" }
+        if s == Set([.chest, .back, .shoulders, .biceps, .triceps]) { return "Upper" }
+        if targets.count == 2 {
+            return "\(targets[0].displayName) + \(targets[1].displayName)"
+        }
+        return primary.displayName
     }
 }
 

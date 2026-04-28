@@ -134,10 +134,13 @@ struct BootstrapPersister {
                 continue
             }
 
-            let muscle = Self.firstMuscle(from: rawValue)
+            // Multi-muscle: parse the full comma list so push days seed
+            // [chest, shoulders, triceps] rather than dropping all but the
+            // first. Empty list = rest day.
+            let muscles = Self.parseMuscleList(from: rawValue)
             let row = SeedPattern(
                 weekday: weekday,
-                muscleGroup: muscle,
+                muscleGroups: muscles,
                 source: .bootstrap
             )
             modelContext.insert(row)
@@ -162,32 +165,36 @@ struct BootstrapPersister {
         }
     }
 
-    /// Parse the first muscle from a comma list like
-    /// "chest, shoulders, triceps". Returns nil for "rest" / empty / no match
-    /// so the caller can write a rest-day row.
-    private static func firstMuscle(from raw: String) -> MuscleGroup? {
-        let head = raw
-            .split(separator: ",", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() } ?? ""
+    /// Parse the full muscle list from a comma string like
+    /// "chest, shoulders, triceps". Returns [] for "rest" / empty / no
+    /// match so the caller writes a rest-day row.
+    static func parseMuscleList(from raw: String) -> [MuscleGroup] {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !trimmed.isEmpty, trimmed != "rest", trimmed != "off" else { return [] }
 
-        guard !head.isEmpty, head != "rest", head != "off" else { return nil }
-
-        // Exact rawValue match first.
-        if let direct = MuscleGroup(rawValue: head) {
-            return direct
+        var out: [MuscleGroup] = []
+        var seen: Set<MuscleGroup> = []
+        for token in trimmed.split(separator: ",") {
+            let t = token.trimmingCharacters(in: .whitespaces)
+            guard !t.isEmpty, t != "rest", t != "off" else { continue }
+            if let m = matchMuscle(token: t), !seen.contains(m) {
+                out.append(m)
+                seen.insert(m)
+            }
         }
+        return out
+    }
 
-        // Case-insensitive substring match. Useful for plurals / variants
-        // like "shoulder", "lats" → back, etc. Only rely on this for
-        // straightforward token extension; we don't try to map novel words.
+    /// Map a single muscle token to a MuscleGroup. Exact rawValue match
+    /// first, then case-insensitive substring.
+    private static func matchMuscle(token: String) -> MuscleGroup? {
+        if let direct = MuscleGroup(rawValue: token) { return direct }
         for mg in MuscleGroup.allCases {
             let rv = mg.rawValue.lowercased()
-            if head.contains(rv) || rv.contains(head) {
+            if token.contains(rv) || rv.contains(token) {
                 return mg
             }
         }
-
         return nil
     }
 }

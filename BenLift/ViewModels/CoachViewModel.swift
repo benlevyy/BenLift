@@ -533,7 +533,7 @@ class CoachViewModel {
             currentPlan = plan
             editedExercises = plan.exercises
             recommendation = rec
-            targetMuscleGroups = MuscleGroup(rawValue: input.targetMuscle).map { [$0] } ?? []
+            targetMuscleGroups = input.targetMuscles.compactMap { MuscleGroup(rawValue: $0) }
             currentSessionName = rec.recommendedSessionName
             markGenerated(modelContext: modelContext)
 
@@ -663,31 +663,55 @@ class CoachViewModel {
     /// owns that decision now). We synthesize one for the existing UI's
     /// header. Reasoning text comes from the v5 `recommendation` field
     /// when escalated; for routine days, we write a one-liner that names
-    /// the muscle and notes the source (pattern vs pin vs LLM-pick).
+    /// the muscle(s) and source (pattern vs pin vs cold-start fallback).
+    ///
+    /// Naming logic:
+    /// - Matches a canonical preset → "Push Day" / "Pull Day" / "Legs Day"
+    /// - 2 muscles → "Chest + Shoulders Day"
+    /// - 3+ muscles (no preset) → "Chest + 2" headline keeps it compact
+    /// - 1 muscle → "Chest Day"
     private static func synthesizeRecommendation(
         input: PlannerInput,
         narrative: String?,
         escalated: Bool,
         reason: String
     ) -> RecoveryRecommendation {
-        let muscle = MuscleGroup(rawValue: input.targetMuscle)?.displayName ?? input.targetMuscle.capitalized
-        let name = "\(muscle) Day"
+        let muscles = input.targetMuscles.compactMap { MuscleGroup(rawValue: $0) }
+        let displayName = sessionDisplayName(for: muscles)
+
         let reasoning: String
         if let n = narrative, !n.isEmpty {
             reasoning = n
         } else {
+            let lower = displayName.lowercased()
             switch input.targetMuscleSource {
-            case "pinned":     reasoning = "Pinned: \(muscle.lowercased()) today."
-            case "predicted":  reasoning = "Based on your typical pattern, today's a \(muscle.lowercased()) day."
-            default:           reasoning = "Today's focus: \(muscle.lowercased())."
+            case "pinned":     reasoning = "Pinned: \(lower) today."
+            case "predicted":  reasoning = "Based on your typical pattern, today's a \(lower) day."
+            default:           reasoning = "Today's focus: \(lower)."
             }
         }
         return RecoveryRecommendation(
             muscleGroupStatus: [],
-            recommendedFocus: [input.targetMuscle],
-            recommendedSessionName: name,
+            recommendedFocus: input.targetMuscles,
+            recommendedSessionName: "\(displayName) Day",
             reasoning: reasoning
         )
+    }
+
+    /// Best-fit name for the session header — same logic the deterministic
+    /// baseline planner uses internally, kept duplicated to avoid having
+    /// the VM depend on BaselinePlanner internals (these may diverge later
+    /// if the LLM wants different wording).
+    private static func sessionDisplayName(for muscles: [MuscleGroup]) -> String {
+        guard let primary = muscles.first else { return "Workout" }
+        let s = Set(muscles)
+        if s == Set([.chest, .shoulders, .triceps]) { return "Push" }
+        if s == Set([.back, .biceps]) { return "Pull" }
+        if s == Set([.quads, .hamstrings, .glutes, .calves]) { return "Legs" }
+        if s == Set([.chest, .back, .shoulders, .biceps, .triceps]) { return "Upper" }
+        if muscles.count == 2 { return "\(muscles[0].displayName) + \(muscles[1].displayName)" }
+        if muscles.count >= 3 { return "\(primary.displayName) +\(muscles.count - 1)" }
+        return primary.displayName
     }
 
     // MARK: - Step 2: Generate Plan (Haiku)

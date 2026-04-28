@@ -162,29 +162,31 @@ struct PatternEngine {
         return nil
     }
 
-    /// Convenience for the planner pipeline — extract today's targetMuscle
-    /// without rebuilding the full strip.
-    static func targetMuscleForToday(
+    /// Convenience for the planner pipeline — extract today's targetMuscles
+    /// without rebuilding the full strip. Returns an array because real
+    /// training days are usually multi-muscle (push = chest+shoulders+
+    /// triceps). Empty array means "no signal" — caller falls through.
+    static func targetMusclesForToday(
         sessions: [WorkoutSession],
         pins: [MuscleGroupPin],
         seedPatterns: [SeedPattern],
         exerciseMuscleLookup: [String: MuscleGroup] = [:],
         now: Date = Date()
-    ) -> (muscle: MuscleGroup?, source: PlannerMuscleSource, confidence: Double?) {
+    ) -> (muscles: [MuscleGroup], source: PlannerMuscleSource, confidence: Double?) {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
 
-        // Pin wins.
+        // Pin wins — full muscle list straight through.
         if let pin = pins.first(where: { cal.isDate($0.date, inSameDayAs: today) }),
-           let m = pin.muscleGroup {
-            return (m, .pinned, 1.0)
+           !pin.muscleGroups.isEmpty {
+            return (pin.muscleGroups, .pinned, 1.0)
         }
 
-        // Avoid muscles the user has already committed to in the next 2 days
-        // — picking the same muscle today and tomorrow burns the stimulus
-        // (and ignores the user's calendar intent). The avoid set is "soft":
-        // if the modal/seed has no non-conflicting alternative, we still
-        // emit the conflicting muscle so the user isn't left with `?`.
+        // Avoid muscles already committed to in the next 2 days — strict
+        // avoid: if any proposed muscle conflicts, drop the entire signal
+        // and fall through to the next path. (Soft override would emit a
+        // partial set, which is incoherent — "shoulders + triceps" alone
+        // isn't a real day.)
         let nearPinned = nearbyPinnedMuscles(pins: pins, within: 2, of: today, cal: cal)
 
         // Pattern from rolling window.
@@ -193,35 +195,30 @@ struct PatternEngine {
         let weekday = cal.component(.weekday, from: today)
         let sameDayofWeek = recent.filter { cal.component(.weekday, from: $0.date) == weekday }
 
-        let primaryByID: [UUID: MuscleGroup] = sameDayofWeek.reduce(into: [:]) { acc, s in
-            if let m = primaryMuscle(of: s, lookup: exerciseMuscleLookup) {
-                acc[s.id] = m
+        if sameDayofWeek.count >= minPatternSamples {
+            // Multi-muscle modal: pick muscles that appear in ≥50% of the
+            // bucket sessions. For users who consistently train push days
+            // on Mondays, this returns [chest, shoulders, triceps] — the
+            // full day shape, not just the primary mover.
+            let modalSet = modalMuscleSet(in: sameDayofWeek)
+            if !modalSet.isEmpty,
+               modalSet.allSatisfy({ !nearPinned.contains($0) }) {
+                let conf = Double(sameDayofWeek.count) / Double(max(sameDayofWeek.count, minPatternSamples + 1))
+                return (modalSet, .predicted, conf)
             }
         }
 
-        if let (modal, conf) = modalMuscle(in: sameDayofWeek, primaryByID: primaryByID, avoid: nearPinned),
-           sameDayofWeek.count >= minPatternSamples {
-            return (modal, .predicted, conf)
-        }
-
-        // Seed fallback — also respects the avoid set.
+        // Seed fallback — multi if the bootstrap LLM seeded multi.
         if let seed = seedPatterns.first(where: { $0.weekday == weekday }),
-           let m = seed.muscleGroup,
-           !nearPinned.contains(m) {
-            return (m, .fallback, 0.5)
+           !seed.muscleGroups.isEmpty,
+           seed.muscleGroups.allSatisfy({ !nearPinned.contains($0) }) {
+            return (seed.muscleGroups, .fallback, 0.5)
         }
 
         // Cold-start fallback: pick the least-recently-trained muscle that
-        // isn't pinned for the next 2 days. This is what makes the planner
-        // run at all when the user has zero strength history (Ben's actual
-        // state right now) and the bootstrap seed hasn't been written yet.
-        // Without this we return nil → PlannerInput.build returns nil →
-        // CoachVM falls through to the legacy v1 path, which is unaware of
-        // futurePins. The user pinning chest tomorrow goes ignored.
-        //
-        // We don't want this on `predict` (future-day strip cells) because
-        // there it caused oscillation as days advanced. For today it fires
-        // once per app open; no oscillation.
+        // isn't pinned in the next 2 days. Single-muscle here — without any
+        // history we don't know what companions the user typically pairs.
+        // Better to give one focused muscle than an arbitrary "push" guess.
         let lastTrainedByMuscle = recent.reduce(into: [MuscleGroup: Date]()) { acc, s in
             guard let m = primaryMuscle(of: s, lookup: exerciseMuscleLookup) else { return }
             if (acc[m] ?? .distantPast) < s.date { acc[m] = s.date }
@@ -230,11 +227,45 @@ struct PatternEngine {
             .filter { !nearPinned.contains($0) }
             .sorted { (lastTrainedByMuscle[$0] ?? .distantPast) < (lastTrainedByMuscle[$1] ?? .distantPast) }
         if let pick = candidates.first {
-            return (pick, .fallback, 0.3)
+            return ([pick], .fallback, 0.3)
         }
+        return ([], .fallback, nil)
+    }
 
-        // Truly nothing left (every muscle is in avoid — shouldn't happen).
-        return (nil, .fallback, nil)
+    /// Multi-muscle modal: muscles appearing in ≥50% of the sessions in the
+    /// bucket, ordered by frequency desc. Reads `WorkoutSession.muscleGroups`
+    /// directly (not the primaryByID single-pick) so push-day sessions
+    /// tagged [chest, shoulders, triceps] return all three.
+    static func modalMuscleSet(in sessions: [WorkoutSession]) -> [MuscleGroup] {
+        guard !sessions.isEmpty else { return [] }
+        var counts: [MuscleGroup: Int] = [:]
+        for s in sessions {
+            for m in Set(s.muscleGroups) {
+                counts[m, default: 0] += 1
+            }
+        }
+        let threshold = max(1, Int(ceil(Double(sessions.count) * 0.5)))
+        return counts
+            .filter { $0.value >= threshold }
+            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key.rawValue < $1.key.rawValue }
+            .map(\.key)
+    }
+
+    /// Legacy single-muscle accessor — kept so the strip's predict path
+    /// (which still emits one muscle per future cell) can call without
+    /// the planner-pipeline overhead. Returns first of the multi result.
+    static func targetMuscleForToday(
+        sessions: [WorkoutSession],
+        pins: [MuscleGroupPin],
+        seedPatterns: [SeedPattern],
+        exerciseMuscleLookup: [String: MuscleGroup] = [:],
+        now: Date = Date()
+    ) -> (muscle: MuscleGroup?, source: PlannerMuscleSource, confidence: Double?) {
+        let result = targetMusclesForToday(
+            sessions: sessions, pins: pins, seedPatterns: seedPatterns,
+            exerciseMuscleLookup: exerciseMuscleLookup, now: now
+        )
+        return (result.muscles.first, result.source, result.confidence)
     }
 
     /// Muscles pinned within ±`window` days of `date` (excluding date

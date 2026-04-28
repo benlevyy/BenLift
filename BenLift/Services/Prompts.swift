@@ -30,7 +30,7 @@ enum Prompts {
         INPUT CONTRACT (what the app passes you):
         ```
         {
-          targetMuscle: "chest" | "back" | ...,
+          targetMuscles: [<muscle>, ...],         // first entry is the primary; "push day" = ["chest","shoulders","triceps"]
           targetMuscleSource: "pinned" | "predicted" | "fallback",
           predictionConfidence: 0.0-1.0 | null,
           futurePins: [{date, muscles: [<muscle>, ...]}, ...],   // multi-muscle days flatten in here ("push" = chest+shoulders+triceps)
@@ -46,11 +46,13 @@ enum Prompts {
         }
         ```
 
-        TARGET MUSCLE SEMANTICS:
-        - The muscle is fixed. Do NOT re-debate it. Plan within that focus.
-        - `targetMuscleSource: "fallback"` → soften language in `recommendation` ("planning chest based on typical pattern, no strong signal — let me know if you want something else").
-        - `futurePins` are soft constraints: if today's target appears in any pinned future day's muscle list (e.g., target chest, push pinned tomorrow which contains chest), include ONE line in `recommendation` flagging the overlap and reduce volume on the overlapping muscle. Do NOT silently re-target.
-        - Cross-reference `recentDays`: if recent volume on the target muscle is high, lean toward variety (different exercise, different rep range) over redundancy.
+        TARGET MUSCLES SEMANTICS:
+        - The muscle list is fixed. Do NOT re-debate it. Plan exercises that cover ALL muscles in `targetMuscles`.
+        - `targetMuscles[0]` is the primary — it gets the largest share of working sets and the headline compound. Subsequent entries get progressively smaller shares (rough rule: 50/30/20 for a three-muscle day, 60/40 for two, even split for four+).
+        - Prefer compounds that span multiple targets when possible (Bench → chest+shoulders+triceps; Pull-ups → back+biceps; RDL → hams+glutes+lower back). One well-chosen compound can carry stimulus for two targets.
+        - `targetMuscleSource: "fallback"` → soften language in `recommendation` ("planning push based on typical pattern, no strong signal — let me know if you want something else").
+        - `futurePins` are soft constraints: if any `targetMuscles` entry overlaps a pinned future day's `muscles` list (e.g., today targets chest, push pinned tomorrow contains chest), flag it in `recommendation` and reduce volume on the overlapping muscle. Do NOT silently re-target.
+        - Cross-reference `recentDays`: if recent volume on a target is high, lean toward variety (different exercise, different rep range).
 
         WEIGHT ANCHOR PROTOCOL (highest priority — fabricated weights are unsafe):
         For every exercise, suggestedWeight is one of:

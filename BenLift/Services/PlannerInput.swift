@@ -20,9 +20,18 @@ import SwiftData
 // translation layer in between. Swift contract == prompt contract.
 
 struct PlannerInput: Codable {
-    let targetMuscle: String                    // raw MuscleGroup value
+    /// Full muscle list for today. First entry is the "primary" — the
+    /// deterministic baseline planner weights it heaviest, the LLM uses
+    /// it as the day's lead. Multi reflects real PPL programming where
+    /// "push" = chest+shoulders+triceps; the single-muscle case is just
+    /// `[muscle]`.
+    let targetMuscles: [String]
     let targetMuscleSource: String              // "pinned" | "predicted" | "fallback"
     let predictionConfidence: Double?           // 0–1, nil unless source = "predicted"
+
+    /// First-element accessor for callers that still treat the target as
+    /// a single muscle (legacy paths during the multi-muscle migration).
+    var targetMuscle: String { targetMuscles.first ?? "" }
 
     let futurePins: [FuturePin]
     let recentDays: [RecentDay]
@@ -117,17 +126,18 @@ extension PlannerInput {
         let exercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
         let exerciseLookup = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name, $0.muscleGroup) })
 
-        // Calendar decides today's muscle. If the calendar can't decide and
-        // the LLM hasn't run yet either, we have no input — caller falls
-        // back to the existing recommend+plan flow.
-        let (muscle, source, confidence) = PatternEngine.targetMuscleForToday(
+        // Calendar decides today's muscles (multi for push/pull/legs days;
+        // single for cold-start fallback or single-muscle pin). Empty
+        // means "no signal" — caller falls back to the existing recommend
+        // +plan flow.
+        let (muscles, source, confidence) = PatternEngine.targetMusclesForToday(
             sessions: sessions,
             pins: pins,
             seedPatterns: seedPatterns,
             exerciseMuscleLookup: exerciseLookup,
             now: now
         )
-        guard let targetMuscle = muscle else { return nil }
+        guard !muscles.isEmpty else { return nil }
 
         // Active program for goal/experience/daysPerWeek.
         let program = (try? modelContext.fetch(
@@ -215,7 +225,7 @@ extension PlannerInput {
         )
 
         return PlannerInput(
-            targetMuscle: targetMuscle.rawValue,
+            targetMuscles: muscles.map(\.rawValue),
             targetMuscleSource: source.rawValue,
             predictionConfidence: confidence,
             futurePins: futurePins,

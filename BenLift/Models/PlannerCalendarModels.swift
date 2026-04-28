@@ -127,8 +127,14 @@ final class SeedPattern {
     var id: UUID
     /// 1=Sun, 2=Mon, ... 7=Sat (Calendar.component(.weekday, from:))
     var weekday: Int
-    /// nil = rest day in the seed pattern.
+    /// Single-muscle field, retained for SwiftData migration and back-compat
+    /// reads. New writes go through `muscleGroups`. Same migration pattern
+    /// as MuscleGroupPin.muscleGroupRaw.
     var muscleGroupRaw: String?
+    /// JSON-encoded muscle list. Lets the bootstrap LLM seed multi-muscle
+    /// days like "Monday = Push" without losing the shoulders/triceps.
+    /// Empty / nil = rest day (or falls back to muscleGroupRaw).
+    var muscleGroupsRaw: String?
     /// "bootstrap" = produced by the onboarding LLM call. "user_edit" = the
     /// user manually changed their default for this weekday in settings.
     var sourceRaw: String
@@ -137,25 +143,73 @@ final class SeedPattern {
     init(
         id: UUID = UUID(),
         weekday: Int,
-        muscleGroup: MuscleGroup? = nil,
+        muscleGroups: [MuscleGroup] = [],
         source: SeedSource = .bootstrap,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.weekday = weekday
-        self.muscleGroupRaw = muscleGroup?.rawValue
+        self.muscleGroupRaw = muscleGroups.first?.rawValue
+        self.muscleGroupsRaw = SeedPattern.encode(muscleGroups)
         self.sourceRaw = source.rawValue
         self.createdAt = createdAt
     }
 
+    convenience init(
+        id: UUID = UUID(),
+        weekday: Int,
+        muscleGroup: MuscleGroup?,
+        source: SeedSource = .bootstrap,
+        createdAt: Date = Date()
+    ) {
+        self.init(
+            id: id,
+            weekday: weekday,
+            muscleGroups: muscleGroup.map { [$0] } ?? [],
+            source: source,
+            createdAt: createdAt
+        )
+    }
+
+    /// Authoritative list of muscles. Falls back to legacy single-muscle
+    /// field for rows from before the multi refactor.
+    var muscleGroups: [MuscleGroup] {
+        get {
+            if let decoded = SeedPattern.decode(muscleGroupsRaw), !decoded.isEmpty {
+                return decoded
+            }
+            if let single = muscleGroupRaw.flatMap({ MuscleGroup(rawValue: $0) }) {
+                return [single]
+            }
+            return []
+        }
+        set {
+            muscleGroupsRaw = SeedPattern.encode(newValue)
+            muscleGroupRaw = newValue.first?.rawValue
+        }
+    }
+
+    /// First muscle, used by callers that haven't migrated to the full list.
     var muscleGroup: MuscleGroup? {
-        get { muscleGroupRaw.flatMap { MuscleGroup(rawValue: $0) } }
-        set { muscleGroupRaw = newValue?.rawValue }
+        get { muscleGroups.first }
+        set { muscleGroups = newValue.map { [$0] } ?? [] }
     }
 
     var source: SeedSource {
         get { SeedSource(rawValue: sourceRaw) ?? .bootstrap }
         set { sourceRaw = newValue.rawValue }
+    }
+
+    private static func encode(_ muscles: [MuscleGroup]) -> String? {
+        guard !muscles.isEmpty else { return nil }
+        let raw = muscles.map(\.rawValue)
+        return (try? JSONEncoder().encode(raw)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private static func decode(_ raw: String?) -> [MuscleGroup]? {
+        guard let raw, let data = raw.data(using: .utf8) else { return nil }
+        guard let arr = try? JSONDecoder().decode([String].self, from: data) else { return nil }
+        return arr.compactMap(MuscleGroup.init(rawValue:))
     }
 }
 
