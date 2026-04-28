@@ -211,7 +211,29 @@ struct PatternEngine {
             return (m, .fallback, 0.5)
         }
 
-        // Nothing — caller (deterministic engine) handles this case.
+        // Cold-start fallback: pick the least-recently-trained muscle that
+        // isn't pinned for the next 2 days. This is what makes the planner
+        // run at all when the user has zero strength history (Ben's actual
+        // state right now) and the bootstrap seed hasn't been written yet.
+        // Without this we return nil → PlannerInput.build returns nil →
+        // CoachVM falls through to the legacy v1 path, which is unaware of
+        // futurePins. The user pinning chest tomorrow goes ignored.
+        //
+        // We don't want this on `predict` (future-day strip cells) because
+        // there it caused oscillation as days advanced. For today it fires
+        // once per app open; no oscillation.
+        let lastTrainedByMuscle = recent.reduce(into: [MuscleGroup: Date]()) { acc, s in
+            guard let m = primaryMuscle(of: s, lookup: exerciseMuscleLookup) else { return }
+            if (acc[m] ?? .distantPast) < s.date { acc[m] = s.date }
+        }
+        let candidates = MuscleGroup.allCases
+            .filter { !nearPinned.contains($0) }
+            .sorted { (lastTrainedByMuscle[$0] ?? .distantPast) < (lastTrainedByMuscle[$1] ?? .distantPast) }
+        if let pick = candidates.first {
+            return (pick, .fallback, 0.3)
+        }
+
+        // Truly nothing left (every muscle is in avoid — shouldn't happen).
         return (nil, .fallback, nil)
     }
 
