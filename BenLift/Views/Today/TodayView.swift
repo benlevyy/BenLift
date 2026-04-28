@@ -56,6 +56,15 @@ struct TodayView: View {
                         refreshPill
                     }
 
+                    // Future-pin overlap pill — surfaced when today's plan
+                    // hits a muscle the user pinned for tomorrow / day after.
+                    // Tap routes through iterate to redistribute volume.
+                    if !coachVM.futureConflicts.isEmpty
+                        && !coachVM.isGenerating
+                        && !coachVM.isAdjustingForConflict {
+                        futureConflictPill
+                    }
+
                     // Skeleton only on true cold start (no plan yet AND no
                     // recommendation). On refresh, the existing plan stays
                     // visible (dimmed) until the new recommendation event
@@ -740,6 +749,41 @@ struct TodayView: View {
                     .font(.subheadline.bold())
                 Spacer()
                 Text("Inputs changed")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.accentBlue)
+            .foregroundColor(.white)
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    // MARK: - Future-pin Overlap Pill
+
+    /// Visible when today's deterministic plan hits a muscle the user has
+    /// committed to in the next 1–2 days. Same visual cadence as the
+    /// refresh pill — single-tap action that routes through iterate so
+    /// the LLM redistributes volume intelligently. The pill self-retires
+    /// after the iterate edit lands (futureConflicts is cleared).
+    private var futureConflictPill: some View {
+        let conflict = coachVM.futureConflicts.first!
+        let when = conflict.daysOut == 1 ? "tomorrow" : "in \(conflict.daysOut) days"
+        return Button {
+            Haptics.impact(.light)
+            Task {
+                await coachVM.adjustForFutureConflict(modelContext: modelContext)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "calendar.badge.exclamationmark")
+                Text("Adjust for \(conflict.muscle.displayName.lowercased()) \(when)")
+                    .font(.subheadline.bold())
+                Spacer()
+                Text("Overlap")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.8))
             }

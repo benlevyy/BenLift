@@ -44,6 +44,26 @@ class CoachViewModel {
     /// so the model can spot patterns (e.g., 3 pressing swaps -> likely shoulder issue).
     var planAdjustments: [AdjustmentRecord] = []
 
+    // MARK: - Future-pin overlap state
+    //
+    // After a plan is generated, we scan its exercises against any pins on
+    // the next ±2 days. If today's plan hits a muscle the user has already
+    // committed to in the near future, we surface a pill so the user can
+    // (optionally) redistribute the volume — same UX shape as the refresh
+    // pill. Adjusting routes through `iterate(...)` so the LLM does the
+    // actual redistribution; the deterministic baseline doesn't try to
+    // be clever about volume math.
+
+    var futureConflicts: [FutureConflict] = []
+    var isAdjustingForConflict: Bool = false
+
+    struct FutureConflict: Identifiable {
+        let id = UUID()
+        let muscle: MuscleGroup
+        let date: Date
+        let daysOut: Int  // 1 = tomorrow, 2 = day after
+    }
+
     /// Snapshot of the user inputs (feeling, time, concerns, muscle
     /// overrides) at the moment the currently-shown plan was generated.
     /// Drives `isPlanStale` — when any of these drift from this snapshot,
@@ -516,6 +536,15 @@ class CoachViewModel {
             targetMuscleGroups = MuscleGroup(rawValue: input.targetMuscle).map { [$0] } ?? []
             currentSessionName = rec.recommendedSessionName
             markGenerated(modelContext: modelContext)
+
+            // Detect future-pin overlap. If today's plan exercises hit a
+            // muscle the user pinned for tomorrow / day after, surface it
+            // via a pill so they can opt in to redistributing volume.
+            futureConflicts = Self.detectFutureConflicts(
+                plan: plan,
+                input: input,
+                modelContext: modelContext
+            )
         } catch {
             if Self.isCancellation(error) {
                 print("[BenLift/Coach] planForToday cancelled (superseded)")
@@ -557,6 +586,61 @@ class CoachViewModel {
         if lowSleep && lowHRV { return "low_hrv_sleep" }
         if input.rituals.isEmpty && input.strength.count < 3 { return "cold_start" }
         return "routine"
+    }
+
+    /// Scan today's plan against PlannerInput.futurePins (next 2 days). A
+    /// conflict fires when an exercise in the plan maps to a muscle that's
+    /// also pinned for tomorrow or the day after. Skipped when today's
+    /// source is "pinned" — if the user explicitly pinned both today and
+    /// tomorrow with overlapping muscles, that's intent, not a mistake.
+    @MainActor
+    private static func detectFutureConflicts(
+        plan: DailyPlanResponse,
+        input: PlannerInput,
+        modelContext: ModelContext
+    ) -> [FutureConflict] {
+        guard input.targetMuscleSource != "pinned" else { return [] }
+
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let isoDay = ISO8601DateFormatter()
+        isoDay.formatOptions = [.withFullDate]
+
+        // Build the lookup once — exercise name → primary muscle.
+        let exercises = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+        let lookup = Dictionary(uniqueKeysWithValues: exercises.map { ($0.name, $0.muscleGroup) })
+
+        // Set of muscles today's plan hits (primary mover only — incidental
+        // synergists are ignored to keep the signal tight).
+        let planMuscles: Set<MuscleGroup> = Set(plan.exercises.compactMap { lookup[$0.name] })
+
+        var conflicts: [FutureConflict] = []
+        for pin in input.futurePins {
+            guard let pinDate = isoDay.date(from: pin.date) else { continue }
+            let daysOut = cal.dateComponents([.day], from: today, to: cal.startOfDay(for: pinDate)).day ?? 99
+            guard daysOut >= 1, daysOut <= 2 else { continue }
+            guard let muscle = MuscleGroup(rawValue: pin.muscle) else { continue }
+            guard planMuscles.contains(muscle) else { continue }
+            conflicts.append(FutureConflict(muscle: muscle, date: pinDate, daysOut: daysOut))
+        }
+        return conflicts
+    }
+
+    /// User tapped the future-conflict pill. Routes through iterate so the
+    /// LLM does the actual volume redistribution — much smarter than any
+    /// fixed rule we'd write here. Templated request includes which muscle
+    /// is pinned and how soon, so the model knows the constraint.
+    @MainActor
+    func adjustForFutureConflict(modelContext: ModelContext) async {
+        guard let conflict = futureConflicts.first else { return }
+        isAdjustingForConflict = true
+        let when = conflict.daysOut == 1 ? "tomorrow" : "in \(conflict.daysOut) days"
+        let request = "I have \(conflict.muscle.displayName.lowercased()) pinned for \(when). Redistribute today's volume so I save stimulus for that day — keep the work that doesn't overlap, lighten or swap what does."
+        await iterate(request: request, modelContext: modelContext)
+        // Clear the conflict — iterate either resolved it or surfaced an
+        // error in iterateError. Either way the pill should retire.
+        futureConflicts = []
+        isAdjustingForConflict = false
     }
 
     /// Map v5 plan response → user-facing DailyPlanResponse. Drops the
