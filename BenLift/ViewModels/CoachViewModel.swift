@@ -642,7 +642,24 @@ class CoachViewModel {
         let lowHRV = (input.recovery.hrv ?? 100) < 40
         if lowSleep && lowHRV { return true }
         if input.rituals.isEmpty && input.strength.count < 3 { return true }
+        if sameMuscleAsYesterday(input) { return true }
         return false
+    }
+
+    /// True when yesterday's logged session's primary muscle appears in
+    /// today's `targetMuscles`. Recovery for hypertrophy is canonically
+    /// 48–72h same-muscle; back-to-back same-muscle days warrant the
+    /// LLM's volume / intensity adaptation that the deterministic path
+    /// skips.
+    private static func sameMuscleAsYesterday(_ input: PlannerInput) -> Bool {
+        guard let lastDay = input.recentDays.last else { return false }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withFullDate]
+        guard let yesterdayDate = f.date(from: lastDay.date) else { return false }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let delta = cal.dateComponents([.day], from: cal.startOfDay(for: yesterdayDate), to: today).day ?? 99
+        return delta == 1 && input.targetMuscles.contains(lastDay.muscle)
     }
 
     /// Human-readable trigger label for logs / analytics. "routine" when
@@ -654,6 +671,7 @@ class CoachViewModel {
         let lowHRV = (input.recovery.hrv ?? 100) < 40
         if lowSleep && lowHRV { return "low_hrv_sleep" }
         if input.rituals.isEmpty && input.strength.count < 3 { return "cold_start" }
+        if sameMuscleAsYesterday(input) { return "same_muscle_yesterday" }
         return "routine"
     }
 
