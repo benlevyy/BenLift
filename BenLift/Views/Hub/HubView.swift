@@ -44,7 +44,9 @@ struct HubView: View {
         async let context = HealthKitService.shared.fetchHealthContext()
         async let vo2 = HealthKitService.shared.fetchVO2Max()
 
-        activities = await raw.map {
+        // Parenthesised: `await raw.map { }` would try to call map on the
+        // unresolved async-let binding rather than on its result.
+        activities = (await raw).map {
             CrossTrainingActivity(type: $0.type, date: $0.date, duration: $0.duration, distanceMiles: nil)
         }
         healthContext = await context
