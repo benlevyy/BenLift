@@ -138,6 +138,9 @@ struct TodayChatView: View {
                 .padding(.top, 4)
             }
             .scrollDismissesKeyboard(.interactively)
+            .refreshable {
+                chatVM.reresolve(modelContext: modelContext)
+            }
             .onChange(of: messages.count) { _, _ in
                 withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }

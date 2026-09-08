@@ -68,6 +68,22 @@ final class ChatViewModel {
         }
     }
 
+    /// Throw today's plan away and rebuild it from history.
+    ///
+    /// `load` deliberately never overwrites a stored plan, which is right for
+    /// an ordinary open but leaves no way to pick up a changed rule or a
+    /// session logged since. This is that way. A plan chat has edited is left
+    /// alone — those edits are the user's, not the resolver's to discard.
+    func reresolve(modelContext: ModelContext) {
+        let today = Calendar.current.startOfDay(for: Date())
+        if let existing = PlanResolver.existingPlan(on: today, modelContext: modelContext) {
+            guard !existing.wasEdited else { return }
+            modelContext.delete(existing)
+            try? modelContext.save()
+        }
+        load(modelContext: modelContext)
+    }
+
     private static func thread(for day: Date, modelContext: ModelContext) -> ChatThread {
         let descriptor = FetchDescriptor<ChatThread>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         let threads = (try? modelContext.fetch(descriptor)) ?? []

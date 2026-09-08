@@ -65,6 +65,7 @@ struct BenLiftApp: App {
         if failure == nil {
             DefaultExercises.seedIfNeeded(in: context)
             Self.migrateGoalTextIfNeeded(in: context)
+            Self.retireImplicitExerciseRules(in: context)
         }
 
         // One-shot: re-save the API key with AfterFirstUnlock so a locked
@@ -119,6 +120,46 @@ struct BenLiftApp: App {
             }
         }
         UserDefaults.standard.set(true, forKey: "didMigrateGoalText")
+    }
+
+    /// The old app wrote an `exerciseOut` rule every time an exercise was
+    /// removed from a plan. Those rules were advisory — prompt text the model
+    /// could weigh against everything else — so removing bench once because
+    /// the rack was busy quietly became a standing preference nobody agreed to.
+    ///
+    /// `PlanResolver` enforces rules in Swift instead, which is the right
+    /// behaviour for a rule the user actually meant, and the wrong behaviour
+    /// for a pile of inferred ones: promoting them all to hard filters
+    /// retroactively can strip a replayed session down to almost nothing.
+    ///
+    /// So the accumulated ones are archived on first launch. They stay in the
+    /// database (`isActive = false`), and anything genuinely wanted comes back
+    /// by saying so in chat, which is now the only way a rule gets created.
+    private static func retireImplicitExerciseRules(in context: ModelContext) {
+        guard !UserDefaults.standard.bool(forKey: "didRetireImplicitRules") else { return }
+
+        let descriptor = FetchDescriptor<UserRule>()
+        if let rules = try? context.fetch(descriptor) {
+            let implicit = rules.filter {
+                $0.isActive && $0.kindRaw == UserRuleKind.exerciseOut.rawValue
+            }
+            for rule in implicit { rule.isActive = false }
+            if !implicit.isEmpty {
+                // Today's plan was already resolved against these rules and
+                // persisted, and `resolve` deliberately never overwrites a
+                // stored plan. Drop the unedited ones so the correction is
+                // visible on this launch rather than tomorrow's.
+                let planDescriptor = FetchDescriptor<DailyPlan>()
+                if let plans = try? context.fetch(planDescriptor) {
+                    for plan in plans where !plan.wasEdited {
+                        context.delete(plan)
+                    }
+                }
+                try? context.save()
+                print("[BenLift] Archived \(implicit.count) inferred exerciseOut rule(s): \(implicit.map(\.subject).joined(separator: ", "))")
+            }
+        }
+        UserDefaults.standard.set(true, forKey: "didRetireImplicitRules")
     }
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
