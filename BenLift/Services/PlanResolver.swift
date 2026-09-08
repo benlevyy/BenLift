@@ -131,16 +131,56 @@ enum PlanResolver {
         }
     }
 
-    /// A session's category, either stored directly or inferred from the
-    /// muscle groups it actually hit (sessions built by the old dynamic
-    /// planner carry no category).
-    static func category(of session: WorkoutSession) -> WorkoutCategory? {
-        if let c = session.category { return c }
-        let groups = Set(session.muscleGroups)
-        guard !groups.isEmpty else { return nil }
-        return WorkoutCategory.allCases.max { a, b in
-            groups.intersection(a.muscleGroups).count < groups.intersection(b.muscleGroups).count
+    /// A session's category: the stored one when it has it, otherwise
+    /// inferred from what was actually performed.
+    ///
+    /// Manual entry didn't set `category` for most of this app's life, so
+    /// inference carries the bulk of the history and has to be right — the
+    /// whole rotation is built on these labels.
+    static func category(of session: WorkoutSession, lookup: [String: Exercise] = [:]) -> WorkoutCategory? {
+        if let stored = session.category { return stored }
+        return inferCategory(of: session, lookup: lookup)
+    }
+
+    /// Same scoring as `inferCategory`, for callers holding muscle groups but
+    /// no session yet — manual entry, for one.
+    static func categoryForMuscleGroups(_ groups: [MuscleGroup]) -> WorkoutCategory? {
+        score(groups)
+    }
+
+    /// Score the session's muscle groups against each category and take the
+    /// winner.
+    ///
+    /// The exercises actually logged are the ground truth, not the stored
+    /// `muscleGroups` summary, which is written once and can be stale.
+    static func inferCategory(of session: WorkoutSession, lookup: [String: Exercise]) -> WorkoutCategory? {
+        var groups: [MuscleGroup] = session.entries
+            .filter { !$0.isSkipped }
+            .compactMap { lookup[$0.exerciseName.lowercased()]?.muscleGroup }
+
+        if groups.isEmpty { groups = session.muscleGroups }
+        return score(groups)
+    }
+
+    /// `core` is excluded because it belongs to all three categories —
+    /// counting it adds the same number to every score while making near-ties
+    /// look decisive, which is how mixed days ended up labelled arbitrarily
+    /// (and identically, run after run).
+    ///
+    /// Weighted by exercise count rather than distinct groups: four chest
+    /// movements and one stray row is a push day. A genuine tie returns nil —
+    /// a session that really did span categories should be skipped by the
+    /// rotation, not guessed at.
+    private static func score(_ groups: [MuscleGroup]) -> WorkoutCategory? {
+        let scored = groups.filter { $0 != .core }
+        guard !scored.isEmpty else { return nil }
+
+        let counts = WorkoutCategory.allCases.map { category in
+            (category, scored.filter { category.muscleGroups.contains($0) }.count)
         }
+        guard let best = counts.max(by: { $0.1 < $1.1 }), best.1 > 0 else { return nil }
+        guard counts.filter({ $0.1 == best.1 }).count == 1 else { return nil }
+        return best.0
     }
 
     static func pinnedCategory(on day: Date, modelContext: ModelContext) -> WorkoutCategory? {
