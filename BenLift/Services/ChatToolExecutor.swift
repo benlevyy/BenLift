@@ -169,7 +169,7 @@ final class ChatToolExecutor {
         new.plan = plan
         plan.lifts.append(new)
 
-        if let after = call.input["after"] as? String, let anchor = lift(named: after) {
+        if let after = call.input["after"] as? String, let anchor = lift(named: after, in: plan) {
             var ordered = plan.sortedLifts.filter { $0.id != new.id }
             let index = (ordered.firstIndex { $0.id == anchor.id }).map { $0 + 1 } ?? ordered.count
             ordered.insert(new, at: min(index, ordered.count))
