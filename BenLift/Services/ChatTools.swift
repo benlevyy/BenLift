@@ -151,6 +151,19 @@ enum ChatTools {
         )
     ]
 
+    /// Tools available when reviewing a past session. Editing a plan from
+    /// three weeks ago is meaningless, so the plan-mutating tools are gone —
+    /// but noticing "I always bail on this one, stop programming it" while
+    /// looking at an old workout is exactly when a rule is worth writing.
+    static let reviewToolNames: Set<String> = ["query_history", "create_rule"]
+
+    static var reviewDefinitions: [[String: Any]] {
+        definitions.filter { definition in
+            guard let name = definition["name"] as? String else { return false }
+            return reviewToolNames.contains(name)
+        }
+    }
+
     // MARK: - Schema builders
 
     private static func tool(

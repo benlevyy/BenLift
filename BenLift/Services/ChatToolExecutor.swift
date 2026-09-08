@@ -35,7 +35,9 @@ struct PendingRuleProposal: Identifiable, Equatable {
 @MainActor
 final class ChatToolExecutor {
     let modelContext: ModelContext
-    let plan: DailyPlan
+    /// Nil when reviewing a past session — there is no plan to edit, and the
+    /// plan-mutating tools aren't in `allowedTools` for that case anyway.
+    let plan: DailyPlan?
     /// Set while a workout is running. Edits then land on BOTH the stored
     /// plan and the live session, so "kill the overhead press" between sets
     /// actually changes what the runner (and the Watch) shows — not just
@@ -52,7 +54,7 @@ final class ChatToolExecutor {
 
     init(
         modelContext: ModelContext,
-        plan: DailyPlan,
+        plan: DailyPlan?,
         liveWorkout: PhoneWorkoutViewModel? = nil,
         allowedTools: Set<String>? = nil
     ) {
@@ -95,11 +97,12 @@ final class ChatToolExecutor {
     // MARK: - Plan edits
 
     private func replaceExercise(_ call: ChatToolCall) -> ChatToolResult {
+        guard let plan else { return error(call, "There's no plan to edit here.") }
         guard let currentName = call.input["current_name"] as? String,
               let newName = call.input["new_name"] as? String else {
             return error(call, "replace_exercise needs current_name and new_name.")
         }
-        guard let lift = lift(named: currentName) else {
+        guard let lift = lift(named: currentName, in: plan) else {
             return error(call, notFound(currentName))
         }
 
@@ -143,12 +146,13 @@ final class ChatToolExecutor {
     }
 
     private func addExercise(_ call: ChatToolCall) -> ChatToolResult {
+        guard let plan else { return error(call, "There's no plan to edit here.") }
         guard let name = call.input["name"] as? String,
               let sets = call.input["sets"] as? Int,
               let reps = call.input["target_reps"] as? String else {
             return error(call, "add_exercise needs name, sets and target_reps.")
         }
-        if lift(named: name) != nil {
+        if lift(named: name, in: plan) != nil {
             return error(call, "\(name) is already in today's plan. Use set_load to change it.")
         }
 
@@ -183,10 +187,11 @@ final class ChatToolExecutor {
     }
 
     private func removeExercise(_ call: ChatToolCall) -> ChatToolResult {
+        guard let plan else { return error(call, "There's no plan to edit here.") }
         guard let name = call.input["name"] as? String else {
             return error(call, "remove_exercise needs a name.")
         }
-        guard let lift = lift(named: name) else {
+        guard let lift = lift(named: name, in: plan) else {
             return error(call, notFound(name))
         }
         let removedName = lift.name
@@ -208,10 +213,11 @@ final class ChatToolExecutor {
     }
 
     private func setLoad(_ call: ChatToolCall) -> ChatToolResult {
+        guard let plan else { return error(call, "There's no plan to edit here.") }
         guard let name = call.input["name"] as? String else {
             return error(call, "set_load needs a name.")
         }
-        guard let lift = lift(named: name) else {
+        guard let lift = lift(named: name, in: plan) else {
             return error(call, notFound(name))
         }
 
@@ -247,11 +253,12 @@ final class ChatToolExecutor {
     }
 
     private func reorder(_ call: ChatToolCall) -> ChatToolResult {
+        guard let plan else { return error(call, "There's no plan to edit here.") }
         guard let name = call.input["name"] as? String,
               let position = call.input["position"] as? Int else {
             return error(call, "reorder needs a name and a position.")
         }
-        guard let lift = lift(named: name) else {
+        guard let lift = lift(named: name, in: plan) else {
             return error(call, notFound(name))
         }
 
@@ -404,7 +411,7 @@ final class ChatToolExecutor {
 
     // MARK: - Helpers
 
-    private func lift(named name: String) -> PlannedLift? {
+    private func lift(named name: String, in plan: DailyPlan) -> PlannedLift? {
         let target = name.lowercased()
         if let exact = plan.lifts.first(where: { $0.name.lowercased() == target }) {
             return exact
@@ -420,7 +427,7 @@ final class ChatToolExecutor {
     }
 
     private func markEdited() {
-        plan.wasEdited = true
+        plan?.wasEdited = true
     }
 
     private func exerciseLookup() -> [String: Exercise] {
@@ -463,7 +470,7 @@ final class ChatToolExecutor {
     }
 
     private func notFound(_ name: String) -> String {
-        let names = plan.sortedLifts.map(\.name).joined(separator: ", ")
+        let names = (plan?.sortedLifts ?? []).map(\.name).joined(separator: ", ")
         return "No lift called \"\(name)\" in today's plan. Current lifts: \(names)."
     }
 

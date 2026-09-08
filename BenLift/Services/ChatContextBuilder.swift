@@ -30,6 +30,102 @@ enum ChatContextBuilder {
         ]
     }
 
+    // MARK: - Session review
+
+    /// Context for talking about a workout that already happened.
+    ///
+    /// Deliberately a different system prompt, not today's with a session
+    /// bolted on: the job is explaining and noticing, not planning, and a
+    /// prompt that talks about editing a plan will try to edit one.
+    static func reviewBlocks(
+        session: WorkoutSession,
+        modelContext: ModelContext
+    ) -> [SystemBlock] {
+        [
+            .cached(reviewInstructions),
+            .dynamic(reviewState(session: session, modelContext: modelContext))
+        ]
+    }
+
+    private static let reviewInstructions = """
+    You are the coach inside BenLift, a training app with one user. He is \
+    looking at a workout he already did and wants to talk about it.
+
+    This session is finished. You cannot change it and shouldn't offer to — \
+    no plan edits, no swaps, no loads. What you can do is explain what \
+    happened, compare it to what came before, and notice things worth noticing.
+
+    Call query_history before any claim about weights, progress or volume. \
+    The session in front of you is one data point; whether it was good depends \
+    on what came before it, so go and look rather than guessing.
+
+    Lead with the answer. If he asks how it went, say how it went in a \
+    sentence, then the evidence. No preamble, no encouragement he didn't ask \
+    for, no summarising the session back at him — he can see it.
+
+    Say when nothing stands out. A workout that was simply fine is the most \
+    common kind, and inventing significance in it is worse than saying so.
+
+    If something recurs — a lift he keeps bailing on, a load that hasn't moved \
+    in a month — say it plainly once. If he wants it to shape future plans, \
+    create_rule proposes one and he gets an approve/dismiss card; it does not \
+    save anything, so never say a rule is saved.
+
+    All weights are pounds.
+    """
+
+    private static func reviewState(
+        session: WorkoutSession,
+        modelContext: ModelContext
+    ) -> String {
+        var sections: [String] = []
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE d MMMM yyyy"
+        var header = "THE SESSION HE'S LOOKING AT\n\(formatter.string(from: session.date)) — \(session.displayName)"
+        if let duration = session.duration, duration > 0 {
+            header += " · \(TimeInterval(duration).formattedDurationShort)"
+        }
+        if let feeling = session.feeling {
+            header += " · felt \(feeling)/5"
+        }
+        sections.append(header)
+
+        var lines: [String] = []
+        for entry in session.sortedEntries {
+            if entry.isSkipped {
+                lines.append("- \(entry.exerciseName): SKIPPED")
+                continue
+            }
+            let sets = entry.workingSets
+            guard !sets.isEmpty else {
+                lines.append("- \(entry.exerciseName): nothing logged")
+                continue
+            }
+            let detail = sets.map { "\(formatWeight($0.weight))x\($0.reps.formattedReps)" }
+                .joined(separator: ", ")
+            var line = "- \(entry.exerciseName): \(detail)"
+            if let target = entry.targetReps { line += " (target \(target))" }
+            lines.append(line)
+        }
+        sections.append("WHAT HE LOGGED\n\(lines.isEmpty ? "(nothing)" : lines.joined(separator: "\n"))")
+
+        if let concerns = session.concerns, !concerns.isEmpty {
+            sections.append("WHAT HE SAID AT THE TIME\n\(concerns)")
+        }
+        if let goal = goalText(modelContext: modelContext), !goal.isEmpty {
+            sections.append("HIS GOAL (his own words)\n\(goal)")
+        }
+        if let rules = ruleLines(modelContext: modelContext) {
+            sections.append("STANDING RULES\n\(rules)")
+        }
+        if let history = recentLiftingLines(modelContext: modelContext) {
+            sections.append("RECENT LIFTING (for comparison)\n\(history)")
+        }
+
+        return sections.joined(separator: "\n\n")
+    }
+
     // MARK: - Stable block
 
     private static let instructions = """

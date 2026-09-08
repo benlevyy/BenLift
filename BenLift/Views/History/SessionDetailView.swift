@@ -8,12 +8,18 @@ struct SessionDetailView: View {
     @State private var isEditing = false
     @State private var showAddExercise = false
     @State private var editSnapshot = ""  // fingerprint of data when edit started
+    @State private var showChat = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Header
                 headerSection
+
+                // Sessions carry no AI summary any more — the post-workout
+                // analysis call is gone. This is the replacement: nothing is
+                // spent until there's actually a question.
+                askButton
 
                 // Exercises
                 if isEditing {
@@ -28,6 +34,9 @@ struct SessionDetailView: View {
                 }
             }
             .padding()
+        }
+        .sheet(isPresented: $showChat) {
+            SessionChatSheet(session: session)
         }
         .navigationTitle(session.displayName)
         .navigationBarTitleDisplayMode(.inline)
@@ -55,6 +64,31 @@ struct SessionDetailView: View {
                 session.entries.append(entry)
             }
         }
+    }
+
+    private var askButton: some View {
+        Button {
+            Haptics.selection()
+            showChat = true
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .font(.system(size: 15, weight: .medium))
+                Text("Ask about this session")
+                    .font(.system(size: 15, weight: .medium))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.tertiaryText)
+            }
+            .foregroundStyle(Color.accent)
+            .padding(.horizontal, 14)
+            .frame(height: 50)
+            .frame(maxWidth: .infinity)
+            .background(Color.cardSurface)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Header

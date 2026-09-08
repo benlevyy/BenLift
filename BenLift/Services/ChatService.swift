@@ -114,6 +114,7 @@ final class ChatService {
         history: [(role: String, text: String)],
         systemBlocks: [SystemBlock],
         intelligence: Intelligence,
+        tools: [[String: Any]] = ChatTools.definitions,
         toolHandler: @escaping ([ChatToolCall]) async -> [ChatToolResult]
     ) async throws -> ChatTurnResult {
 
@@ -137,6 +138,7 @@ final class ChatService {
                 messages: messages,
                 systemBlocks: systemBlocks,
                 intelligence: intelligence,
+                tools: tools,
                 apiKey: apiKey
             )
             usage.add(turnUsage)
@@ -194,6 +196,7 @@ final class ChatService {
         messages: [[String: Any]],
         systemBlocks: [SystemBlock],
         intelligence: Intelligence,
+        tools: [[String: Any]],
         apiKey: String
     ) async throws -> (blocks: [[String: Any]], stopReason: String?, usage: ChatTokenUsage) {
 
@@ -213,7 +216,7 @@ final class ChatService {
             "output_config": ["effort": intelligence.effort],
             "system": systemPayload,
             "messages": messages,
-            "tools": ChatTools.definitions
+            "tools": tools
         ]
 
         var request = URLRequest(url: baseURL)
