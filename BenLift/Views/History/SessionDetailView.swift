@@ -55,7 +55,6 @@ struct SessionDetailView: View {
                 session.entries.append(entry)
             }
         }
-        .onAppear { loadAnalysis() }
     }
 
     // MARK: - Header
