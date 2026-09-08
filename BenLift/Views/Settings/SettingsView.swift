@@ -19,11 +19,6 @@ struct SettingsView: View {
     @AppStorage("dailyReminderHour") private var dailyReminderHour: Int = 18
     @AppStorage("dailyReminderMinute") private var dailyReminderMinute: Int = 0
 
-    private let modelOptions = [
-        "claude-haiku-4-5",
-        "claude-3-haiku-20240307",
-    ]
-
     var body: some View {
         NavigationStack {
             Form {
@@ -62,18 +57,6 @@ struct SettingsView: View {
                             .foregroundColor(result ? .prGreen : .failedRed)
                     }
                 }
-            }
-
-            Picker("Daily Plan Model", selection: $viewModel.modelDailyPlan) {
-                ForEach(modelOptions, id: \.self) { Text($0) }
-            }
-
-            Picker("Analysis Model", selection: $viewModel.modelPostAnalysis) {
-                ForEach(modelOptions, id: \.self) { Text($0) }
-            }
-
-            Picker("Weekly Review Model", selection: $viewModel.modelWeeklyReview) {
-                ForEach(modelOptions, id: \.self) { Text($0) }
             }
         }
     }
@@ -339,6 +322,17 @@ struct SettingsView: View {
         try? modelContext.delete(model: SetLog.self)
         try? modelContext.delete(model: WorkoutSession.self)
         try? modelContext.delete(model: TrainingProgram.self)
+        // These five were left behind by the original implementation —
+        // "Clear All Data" looked complete but silently kept every
+        // AI-learned rule, observation, and calendar pin around.
+        try? modelContext.delete(model: UserRule.self)
+        try? modelContext.delete(model: UserObservation.self)
+        try? modelContext.delete(model: SessionEvent.self)
+        try? modelContext.delete(model: MuscleGroupPin.self)
+        try? modelContext.delete(model: SeedPattern.self)
+        try? modelContext.delete(model: ActivityLog.self)
+        try? modelContext.delete(model: UserIntelligence.self)
+        try? modelContext.delete(model: UserProfile.self)
         try? modelContext.save()
         print("[BenLift] Cleared ALL data")
     }

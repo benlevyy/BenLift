@@ -284,13 +284,6 @@ struct HistoryListView: View {
 
     // MARK: - Delete
 
-    private func deleteSessions(at offsets: IndexSet) {
-        for index in offsets {
-            deleteSession(sessions[index])
-        }
-        try? modelContext.save()
-    }
-
     private func deleteSession(_ session: WorkoutSession) {
         let sessionId = session.id
         let analysisDescriptor = FetchDescriptor<PostWorkoutAnalysis>(

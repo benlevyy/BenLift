@@ -225,11 +225,18 @@ private struct DayCellView: View {
         VStack(spacing: 6) {
             // Top row — "TODAY" pill on the current day, otherwise weekday
             // letters. Today gets the explicit label so it can't be missed
-            // even if the strip is scrolled off-center.
+            // even if the strip is scrolled off-center. `.animation(nil,
+            // ...)` on both labels below — without it, a change from
+            // prediction to confirmed target (or weekday-letter to
+            // "TODAY") gets swept into whatever transaction is active
+            // elsewhere on screen and SwiftUI crossfades old/new text in
+            // place, which briefly shows both strings overlapping. This
+            // content should snap, not animate.
             Text(topLabel)
                 .font(.system(size: 10, weight: .heavy))
                 .tracking(0.5)
                 .foregroundColor(weekdayColor)
+                .animation(nil, value: topLabel)
 
             // Muscle text — middle, the headline. Slightly larger now that
             // the cell has more breathing room.
@@ -240,6 +247,7 @@ private struct DayCellView: View {
                 .minimumScaleFactor(0.75)
                 .padding(.horizontal, 4)
                 .frame(maxWidth: .infinity)
+                .animation(nil, value: muscleText)
 
             // Date number — quiet bottom row
             Text(dayNumber)

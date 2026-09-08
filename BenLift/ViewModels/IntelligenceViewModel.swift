@@ -139,7 +139,7 @@ class IntelligenceViewModel {
             behaviorPatterns: behaviorText
         )
 
-        let model = "claude-sonnet-4-5"
+        let model = ClaudeModel.current
         print("[BenLift/Intel] Refreshing intelligence with model=\(model)")
 
         do {

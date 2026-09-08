@@ -70,8 +70,7 @@ struct ProgressionView: View {
     private var volumeChart: some View {
         let sessions = historyVM.fetchSessions(from: modelContext)
         let data = sessions.prefix(20).compactMap { session -> (date: Date, volume: Double)? in
-            guard session.entries.first(where: { $0.exerciseName == selectedExercise }) != nil else { return nil }
-            let entry = session.entries.first(where: { $0.exerciseName == selectedExercise })!
+            guard let entry = session.entries.first(where: { $0.exerciseName == selectedExercise }) else { return nil }
             return (date: session.date, volume: entry.totalVolume)
         }
 

@@ -63,16 +63,66 @@ struct TodayView: View {
                         aiTargetMuscleForToday: coachVM.targetMuscleGroups.first
                     )
 
-                    // Inline check-in — feeling + time + recovery + concerns.
-                    // Changes stage locally; the plan regenerates only when
-                    // the user taps the Refresh pill (or pull-to-refresh).
-                    checkInRow
+                    // The plan (or its loading state) is the main event —
+                    // it's what the user opened the app to see, and every
+                    // Opus call now takes real time (30–90s of adaptive
+                    // thinking), so it needs to be front and center. The
+                    // ThinkingView card takes over for the full duration of
+                    // ANY generation — cold start or a refresh — instead of
+                    // just dimming the old plan and leaving the user to
+                    // guess whether it's still working.
+                    let isLoading = coachVM.isLoadingRecommendation || coachVM.isGenerating
+                    let showSkeleton = isLoading
 
-                    // Refresh pill — shown when the plan's inputs have drifted
-                    // from what produced the currently-displayed plan.
-                    if coachVM.isPlanStale && !coachVM.isGenerating && !coachVM.isLoadingRecommendation {
-                        refreshPill
+                    // This swap is wrapped in `.transaction { disablesAnimations
+                    // = true }` rather than just relying on the per-view
+                    // `.transition(.opacity)` calls below. ThinkingView's
+                    // fixed skeleton height vs. the real plan's often much
+                    // taller height is a large, sudden content reflow — if
+                    // that reflow gets swept into an animated transaction
+                    // (e.g. because a sibling `.animation(value:)` elsewhere
+                    // in this same render pass, like the exercise-row list
+                    // below, is active in the same update cycle), the nav
+                    // bar and tab bar's translucent materials visibly lag
+                    // behind it for a frame or two — the reported "ghost
+                    // text" bleeding through the top and bottom chrome.
+                    // Forcing this specific swap to snap instantly removes
+                    // the large animated reflow that triggers it.
+                    Group {
+                        if showSkeleton {
+                            // Phase preference, in order:
+                            // 1. v5 stream phase (reasoning / drafting) when an
+                            //    escalated call is in flight — gives real signal
+                            //    about which half of the wait we're in.
+                            // 2. Legacy isLoadingRecommendation fallback.
+                            let thinkingPhase: ThinkingView.Phase = {
+                                if let phase = coachVM.planForTodayPhase {
+                                    return phase == .reasoning ? .analyzing : .building
+                                }
+                                return coachVM.isLoadingRecommendation ? .analyzing : .building
+                            }()
+                            ThinkingView(phase: thinkingPhase)
+                        } else {
+                            if let rec = coachVM.recommendation {
+                                recommendationHeader(rec)
+                            }
+                            if !coachVM.editedExercises.isEmpty {
+                                planSection
+                            }
+                        }
                     }
+                    .transaction { $0.disablesAnimations = true }
+
+                    // Status pills — all describe the plan that's currently
+                    // on screen (or explain why there isn't one yet), so
+                    // they stay attached directly below it rather than up
+                    // by the inputs that would only affect a future plan.
+                    // (The old "Refresh plan" pill lived here too, but it
+                    // and the separate Customize sheet were two different
+                    // buttons for the same underlying action — "tell the
+                    // coach what's different, get an updated plan." Both
+                    // are folded into the single Update Plan button on the
+                    // check-in card below.)
 
                     // Future-pin overlap pill — surfaced when today's plan
                     // hits a muscle the user pinned for tomorrow / day after.
@@ -92,51 +142,11 @@ struct TodayView: View {
                         recoveryOverlapPill(overlap)
                     }
 
-                    // Skeleton only on true cold start (no plan yet AND no
-                    // recommendation). On refresh, the existing plan stays
-                    // visible (dimmed) until the new recommendation event
-                    // lands and atomically replaces it — no flash to empty,
-                    // refresh feels like an in-place update.
-                    let isLoading = coachVM.isLoadingRecommendation || coachVM.isGenerating
-                    let showSkeleton = coachVM.recommendation == nil
-                        && coachVM.editedExercises.isEmpty
-                        && isLoading
-
-                    if showSkeleton {
-                        // Phase preference, in order:
-                        // 1. v5 stream phase (reasoning / drafting) when an
-                        //    escalated call is in flight — gives real signal
-                        //    about which half of the ~15s wait we're in.
-                        // 2. Legacy isLoadingRecommendation fallback.
-                        let thinkingPhase: ThinkingView.Phase = {
-                            if let phase = coachVM.planForTodayPhase {
-                                return phase == .reasoning ? .analyzing : .building
-                            }
-                            return coachVM.isLoadingRecommendation ? .analyzing : .building
-                        }()
-                        ThinkingView(phase: thinkingPhase)
-                            .transition(.opacity)
-                    } else {
-                        if let rec = coachVM.recommendation {
-                            recommendationHeader(rec)
-                                .transition(.opacity)
-                        }
-                        if !coachVM.editedExercises.isEmpty {
-                            planSection
-                                .transition(.opacity)
-                            // Customize entry point — sits just below the
-                            // plan, complements the existing refresh pill.
-                            // Long-press on a row still owns per-exercise
-                            // swaps; this opens the more general iterate
-                            // flow ("prioritize pull-ups", "why squat
-                            // first?", "lighten bench, shoulder tight").
-                            customizeButton
-                                .transition(.opacity)
-                        }
-                    }
-
-                    // Error
-                    if let error = coachVM.planError {
+                    // Error — planError from Update Plan, or iterateError
+                    // from a future-conflict/recovery-overlap pill action
+                    // (those call iterate() directly, with no sheet left to
+                    // surface a failure otherwise).
+                    if let error = coachVM.planError ?? coachVM.iterateError {
                         Text(error)
                             .font(.caption)
                             .foregroundColor(.failedRed)
@@ -144,6 +154,12 @@ struct TodayView: View {
                             .background(Color.failedRed.opacity(0.1))
                             .cornerRadius(6)
                     }
+
+                    // Inline check-in — feeling + time + recovery + concerns
+                    // + the single Update Plan button. Secondary by design
+                    // (sits below the plan, not above it) — it's "tell the
+                    // coach what's different," not the plan itself.
+                    checkInRow
                 }
                 .padding()
             }
@@ -366,19 +382,13 @@ struct TodayView: View {
                     }
                 }
                 // Inline footer — always last, visually quieter than a
-                // populated row. Hidden during initial generation to
-                // avoid offering "Add" before the AI plan exists.
-                if !coachVM.isLoadingRecommendation {
-                    addExerciseFooterRow
-                        .transition(.opacity)
-                }
+                // populated row. This section only renders once a plan
+                // exists and isn't loading (ThinkingView owns that slot
+                // now), so the footer is always safe to show here.
+                addExerciseFooterRow
+                    .transition(.opacity)
             }
             .animation(.smooth(duration: 0.35), value: coachVM.editedExercises.map(\.name))
-            // Subtle dim while a new plan is regenerating — signals "this
-            // is becoming stale" without flashing to empty. Existing rows
-            // stay tappable; the user just sees they're being refreshed.
-            .opacity((coachVM.isGenerating || coachVM.isLoadingRecommendation) ? 0.55 : 1.0)
-            .animation(.smooth(duration: 0.3), value: coachVM.isGenerating)
 
             // Edit / Add / Regenerate moved into the recommendation
             // header's ⋯ menu (see `planMenu`). Plan section is now just
@@ -403,10 +413,6 @@ struct TodayView: View {
 
     @State private var showAddExercise = false
     @State private var showWatchAlert = false
-    /// Drives the Customize sheet (IterateSheet). Distinct from quickSwap —
-    /// iterate is plan-wide ("prioritize pull-ups", "lighten the bench") via
-    /// a single LLM round-trip that returns either an edit or an answer.
-    @State private var showIterateSheet = false
 
     // MARK: - Button Styles
 
@@ -459,6 +465,20 @@ struct TodayView: View {
                             .font(.caption)
                             .foregroundColor(.accentBlue)
                     }
+                }
+                // Per-exercise "why this pick" from daily_plan_v5 — shown
+                // inline on its own row instead of grouped under a muscle
+                // header. Real exercises rarely map cleanly to one muscle
+                // (a chest press is also triceps/shoulders), so bucketing
+                // rows under a single-muscle section header was more
+                // misleading than useful. Nil for BaselinePlanner-produced
+                // or older cached plans.
+                if let note = exercise.evidenceNote, !note.isEmpty {
+                    Text(note)
+                        .font(.caption2)
+                        .foregroundColor(.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
@@ -637,10 +657,44 @@ struct TodayView: View {
             timeChips
             if healthContext != nil { recoveryPills }
             concernsField
+            updatePlanButton
         }
         .padding(12)
         .background(Color.cardSurface)
         .cornerRadius(12)
+    }
+
+    /// Single action for "the plan should reflect what I just told you" —
+    /// replaces the old split between the Refresh pill (chips/concerns)
+    /// and the separate Customize sheet (freeform text). One card, one
+    /// box, one button. Always tappable — styled to stand out when inputs
+    /// have actually drifted from what produced the current plan, quieter
+    /// otherwise, but never blocks a manual "just try again."
+    private var updatePlanButton: some View {
+        Button {
+            Haptics.impact(.light)
+            commitConcerns()
+            concernsFocused = false
+            Task {
+                await coachVM.refreshPlan(
+                    modelContext: modelContext,
+                    program: programVM.currentProgram
+                )
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                Text("Update Plan")
+                    .font(.subheadline.bold())
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(coachVM.isPlanStale ? Color.accentBlue : Color.gray.opacity(0.15))
+            .foregroundColor(coachVM.isPlanStale ? .white : .secondaryText)
+            .cornerRadius(10)
+        }
+        .buttonStyle(.plain)
+        .disabled(coachVM.isGenerating || coachVM.isLoadingRecommendation)
     }
 
     /// Chip widths are size-limited so the row has breathing room and is
@@ -739,7 +793,7 @@ struct TodayView: View {
     }
 
     private var concernsField: some View {
-        TextField("Anything to adjust? (e.g. shoulder sore)",
+        TextField("Anything to tell the coach? (shoulder sore, swap the bench, only have 30 min...)",
                   text: $concernsDraft, axis: .vertical)
             .lineLimit(1...3)
             .font(.footnote)
@@ -766,46 +820,12 @@ struct TodayView: View {
     }
 
     /// Push the local concerns draft into coachVM. No auto-regen — the
-    /// Refresh pill surfaces when inputs have drifted so the user chooses
-    /// when to spend the API round-trip.
+    /// user commits via Update Plan (or the keyboard Done button) so they
+    /// choose when to spend the API round-trip.
     private func commitConcerns() {
         let trimmed = concernsDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != coachVM.concerns else { return }
         coachVM.concerns = trimmed
-    }
-
-    // MARK: - Refresh Pill
-
-    /// Visible only when `coachVM.isPlanStale`. Calls the cheap `refreshPlan`
-    /// path (which uses `generatePlan` if a recommendation already exists —
-    /// roughly half the API cost of the combined `getRecommendationAndPlan`).
-    /// Pull-to-refresh still triggers the full regeneration.
-    private var refreshPill: some View {
-        Button {
-            Task {
-                await coachVM.refreshPlan(
-                    modelContext: modelContext,
-                    program: programVM.currentProgram
-                )
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                Text("Refresh plan")
-                    .font(.subheadline.bold())
-                Spacer()
-                Text("Inputs changed")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.accentBlue)
-            .foregroundColor(.white)
-            .cornerRadius(10)
-        }
-        .buttonStyle(.plain)
-        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     // MARK: - Future-pin Overlap Pill
@@ -894,38 +914,6 @@ struct TodayView: View {
         .background(Color.accentBlue)
         .cornerRadius(10)
         .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
-    // MARK: - Customize Plan Entry
-
-    /// Text-link style entry point to the iterate sheet. Sits below the
-    /// plan list, deliberately quieter than the prominent blue refresh
-    /// pill — refresh is the heavy "regenerate everything" action;
-    /// customize is the lightweight "tweak this with words" action.
-    private var customizeButton: some View {
-        Button {
-            Haptics.selection()
-            showIterateSheet = true
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.caption)
-                Text("Customize plan")
-                    .font(.subheadline.bold())
-            }
-            .foregroundColor(.accentBlue)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity)
-            .background(Color.accentBlue.opacity(0.08))
-            .cornerRadius(10)
-        }
-        .buttonStyle(.plain)
-        .sheet(isPresented: $showIterateSheet) {
-            IterateSheet(coachVM: coachVM)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
     }
 
     private func feelingLabel(_ level: Int) -> String {

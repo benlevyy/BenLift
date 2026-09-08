@@ -4,7 +4,10 @@ import SwiftData
 @Observable
 class CoachViewModel {
     var feeling: Int = 3
-    var availableTime: Int? = nil
+    /// Defaults to 60 (visibly pre-selected in the Time chips) so a plan
+    /// generates immediately on launch without waiting on a check-in —
+    /// the user adjusts it afterward if 60/"OK" wasn't right for today.
+    var availableTime: Int? = 60
     var concerns: String = ""
 
     var currentPlan: DailyPlanResponse?
@@ -12,15 +15,17 @@ class CoachViewModel {
     var isGenerating: Bool = false
     var planError: String?
 
-    // MARK: - Iterate (Customize plan) state
+    // MARK: - Iterate state
     //
-    // Backs the IterateSheet's request lifecycle. The sheet is the only
-    // reader; we keep it on the VM so the sheet can dismiss/recreate
-    // without losing in-flight state. Reset on sheet dismiss.
+    // The manual "Customize" sheet that used to read this is gone (folded
+    // into the single Update Plan action on Today). `iterate(...)` is now
+    // only called automatically, by the future-conflict / recovery-overlap
+    // pill actions — `iterateLastResult` isn't read by any UI, but
+    // `iterateError` rides the shared error banner on Today so a failed
+    // pill action isn't silently swallowed.
 
-    /// Result of the last successful iterate call. Set in `iterate(...)`,
-    /// consumed by the sheet to render either an edit confirmation or an
-    /// answer card. Nil between requests.
+    /// Result of the last successful iterate call. Set in `iterate(...)`.
+    /// Nil between requests.
     var iterateLastResult: IterateResultDisplay?
 
     /// User-facing error string from the last iterate call. Surfaced inline
@@ -227,19 +232,17 @@ class CoachViewModel {
         loadCachedGeneration()
     }
 
-    /// Cheap regenerate path for iteration. When the recommendation is
-    /// already in hand (muscle-group focus + session name), just re-plan via
-    /// `generatePlan` — skips the recommendation half of the combined call,
-    /// so it's noticeably faster than the full `getRecommendationAndPlan`.
-    /// Pull-to-refresh (which clears recommendation first) still takes the
-    /// full path when the user wants a totally fresh session.
+    /// Refresh entry point for the Refresh pill. Used to branch into a
+    /// "cheap" non-thinking regenerate (`generatePlan`, now removed) once a
+    /// recommendation was already in hand. That shortcut predated
+    /// always-escalating to daily_plan_v5 and bypassed the whole V2
+    /// pipeline — no PlannerInput, no thinking, no streaming — which is
+    /// exactly what timed out on a heavy prompt against a short
+    /// non-streaming timeout. Every refresh now goes through the same
+    /// real path as a cold start.
     @MainActor
     func refreshPlan(modelContext: ModelContext, program: TrainingProgram?) async {
-        if recommendation != nil && !targetMuscleGroups.isEmpty {
-            await generatePlan(modelContext: modelContext, program: program)
-        } else {
-            await getRecommendationAndPlan(modelContext: modelContext, program: program)
-        }
+        await getRecommendationAndPlan(modelContext: modelContext, program: program)
     }
 
     // MARK: - Step 1: Get AI Recommendation (Sonnet)
@@ -276,7 +279,7 @@ class CoachViewModel {
             intelligence: intelligence
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelRecommendFocus") ?? "claude-sonnet-4-5"
+        let model = ClaudeModel.current
 
         print("[BenLift/Coach] Getting AI recommendation, feeling=\(feeling), model=\(model)")
 
@@ -409,8 +412,7 @@ class CoachViewModel {
             intelligence: intelligence
         )
 
-        // Single Haiku call replaces the prior Sonnet→Haiku pipeline.
-        let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
+        let model = ClaudeModel.current
         print("[BenLift/Coach] recommendAndPlan: feeling=\(feeling), model=\(model)")
 
         // Don't wipe the visible plan up front — refresh feels slow when
@@ -535,14 +537,14 @@ class CoachViewModel {
         isGenerating = false
     }
 
-    // MARK: - V2: Escalation gate (deterministic baseline + LLM on edge cases)
+    // MARK: - V2: LLM-first planning (BaselinePlanner as offline fallback)
     //
-    // Option B in the planner architecture: most days, BaselinePlanner
-    // produces today's plan in pure Swift (instant, $0). On flagged days
-    // (active injury, low readiness, true cold start), we escalate to
-    // daily_plan_v5 — the LLM with extended thinking that scored 5/5 on
-    // the safety fixtures. The user feels the same flow either way; the
-    // bill is what changes.
+    // Single-user app, precision over cost/speed: every day's plan goes
+    // through daily_plan_v5 — the LLM with extended thinking that scored
+    // 5/5 on the safety fixtures. BaselinePlanner no longer sits on the
+    // happy path; it only runs when the Claude call itself fails (offline,
+    // API down, malformed stream), so there's still a plan on screen
+    // instead of a dead end.
     //
     // Returns true if it produced a plan, false if PlannerInput.build
     // came back nil (true cold start — no calendar signal, no AI rec yet).
@@ -579,75 +581,45 @@ class CoachViewModel {
             return false
         }
 
-        let escalate = Self.shouldEscalate(input: input)
         let reason = Self.escalationReason(input: input)
-        print("[BenLift/Coach] planForToday target=\(input.targetMuscle) source=\(input.targetMuscleSource) escalate=\(escalate) reason=\(reason)")
+        print("[BenLift/Coach] planForToday target=\(input.targetMuscle) source=\(input.targetMuscleSource) reason=\(reason)")
 
         do {
-            let plan: DailyPlanResponse
-            let rec: RecoveryRecommendation
-
-            if escalate {
-                let model = UserDefaults.standard.string(forKey: "modelDailyPlanV5") ?? "claude-haiku-4-5-20251001"
-                // Stream the v5 call so the UI can advance phase indicators
-                // (reasoning → drafting → ready) during the ~15s wait
-                // instead of showing a generic spinner the whole time. The
-                // `.complete` event carries the parsed response — we hold
-                // it in a local and use it after the stream ends.
-                var v5: DailyPlanV5Response?
-                let stream = coachService.streamDailyPlanV5(input: input, model: model)
-                for try await event in stream {
-                    switch event {
-                    case .thinking:  planForTodayPhase = .reasoning
-                    case .drafting:  planForTodayPhase = .drafting
-                    case .complete(let response): v5 = response
-                    }
+            let model = ClaudeModel.current
+            // Stream the v5 call so the UI can advance phase indicators
+            // (reasoning → drafting → ready) during the wait instead of
+            // showing a generic spinner the whole time. The `.complete`
+            // event carries the parsed response — we hold it in a local
+            // and use it after the stream ends.
+            var v5: DailyPlanV5Response?
+            let stream = coachService.streamDailyPlanV5(input: input, model: model)
+            for try await event in stream {
+                switch event {
+                case .thinking:  planForTodayPhase = .reasoning
+                case .drafting:  planForTodayPhase = .drafting
+                case .complete(let response): v5 = response
                 }
-                planForTodayPhase = nil
-                guard let v5 else {
-                    throw ClaudeError.malformedResponse("dailyPlanV5 stream ended without .complete")
-                }
-                plan = Self.convertV5ToPlan(v5)
-                rec = Self.synthesizeRecommendation(input: input, narrative: v5.recommendation, escalated: true, reason: reason)
-            } else {
-                let library = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
-                plan = BaselinePlanner.plan(input: input, library: library)
-                rec = Self.synthesizeRecommendation(input: input, narrative: nil, escalated: false, reason: reason)
             }
-
-            currentPlan = plan
-            editedExercises = plan.exercises
-            recommendation = rec
-            targetMuscleGroups = input.targetMuscles.compactMap { MuscleGroup(rawValue: $0) }
-            currentSessionName = rec.recommendedSessionName
-            markGenerated(modelContext: modelContext)
-
-            // Detect future-pin overlap. If today's plan exercises hit a
-            // muscle the user pinned for tomorrow / day after, surface it
-            // via a pill so they can opt in to redistributing volume.
-            futureConflicts = Self.detectFutureConflicts(
-                plan: plan,
-                input: input,
-                modelContext: modelContext
-            )
-
-            // Detect recovery-overlap pattern across the 5-day window.
-            // This is a different signal than future-pin overlap: it fires
-            // when ANY single muscle (today's target included) shows up 3+
-            // times in 5 days, regardless of whether today's plan hits it
-            // directly. Same UX shape (pill + iterate adjust) but different
-            // intent — coaching the user about consecutive-day load, not
-            // about today's specific exercise selection.
-            recoveryOverlap = Self.detectRecoveryOverlap(
-                input: input,
-                modelContext: modelContext
-            )
+            guard let v5 else {
+                throw ClaudeError.malformedResponse("dailyPlanV5 stream ended without .complete")
+            }
+            let plan = Self.convertV5ToPlan(v5)
+            let rec = Self.synthesizeRecommendation(input: input, narrative: v5.recommendation, escalated: true, reason: reason)
+            applyGeneratedPlan(plan, rec: rec, input: input, modelContext: modelContext)
         } catch {
             if Self.isCancellation(error) {
                 print("[BenLift/Coach] planForToday cancelled (superseded)")
             } else {
-                print("[BenLift/Coach] ❌ planForToday failed: \(error)")
-                planError = "Plan failed: \(error.localizedDescription)"
+                // Claude is the default path now — this only runs when the
+                // call itself fails (offline, API down, malformed stream).
+                // Fall back to the deterministic planner so there's still a
+                // plan on screen instead of a dead end.
+                print("[BenLift/Coach] ❌ planForToday failed, falling back to offline planner: \(error)")
+                let library = (try? modelContext.fetch(FetchDescriptor<Exercise>())) ?? []
+                let plan = BaselinePlanner.plan(input: input, library: library)
+                let rec = Self.synthesizeRecommendation(input: input, narrative: nil, escalated: false, reason: reason)
+                applyGeneratedPlan(plan, rec: rec, input: input, modelContext: modelContext)
+                planError = "Couldn't reach Claude, used the offline planner instead — \(error.localizedDescription)"
             }
         }
 
@@ -657,22 +629,56 @@ class CoachViewModel {
         return true
     }
 
-    /// Decides whether the LLM (daily_plan_v5) should fire. The truth table:
-    /// - Active injury → always (safety-critical, requires adjudication)
-    /// - feeling ≤ 2 → low readiness, hard rule #1 territory
-    /// - low HRV (<40) AND short sleep (<6h) → combined low-readiness signal
-    /// - Cold start (no rituals + thin strength data) → AI seeds better than
-    ///   a baseline that has nothing to pick from
-    /// Otherwise → deterministic baseline.
-    static func shouldEscalate(input: PlannerInput) -> Bool {
-        if let inj = input.constraints.injuries, !inj.isEmpty { return true }
-        if input.recovery.feeling <= 2 { return true }
-        let lowSleep = (input.recovery.sleepHours ?? 8.0) < 6.0
-        let lowHRV = (input.recovery.hrv ?? 100) < 40
-        if lowSleep && lowHRV { return true }
-        if input.rituals.isEmpty && input.strength.count < 3 { return true }
-        if sameMuscleAsYesterday(input) { return true }
-        return false
+    /// Commits a generated plan (from either the LLM or the offline
+    /// fallback) to view-model state. Shared by both branches of
+    /// `planForToday` so the snapshot/overrides/conflict-detection
+    /// bookkeeping only lives in one place.
+    @MainActor
+    private func applyGeneratedPlan(
+        _ plan: DailyPlanResponse,
+        rec: RecoveryRecommendation,
+        input: PlannerInput,
+        modelContext: ModelContext
+    ) {
+        currentPlan = plan
+        editedExercises = plan.exercises
+        recommendation = rec
+        targetMuscleGroups = input.targetMuscles.compactMap { MuscleGroup(rawValue: $0) }
+        currentSessionName = rec.recommendedSessionName
+
+        // Concerns were one-shot intent — once absorbed into this plan
+        // they're stale. Clear before snapshotting so `isPlanStale`
+        // measures against the post-consumption state (same dance as
+        // getRecommendationAndPlan / generatePlan).
+        concerns = ""
+        planInputSnapshot = currentInputSnapshot()
+        // Overrides have now been absorbed into the plan — clear them
+        // so tomorrow's plan isn't silently double-applying today's
+        // "chest sore" report.
+        clearAllMuscleOverrides()
+
+        markGenerated(modelContext: modelContext)
+
+        // Detect future-pin overlap. If today's plan exercises hit a
+        // muscle the user pinned for tomorrow / day after, surface it
+        // via a pill so they can opt in to redistributing volume.
+        futureConflicts = Self.detectFutureConflicts(
+            plan: plan,
+            input: input,
+            modelContext: modelContext
+        )
+
+        // Detect recovery-overlap pattern across the 5-day window.
+        // This is a different signal than future-pin overlap: it fires
+        // when ANY single muscle (today's target included) shows up 3+
+        // times in 5 days, regardless of whether today's plan hits it
+        // directly. Same UX shape (pill + iterate adjust) but different
+        // intent — coaching the user about consecutive-day load, not
+        // about today's specific exercise selection.
+        recoveryOverlap = Self.detectRecoveryOverlap(
+            input: input,
+            modelContext: modelContext
+        )
     }
 
     /// True when yesterday's logged session's primary muscle appears in
@@ -901,88 +907,6 @@ class CoachViewModel {
         if muscles.count == 2 { return "\(muscles[0].displayName) + \(muscles[1].displayName)" }
         if muscles.count >= 3 { return "\(primary.displayName) +\(muscles.count - 1)" }
         return primary.displayName
-    }
-
-    // MARK: - Step 2: Generate Plan (Haiku)
-
-    @MainActor
-    func generatePlan(modelContext: ModelContext, program: TrainingProgram?) async {
-        isGenerating = true
-        planError = nil
-
-        // Load last weights + refresh recent-exercise ranking so the watch
-        // plan gets the up-to-date "Recent" list on iteration refreshes too.
-        loadAllLastWeights(modelContext: modelContext)
-        refreshRecentExerciseNames(modelContext: modelContext)
-
-        let healthContext = await HealthKitService.shared.fetchHealthContext()
-        let healthAverages = await HealthKitService.shared.fetchHealthAverages(days: 7)
-        let activities = await HealthKitService.shared.fetchRecentActivities(days: 7)
-
-        // Same prompt-folding of muscle overrides as the combined path —
-        // see `combinedConcerns()` for why we prefix them.
-        let concernsForPrompt = combinedConcerns()
-
-        // Build a UserState so iteration refreshes hit the same
-        // structured prompt as the full recommend-and-plan path.
-        let intelDescriptor = FetchDescriptor<UserIntelligence>()
-        let intelligence = try? modelContext.fetch(intelDescriptor).first
-        let userState = UserState.current(
-            modelContext: modelContext,
-            program: program,
-            intelligence: intelligence,
-            checkIn: UserState.CheckInInput(
-                feeling: feeling,
-                availableTime: availableTime,
-                concerns: concernsForPrompt
-            ),
-            healthContext: healthContext,
-            healthAverages: healthAverages,
-            recentActivities: activities
-        )
-
-        let (system, user) = ContextBuilder.buildDailyPlanContext(
-            userState: userState,
-            targetMuscleGroups: targetMuscleGroups,
-            sessionName: currentSessionName,
-            feeling: feeling,
-            availableTime: availableTime,
-            concerns: concernsForPrompt.isEmpty ? nil : concernsForPrompt,
-            modelContext: modelContext,
-            program: program,
-            healthContext: healthContext
-        )
-
-        let model = UserDefaults.standard.string(forKey: "modelDailyPlan") ?? "claude-haiku-4-5"
-
-        print("[BenLift/Coach] Generating plan for \(currentSessionName ?? "Custom"), feeling=\(feeling), time=\(availableTime.map { "\($0)min" } ?? "unset")")
-
-        do {
-            let plan = try await coachService.generateDailyPlan(systemPrompt: system, userPrompt: user, model: model)
-            currentPlan = plan
-            // New plan => fresh adjustment history
-            planAdjustments = []
-            // Starting weight: trust user history > sanitized LLM suggestion > library default.
-            editedExercises = plan.exercises.map(pickStartingWeight)
-            // Concerns consumed by the plan — clear before snapshotting so
-            // the text field empties and the Refresh pill rests correctly.
-            concerns = ""
-            // Same snapshot dance as `getRecommendationAndPlan` so the
-            // Refresh pill clears after an iteration refresh too.
-            planInputSnapshot = currentInputSnapshot()
-            // Plan absorbed the overrides — reset so tomorrow starts fresh.
-            clearAllMuscleOverrides()
-            print("[BenLift/Coach] ✅ Plan generated: \(editedExercises.count) exercises")
-        } catch {
-            if Self.isCancellation(error) {
-                print("[BenLift/Coach] Plan generation cancelled (superseded by reload)")
-            } else {
-                print("[BenLift/Coach] ❌ Plan generation failed: \(error)")
-                planError = error.localizedDescription
-            }
-        }
-
-        isGenerating = false
     }
 
     /// Look up the most recent working weight for an exercise from SwiftData history.
@@ -1214,7 +1138,7 @@ class CoachViewModel {
             priorAdjustments: planAdjustments
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelMidWorkout") ?? "claude-haiku-4-5-20251001"
+        let model = ClaudeModel.current
         do {
             let response = try await coachService.adaptMidWorkout(
                 systemPrompt: system,
@@ -1296,9 +1220,7 @@ class CoachViewModel {
         iterateError = nil
         defer { isIterating = false }
 
-        // Iterate is a cheap, non-thinking call — Haiku is the right model.
-        let model = UserDefaults.standard.string(forKey: "modelIterate")
-            ?? "claude-haiku-4-5-20251001"
+        let model = ClaudeModel.current
         print("[BenLift/Coach] iterate request: \"\(request)\"")
 
         do {
@@ -1333,9 +1255,9 @@ class CoachViewModel {
     }
 
     /// Apply the structured edits from an `IterateEdit` to `editedExercises`
-    /// and rebuild `currentPlan`. PlannedExerciseV5 → PlannedExercise:
-    /// most fields map directly; weightAnchor + evidenceNote are audit
-    /// trail and dropped.
+    /// and rebuild `currentPlan`. PlannedExerciseV5 → PlannedExercise: most
+    /// fields map directly; weightAnchor is audit trail and dropped,
+    /// evidenceNote carries through (feeds the muscle-group TL;DR).
     @MainActor
     private func applyIterateEdits(_ edits: [PlanEdit]) {
         for edit in edits {
@@ -1380,8 +1302,8 @@ class CoachViewModel {
     }
 
     /// Map the v5 schema's exercise into the user-facing PlannedExercise.
-    /// Drops weightAnchor + evidenceNote (audit-only fields). intent is
-    /// non-optional in v5 but optional in PlannedExercise — pass through.
+    /// Drops weightAnchor (audit-only); evidenceNote carries through. intent
+    /// is non-optional in v5 but optional in PlannedExercise — pass through.
     private static func plannedFromV5(
         _ v5: PlannedExerciseV5,
         fallbackRepScheme: String?
@@ -1394,7 +1316,8 @@ class CoachViewModel {
             repScheme: fallbackRepScheme,
             warmupSets: v5.warmupSets,
             notes: v5.notes,
-            intent: v5.intent
+            intent: v5.intent,
+            evidenceNote: v5.evidenceNote
         )
     }
 
@@ -1403,18 +1326,25 @@ class CoachViewModel {
     private var lastGeneratedSessionCount: Int?
     private var lastGeneratedDate: Date?
 
-    /// Returns true if we should skip regeneration (nothing changed since last call)
+    /// Returns true if we should skip regeneration (nothing changed since last call).
+    ///
+    /// Narrow on purpose — a short window guards against duplicate calls
+    /// from rapid re-renders (e.g. `onAppear` firing more than once), not
+    /// against calling Claude again. With every plan going through
+    /// daily_plan_v5, reopening the app later in the day should always get
+    /// a fresh read against whatever HealthKit has synced since (sleep/HRV
+    /// often land mid-morning) — a same-day cache would silently plan
+    /// against stale recovery data instead.
     @MainActor
     func shouldSkipRegeneration(modelContext: ModelContext) -> Bool {
         guard recommendation != nil, !editedExercises.isEmpty else { return false }
         guard let cachedCount = lastGeneratedSessionCount,
               let cachedDate = lastGeneratedDate else { return false }
 
-        // Skip if generated today and session count hasn't changed
-        let isToday = Calendar.current.isDateInToday(cachedDate)
+        let isRecent = Date().timeIntervalSince(cachedDate) < 300 // 5 minutes
         let currentCount = (try? modelContext.fetchCount(FetchDescriptor<WorkoutSession>())) ?? 0
 
-        return isToday && currentCount == cachedCount
+        return isRecent && currentCount == cachedCount
     }
 
     /// Call after successful generation to snapshot current state
@@ -1469,7 +1399,6 @@ class CoachViewModel {
         // reported as "refresh is just not there physically."
         planInputSnapshot = currentInputSnapshot()
     }
-
     // MARK: - Muscle Overrides
 
     /// Set or clear a user-reported muscle status override. Nil clears

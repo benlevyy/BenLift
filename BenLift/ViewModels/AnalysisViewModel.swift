@@ -45,7 +45,7 @@ class AnalysisViewModel {
             healthContext: healthContext
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelPostAnalysis") ?? "claude-haiku-4-5"
+        let model = ClaudeModel.current
 
         do {
             let response = try await coachService.analyzePostWorkout(systemPrompt: system, userPrompt: user, model: model)

@@ -181,6 +181,38 @@ struct PlannedExercise: Identifiable {
     let warmupSets: [WarmupSet]?
     let notes: String?
     let intent: String?
+    /// Per-exercise "why this pick" from daily_plan_v5's `evidenceNote`.
+    /// Defaulted so every existing call site that constructs a
+    /// `PlannedExercise` directly (BaselinePlanner, quickSwap, manual
+    /// entry) doesn't need to change — nil there is correct, since only
+    /// the LLM path has this reasoning. Feeds the muscle-group TL;DR on
+    /// Today (see TodayView.muscleGroupHeader).
+    let evidenceNote: String?
+
+    /// Explicit memberwise init (rather than relying on the compiler-
+    /// synthesized one) so `evidenceNote` can default to nil without
+    /// requiring every existing call site to pass it.
+    init(
+        name: String,
+        sets: Int,
+        targetReps: String,
+        suggestedWeight: Double?,
+        repScheme: String?,
+        warmupSets: [WarmupSet]?,
+        notes: String?,
+        intent: String?,
+        evidenceNote: String? = nil
+    ) {
+        self.name = name
+        self.sets = sets
+        self.targetReps = targetReps
+        self.suggestedWeight = suggestedWeight
+        self.repScheme = repScheme
+        self.warmupSets = warmupSets
+        self.notes = notes
+        self.intent = intent
+        self.evidenceNote = evidenceNote
+    }
 
     /// Safe weight accessor — returns 0 for bodyweight exercises
     var weight: Double { suggestedWeight ?? 0 }
@@ -200,6 +232,9 @@ extension PlannedExercise: Codable {
         warmupSets = try container.decodeIfPresent([WarmupSet].self, forKey: .warmupSets)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         intent = try container.decodeIfPresent(String.self, forKey: .intent)
+        // Not part of this legacy JSON shape — only the v5 path (via the
+        // explicit init above) ever sets this.
+        evidenceNote = nil
 
         // Handle suggestedWeight as Double, String, or null. Hard-cap at 2000 lb —
         // no legitimate human lift exceeds this, so any larger value is an LLM

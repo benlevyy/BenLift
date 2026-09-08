@@ -6,18 +6,6 @@ class SettingsViewModel {
     var isTestingConnection: Bool = false
     var connectionTestResult: Bool?
 
-    // Model selections per touchpoint
-    @ObservationIgnored
-    @AppStorage("modelDailyPlan") var modelDailyPlan: String = "claude-haiku-4-5"
-    @ObservationIgnored
-    @AppStorage("modelGoalSetting") var modelGoalSetting: String = "claude-haiku-4-5"
-    @ObservationIgnored
-    @AppStorage("modelMidWorkout") var modelMidWorkout: String = "claude-haiku-4-5"
-    @ObservationIgnored
-    @AppStorage("modelPostAnalysis") var modelPostAnalysis: String = "claude-haiku-4-5"
-    @ObservationIgnored
-    @AppStorage("modelWeeklyReview") var modelWeeklyReview: String = "claude-haiku-4-5"
-
     // Workout preferences
     @ObservationIgnored
     @AppStorage("restTimerDuration") var restTimerDuration: Double = 150 // 2:30
@@ -72,7 +60,7 @@ class SettingsViewModel {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
         let body: [String: Any] = [
-            "model": "claude-haiku-4-5",
+            "model": ClaudeModel.current,
             "max_tokens": 10,
             "messages": [["role": "user", "content": "Hi"]],
         ]

@@ -313,7 +313,7 @@ struct OnboardingView: View {
         )
 
         let coachService: CoachServiceProtocol = ClaudeCoachService()
-        let model = UserDefaults.standard.string(forKey: "modelBootstrap") ?? "claude-haiku-4-5-20251001"
+        let model = ClaudeModel.current
 
         do {
             print("[BenLift/Onboarding] → bootstrap (goal=\(input.goal), days=\(input.daysPerWeek))")

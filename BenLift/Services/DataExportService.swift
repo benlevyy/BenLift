@@ -15,6 +15,17 @@ struct DataExportService {
         let weeklyReviews: [WeeklyReviewBackup]
         let intelligence: IntelligenceBackup?
         let customExercises: [ExerciseBackup]
+        // Optional (not `let ... = []`) so a pre-existing backup file that
+        // predates these fields still decodes — missing keys become nil,
+        // treated as empty on import. Added because the AI-learned rules/
+        // observations and calendar pin state are the least reproducible
+        // data in the app and were silently absent from every backup taken
+        // before this fix.
+        let userRules: [UserRuleBackup]?
+        let observations: [UserObservationBackup]?
+        let sessionEvents: [SessionEventBackup]?
+        let muscleGroupPins: [MuscleGroupPinBackup]?
+        let seedPatterns: [SeedPatternBackup]?
     }
 
     struct SessionBackup: Codable {
@@ -112,6 +123,56 @@ struct DataExportService {
         let muscleGroup: String
         let equipment: String
         let defaultWeight: Double?
+    }
+
+    struct UserRuleBackup: Codable {
+        let id: UUID
+        let kindRaw: String
+        let subject: String
+        let target: String?
+        let reason: String?
+        let createdAt: Date
+        let lastReinforcedAt: Date
+        let isActive: Bool
+    }
+
+    struct UserObservationBackup: Codable {
+        let id: UUID
+        let kindRaw: String
+        let subject: String
+        let text: String
+        let confidenceRaw: String
+        let createdAt: Date
+        let lastReinforcedAt: Date
+        let isActive: Bool
+    }
+
+    struct SessionEventBackup: Codable {
+        let id: UUID
+        let timestamp: Date
+        let kindRaw: String
+        let exerciseName: String?
+        let replacementName: String?
+        let exerciseIndex: Int?
+        let contextJSON: String?
+        let sessionDate: Date?
+    }
+
+    struct MuscleGroupPinBackup: Codable {
+        let id: UUID
+        let date: Date
+        let muscleGroups: [String]
+        let label: String?
+        let note: String?
+        let createdAt: Date
+    }
+
+    struct SeedPatternBackup: Codable {
+        let id: UUID
+        let weekday: Int
+        let muscleGroups: [String]
+        let sourceRaw: String
+        let createdAt: Date
     }
 
     // MARK: - Export
@@ -222,6 +283,55 @@ struct DataExportService {
             )
         }
 
+        // User rules — durable hard constraints the AI must respect.
+        let rules = (try? modelContext.fetch(FetchDescriptor<UserRule>())) ?? []
+        let ruleBackups = rules.map { r in
+            UserRuleBackup(
+                id: r.id, kindRaw: r.kindRaw, subject: r.subject, target: r.target,
+                reason: r.reason, createdAt: r.createdAt,
+                lastReinforcedAt: r.lastReinforcedAt, isActive: r.isActive
+            )
+        }
+
+        // AI-discovered observations.
+        let observations = (try? modelContext.fetch(FetchDescriptor<UserObservation>())) ?? []
+        let observationBackups = observations.map { o in
+            UserObservationBackup(
+                id: o.id, kindRaw: o.kindRaw, subject: o.subject, text: o.text,
+                confidenceRaw: o.confidenceRaw, createdAt: o.createdAt,
+                lastReinforcedAt: o.lastReinforcedAt, isActive: o.isActive
+            )
+        }
+
+        // Session events — the behavior signal that feeds future plan prompts.
+        let events = (try? modelContext.fetch(FetchDescriptor<SessionEvent>())) ?? []
+        let eventBackups = events.map { ev in
+            SessionEventBackup(
+                id: ev.id, timestamp: ev.timestamp, kindRaw: ev.kindRaw,
+                exerciseName: ev.exerciseName, replacementName: ev.replacementName,
+                exerciseIndex: ev.exerciseIndex, contextJSON: ev.contextJSON,
+                sessionDate: ev.sessionDate
+            )
+        }
+
+        // Calendar pins — user-set future-day muscle targets.
+        let pins = (try? modelContext.fetch(FetchDescriptor<MuscleGroupPin>())) ?? []
+        let pinBackups = pins.map { p in
+            MuscleGroupPinBackup(
+                id: p.id, date: p.date, muscleGroups: p.muscleGroups.map(\.rawValue),
+                label: p.label, note: p.note, createdAt: p.createdAt
+            )
+        }
+
+        // Seed patterns — bootstrap-seeded weekday defaults.
+        let seeds = (try? modelContext.fetch(FetchDescriptor<SeedPattern>())) ?? []
+        let seedBackups = seeds.map { s in
+            SeedPatternBackup(
+                id: s.id, weekday: s.weekday, muscleGroups: s.muscleGroups.map(\.rawValue),
+                sourceRaw: s.sourceRaw, createdAt: s.createdAt
+            )
+        }
+
         let backup = BenLiftBackup(
             exportDate: Date(),
             sessions: sessionBackups,
@@ -229,7 +339,12 @@ struct DataExportService {
             analyses: analysisBackups,
             weeklyReviews: reviewBackups,
             intelligence: intelBackup,
-            customExercises: exerciseBackups
+            customExercises: exerciseBackups,
+            userRules: ruleBackups,
+            observations: observationBackups,
+            sessionEvents: eventBackups,
+            muscleGroupPins: pinBackups,
+            seedPatterns: seedBackups
         )
 
         let encoder = JSONEncoder()
@@ -362,6 +477,87 @@ struct DataExportService {
                 defaultWeight: eb.defaultWeight, isCustom: true
             )
             modelContext.insert(exercise)
+        }
+
+        // Import user rules — skip any id already present.
+        for rb in backup.userRules ?? [] {
+            let checkId = rb.id
+            let existing = try? modelContext.fetch(FetchDescriptor<UserRule>(
+                predicate: #Predicate { $0.id == checkId }
+            ))
+            if let existing, !existing.isEmpty { continue }
+            let rule = UserRule(
+                id: rb.id, kind: UserRuleKind(rawValue: rb.kindRaw) ?? .unknown,
+                subject: rb.subject, target: rb.target, reason: rb.reason,
+                createdAt: rb.createdAt, lastReinforcedAt: rb.lastReinforcedAt,
+                isActive: rb.isActive
+            )
+            modelContext.insert(rule)
+        }
+
+        // Import observations
+        for ob in backup.observations ?? [] {
+            let checkId = ob.id
+            let existing = try? modelContext.fetch(FetchDescriptor<UserObservation>(
+                predicate: #Predicate { $0.id == checkId }
+            ))
+            if let existing, !existing.isEmpty { continue }
+            let observation = UserObservation(
+                id: ob.id, kind: ObservationKind(rawValue: ob.kindRaw) ?? .unknown,
+                subject: ob.subject, text: ob.text,
+                confidence: ObservationConfidence(rawValue: ob.confidenceRaw) ?? .medium,
+                createdAt: ob.createdAt, lastReinforcedAt: ob.lastReinforcedAt,
+                isActive: ob.isActive
+            )
+            modelContext.insert(observation)
+        }
+
+        // Import session events
+        for evb in backup.sessionEvents ?? [] {
+            let checkId = evb.id
+            let existing = try? modelContext.fetch(FetchDescriptor<SessionEvent>(
+                predicate: #Predicate { $0.id == checkId }
+            ))
+            if let existing, !existing.isEmpty { continue }
+            let event = SessionEvent(
+                id: evb.id, timestamp: evb.timestamp,
+                kind: SessionEventKind(rawValue: evb.kindRaw) ?? .unknown,
+                exerciseName: evb.exerciseName, replacementName: evb.replacementName,
+                exerciseIndex: evb.exerciseIndex, contextJSON: evb.contextJSON,
+                sessionDate: evb.sessionDate
+            )
+            modelContext.insert(event)
+        }
+
+        // Import calendar pins
+        for pb in backup.muscleGroupPins ?? [] {
+            let checkId = pb.id
+            let existing = try? modelContext.fetch(FetchDescriptor<MuscleGroupPin>(
+                predicate: #Predicate { $0.id == checkId }
+            ))
+            if let existing, !existing.isEmpty { continue }
+            let pin = MuscleGroupPin(
+                id: pb.id, date: pb.date,
+                muscleGroups: pb.muscleGroups.compactMap(MuscleGroup.init(rawValue:)),
+                label: pb.label, note: pb.note, createdAt: pb.createdAt
+            )
+            modelContext.insert(pin)
+        }
+
+        // Import seed patterns
+        for sb in backup.seedPatterns ?? [] {
+            let checkId = sb.id
+            let existing = try? modelContext.fetch(FetchDescriptor<SeedPattern>(
+                predicate: #Predicate { $0.id == checkId }
+            ))
+            if let existing, !existing.isEmpty { continue }
+            let seed = SeedPattern(
+                id: sb.id, weekday: sb.weekday,
+                muscleGroups: sb.muscleGroups.compactMap(MuscleGroup.init(rawValue:)),
+                source: SeedSource(rawValue: sb.sourceRaw) ?? .bootstrap,
+                createdAt: sb.createdAt
+            )
+            modelContext.insert(seed)
         }
 
         try modelContext.save()

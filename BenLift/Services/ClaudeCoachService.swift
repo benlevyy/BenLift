@@ -371,11 +371,11 @@ actor ClaudeCoachService: CoachServiceProtocol {
 
     // MARK: - v5 prompt suite
 
-    /// daily_plan_v5 — fired on flagged conditions (injury, low readiness,
-    /// user-triggered iteration). Routine days use the deterministic Swift
-    /// planner. Uses extended thinking; `temperature = 1.0` is required when
-    /// thinking is enabled. `max_tokens` must be ≥ thinking_budget + visible
-    /// response budget so the JSON isn't truncated after the thinking block.
+    /// daily_plan_v5 — the everyday planning path (see CoachViewModel).
+    /// Uses adaptive thinking at `effort: "high"`. `max_tokens` still needs
+    /// enough headroom above the visible response for the model's thinking
+    /// tokens, sized off `Prompts.DailyPlanV5.thinkingBudget`, so the JSON
+    /// isn't truncated after the thinking block.
     func dailyPlanV5(input: PlannerInput, model: String) async throws -> DailyPlanV5Response {
         print("[BenLift/API] dailyPlanV5 called with model: \(model)")
 
@@ -465,10 +465,11 @@ actor ClaudeCoachService: CoachServiceProtocol {
             "model": model,
             "max_tokens": maxTokens,
             "stream": true,
-            "temperature": 1.0,
             "thinking": [
-                "type": "enabled",
-                "budget_tokens": thinkingBudget,
+                "type": "adaptive",
+            ],
+            "output_config": [
+                "effort": "high",
             ],
             "system": [
                 ["type": "text", "text": system, "cache_control": ["type": "ephemeral"]],
@@ -623,9 +624,9 @@ actor ClaudeCoachService: CoachServiceProtocol {
         return f.string(from: Date())
     }
 
-    /// Variant of `sendRequest` that enables Anthropic extended thinking.
+    /// Variant of `sendRequest` that enables Anthropic adaptive thinking.
     /// Uses raw JSON serialization (rather than `ClaudeRequest`) because the
-    /// thinking config + temperature override don't fit the existing struct.
+    /// thinking/effort config doesn't fit the existing struct.
     private func sendThinkingRequest<T: Decodable>(
         systemPrompt: String,
         userPrompt: String,
@@ -651,10 +652,11 @@ actor ClaudeCoachService: CoachServiceProtocol {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,
-            "temperature": 1.0,  // required when thinking is enabled
             "thinking": [
-                "type": "enabled",
-                "budget_tokens": thinkingBudget,
+                "type": "adaptive",
+            ],
+            "output_config": [
+                "effort": "high",
             ],
             "system": [
                 ["type": "text", "text": TrainingKnowledgeBase.knowledgeBase, "cache_control": ["type": "ephemeral"]],
@@ -804,8 +806,6 @@ actor ClaudeCoachService: CoachServiceProtocol {
             print("[BenLift/API] ❌ No API key found in Keychain")
             throw ClaudeError.invalidAPIKey
         }
-        print("[BenLift/API] API key loaded (\(apiKey.prefix(12))...)")
-
         var request = URLRequest(url: baseURL)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")

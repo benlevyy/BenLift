@@ -979,8 +979,6 @@ class PhoneWorkoutViewModel {
 
         // Mark the snapshot terminal so any UI observers (Live Activity,
         // banner, history deep link) see isActive=false before we tear down.
-        // In mirror mode the watch sends a final isActive=false snapshot;
-        // in standalone we have to emit it ourselves.
         if workoutMode == .standalone {
             commitStandaloneMutation { snap in
                 snap.isActive = false
@@ -988,6 +986,25 @@ class PhoneWorkoutViewModel {
             }
             standaloneRestHapticTimer?.invalidate()
             standaloneRestHapticTimer = nil
+        } else {
+            // Mirror mode used to wait on the watch's own final
+            // isActive=false snapshot instead of setting this locally —
+            // if that message never arrives (a real, observed failure:
+            // WatchConnectivity logged "Application context data is nil"
+            // on this exact device), the phone gets stuck showing "Workout
+            // in progress" and lets you resume a session that's already
+            // been saved to history. We've already committed the
+            // WorkoutSession above, so the phone's own state should
+            // reflect "done" immediately regardless of whether the watch's
+            // confirmation ever lands — a late-arriving watch snapshot
+            // just becomes a no-op against this terminal state.
+            if var snap = snapshot {
+                snap.isActive = false
+                snap.restEndsAt = nil
+                snap.version += 1
+                snapshot = snap
+            }
+            SnapshotCache.clear()
         }
 
         // End Live Activity
@@ -1234,7 +1251,7 @@ class PhoneWorkoutViewModel {
             priorAdjustments: workoutAdjustments
         )
 
-        let model = UserDefaults.standard.string(forKey: "modelMidWorkout") ?? "claude-haiku-4-5-20251001"
+        let model = ClaudeModel.current
         let service = ClaudeCoachService()
 
         do {

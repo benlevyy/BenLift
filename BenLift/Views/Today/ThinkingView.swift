@@ -1,10 +1,18 @@
 import SwiftUI
+import Combine
 
 /// AI-loading state. Visually structured like the destination plan view —
 /// title placeholder + skeleton rows — so the loading reads as "the plan
-/// is filling in" rather than "waiting from zero." A single slow-fill
-/// progress bar replaces the previous random-bars dance because directional
-/// motion feels purposeful while equal-energy motion reads as stuck.
+/// is filling in" rather than "waiting from zero."
+///
+/// Every plan now goes through Opus with adaptive thinking at `effort:
+/// "high"` (see ClaudeCoachService), so the realistic wait is 30–90s, not
+/// the ~15s this view was originally tuned for. A one-shot animation to a
+/// fixed value and a 4-message loop both read as "stuck" once the wait
+/// runs past their tuning window — so progress here is driven by elapsed
+/// time instead: it keeps crawling forward for as long as the call takes,
+/// slowing down but never fully stopping and never reaching 100% on its
+/// own (the parent removes this view when the real plan lands).
 struct ThinkingView: View {
     enum Phase {
         case analyzing
@@ -13,10 +21,25 @@ struct ThinkingView: View {
 
     let phase: Phase
 
-    @State private var progress: CGFloat = 0
+    @State private var elapsed: TimeInterval = 0
     @State private var messageIndex = 0
     @State private var showMessage = true
     @State private var shimmerX: CGFloat = -1
+    private let clock = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+    private let messageTimer = Timer.publish(every: 2.2, on: .main, in: .common).autoconnect()
+
+    /// Asymptotic approach to `cap` — fast in the first few seconds, then
+    /// visibly slower, but always still moving. `tau` sets how quickly it
+    /// closes in: at `elapsed == tau` it's ~63% of the way to `cap`.
+    private var progress: CGFloat {
+        let cap = 0.92
+        let tau = 28.0
+        return CGFloat(cap * (1 - exp(-elapsed / tau)))
+    }
+
+    private var elapsedLabel: String {
+        "\(Int(elapsed))s"
+    }
 
     private var messages: [String] {
         switch phase {
@@ -26,12 +49,18 @@ struct ThinkingView: View {
                 "Reviewing recent sessions",
                 "Reading health data",
                 "Picking muscle groups",
+                "Weighing today's tradeoffs",
+                "Checking against your rules and notes",
+                "Comparing to your goals",
+                "Cross-referencing recent volume",
             ]
         case .building:
             return [
                 "Selecting exercises",
                 "Calculating weights",
                 "Programming warmups",
+                "Sanity-checking the numbers",
+                "Writing the reasoning",
                 "Finalizing plan",
             ]
         }
@@ -52,15 +81,25 @@ struct ThinkingView: View {
                         .font(.caption)
                         .foregroundColor(.secondaryText)
                         .opacity(showMessage ? 1 : 0)
+                    Spacer()
+                    Text(elapsedLabel)
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondaryText)
                 }
             }
 
-            // One purposeful, slow-fill bar. Eases out so it slows as it
-            // approaches the held value — reads as "converging" instead
-            // of "stuck."
+            // Continuously-creeping bar — always visibly moving for as
+            // long as the call runs, instead of freezing at a fixed value.
             ProgressView(value: progress)
                 .progressViewStyle(.linear)
                 .tint(.accentBlue)
+
+            // Sets the expectation up front so a 30–60s wait doesn't read
+            // as broken — this is genuinely how long extended thinking on
+            // Opus takes, not a stall.
+            Text("Thinking it through carefully — usually under a minute.")
+                .font(.caption2)
+                .foregroundColor(.secondaryText)
 
             // Skeleton plan rows — same shape as the real exercise rows
             // (PhoneExerciseListView style). Shimmer sweeps across all of
@@ -75,14 +114,17 @@ struct ThinkingView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.cardSurface)
         .cornerRadius(12)
-        .onAppear {
-            // 6s ease-out fill to 85%. The remaining 15% holds until the
-            // parent removes this view; never reaches 100% on its own,
-            // so the user never sees a "why isn't it done yet" full bar.
-            withAnimation(.easeOut(duration: 6.0)) {
-                progress = 0.85
+        .onReceive(clock) { _ in
+            elapsed += 0.2
+        }
+        .onReceive(messageTimer) { _ in
+            withAnimation(.easeOut(duration: 0.15)) { showMessage = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                messageIndex += 1
+                withAnimation(.easeIn(duration: 0.15)) { showMessage = true }
             }
-            startMessageCycle()
+        }
+        .onAppear {
             startShimmer()
         }
     }
@@ -134,18 +176,6 @@ struct ThinkingView: View {
 
     private var skeletonFill: Color {
         Color.gray.opacity(0.18)
-    }
-
-    private func startMessageCycle() {
-        // 1.4s — fast enough that the user reliably sees a new step within
-        // the typical 4–6s wait, slow enough that lines stay readable.
-        Timer.scheduledTimer(withTimeInterval: 1.4, repeats: true) { _ in
-            withAnimation(.easeOut(duration: 0.15)) { showMessage = false }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                messageIndex += 1
-                withAnimation(.easeIn(duration: 0.15)) { showMessage = true }
-            }
-        }
     }
 
     private func startShimmer() {
