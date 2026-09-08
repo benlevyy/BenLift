@@ -67,7 +67,7 @@ enum PlanResolver {
         // hold regardless of how hard the session actually was.
         let flag = crossTrainingFlag(for: category, activities: activities, on: day)
         if let flag {
-            lifts = applyFlagAdjustments(flag, to: lifts, category: category)
+            lifts = applyFlagAdjustments(flag, to: lifts)
         }
 
         for (i, lift) in lifts.enumerated() { lift.order = i }
@@ -305,22 +305,57 @@ enum PlanResolver {
 
     // MARK: Step 5 — cross-training collisions
 
-    /// Which muscle groups a given activity meaningfully pre-fatigues.
-    private static func taxedGroups(by activityType: String) -> Set<MuscleGroup> {
-        switch activityType {
-        case "climbing":
-            return [.back, .biceps, .forearms, .shoulders, .core]
-        case "running", "hiking":
-            return [.quads, .hamstrings, .calves, .glutes]
-        case "cycling":
-            return [.quads, .glutes, .calves]
-        case "rowing":
-            return [.back, .biceps, .quads, .core]
-        case "swimming":
-            return [.shoulders, .back, .core]
-        default:
-            return []
+    /// Pairings worth saying something about, and what to say.
+    ///
+    /// This table IS the mechanism. A flag exists when a pairing is in here
+    /// and does not exist otherwise — there is no muscle-overlap scoring and
+    /// no generic fallback line. That kept an earlier version honest in two
+    /// ways: it can't fire with nothing to say, and it can't be skewed by
+    /// `core`, which appears in every category and so carried no signal while
+    /// still padding every overlap count.
+    ///
+    /// `adjustments` are only the changes that hold whether the session was
+    /// hard or easy — HealthKit reports duration, not intensity. Anything
+    /// that depends on how hard he actually went is a question for chat.
+    private static let guidance: [Pairing: Guidance] = [
+        Pairing("climbing", .pull): Guidance(
+            detail: "Grip is the limiter, not your back — straps are on, and direct forearm work is dropped.",
+            adjustments: ["straps", "dropped forearm work"]
+        ),
+        Pairing("climbing", .push): Guidance(
+            detail: "Shoulders took a beating on overhangs. Loads are unchanged — ease into the first pressing set.",
+            adjustments: []
+        ),
+        Pairing("rowing", .pull): Guidance(
+            detail: "That was most of a pull session already. Loads are unchanged — cut a set if the back feels cooked.",
+            adjustments: []
+        ),
+        Pairing("running", .legs): Guidance(
+            detail: "Quads and calves are pre-fatigued. Loads are unchanged — cut a set if the first one feels heavy.",
+            adjustments: []
+        ),
+        Pairing("hiking", .legs): Guidance(
+            detail: "Quads and calves are pre-fatigued. Loads are unchanged — cut a set if the first one feels heavy.",
+            adjustments: []
+        ),
+        Pairing("cycling", .legs): Guidance(
+            detail: "Quads have volume in them already. Loads are unchanged — the stimulus is different enough to keep.",
+            adjustments: []
+        ),
+    ]
+
+    struct Pairing: Hashable {
+        let activity: String
+        let category: WorkoutCategory
+        init(_ activity: String, _ category: WorkoutCategory) {
+            self.activity = activity
+            self.category = category
         }
+    }
+
+    struct Guidance {
+        let detail: String
+        let adjustments: [String]
     }
 
     static func crossTrainingFlag(
@@ -328,72 +363,46 @@ enum PlanResolver {
         activities: [CrossTrainingActivity],
         on day: Date
     ) -> CrossTrainingFlag? {
-        let window = activities.filter {
-            let hours = day.timeIntervalSince($0.date) / 3600
-            return hours >= 0 && hours <= 48
-        }
-        guard !window.isEmpty else { return nil }
+        // Longest qualifying session in the last 48h wins — one flag, never
+        // a stack of them.
+        let candidate = activities
+            .filter {
+                let hours = day.timeIntervalSince($0.date) / 3600
+                return hours >= 0 && hours <= 48
+                    && guidance[Pairing($0.type, category)] != nil
+            }
+            .max { $0.duration < $1.duration }
 
-        let todaysGroups = Set(category.muscleGroups)
-        let collisions = window.compactMap { activity -> (CrossTrainingActivity, Set<MuscleGroup>)? in
-            let overlap = taxedGroups(by: activity.type).intersection(todaysGroups)
-            return overlap.count >= 2 ? (activity, overlap) : nil
-        }
-        // Worst collision wins — one flag, not a stack of them.
-        guard let (activity, _) = collisions.max(by: { $0.0.duration < $1.0.duration }) else {
-            return nil
-        }
+        guard let activity = candidate,
+              let advice = guidance[Pairing(activity.type, category)] else { return nil }
 
-        let when = Calendar.current.isDateInYesterday(activity.date) ? "yesterday" : "today"
-        let verb = activity.type == "climbing" ? "Climbed"
-            : activity.type == "running" ? "Ran"
-            : activity.type == "cycling" ? "Rode"
-            : activity.type.capitalized
-
-        var headline = "\(verb) \(activity.duration.formattedDurationShort) \(when)"
-        if let miles = activity.distanceMiles, miles > 0 {
-            headline = "\(verb) \(String(format: "%.1f", miles))mi \(when)"
-        }
-
-        let (detail, adjustments) = guidance(for: activity.type, category: category)
         return CrossTrainingFlag(
             activityType: activity.type,
             date: activity.date,
             duration: activity.duration,
             distanceMiles: activity.distanceMiles,
-            headline: headline,
-            detail: detail,
-            appliedAdjustments: adjustments
+            headline: headline(for: activity, on: day),
+            detail: advice.detail,
+            appliedAdjustments: advice.adjustments
         )
     }
 
-    /// The adjustments here are deliberately the ones that hold whether the
-    /// session was hard or easy. Anything that depends on intensity — how
-    /// much bicep volume to cut, whether to swap pull-ups — is a question
-    /// only the user can answer, so it goes to chat instead.
-    private static func guidance(
-        for activityType: String,
-        category: WorkoutCategory
-    ) -> (detail: String, adjustments: [String]) {
-        switch (activityType, category) {
-        case ("climbing", .pull):
-            return (
-                "Grip is the limiter, not your back — straps are on, and direct forearm work is dropped.",
-                ["straps", "dropped forearm work"]
-            )
-        case ("running", .legs), ("hiking", .legs):
-            return (
-                "Quads and calves are pre-fatigued. Loads are unchanged — cut a set if the first one feels heavy.",
-                []
-            )
-        case ("cycling", .legs):
-            return (
-                "Quads have volume in them already. Loads are unchanged — the stimulus is different enough to keep.",
-                []
-            )
-        default:
-            return ("Overlaps with today's muscle groups.", [])
+    private static func headline(for activity: CrossTrainingActivity, on day: Date) -> String {
+        let when = Calendar.current.isDateInYesterday(activity.date) ? "yesterday" : "today"
+        let verb: String
+        switch activity.type {
+        case "climbing": verb = "Climbed"
+        case "running": verb = "Ran"
+        case "cycling": verb = "Rode"
+        case "hiking": verb = "Hiked"
+        case "rowing": verb = "Rowed"
+        default: verb = activity.type.capitalized
         }
+        // Distance is the more meaningful number when there is one.
+        if let miles = activity.distanceMiles, miles > 0 {
+            return "\(verb) \(String(format: "%.1f", miles))mi \(when)"
+        }
+        return "\(verb) \(activity.duration.formattedDurationShort) \(when)"
     }
 
     /// Names that are grip-limited (straps help) or redundant forearm work
@@ -403,8 +412,7 @@ enum PlanResolver {
 
     private static func applyFlagAdjustments(
         _ flag: CrossTrainingFlag,
-        to lifts: [PlannedLift],
-        category: WorkoutCategory
+        to lifts: [PlannedLift]
     ) -> [PlannedLift] {
         guard !flag.appliedAdjustments.isEmpty else { return lifts }
 
