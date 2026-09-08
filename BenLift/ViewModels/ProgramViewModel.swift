@@ -4,14 +4,6 @@ import SwiftData
 @Observable
 class ProgramViewModel {
     var currentProgram: TrainingProgram?
-    var isGenerating: Bool = false
-    var error: String?
-
-    private let coachService: CoachServiceProtocol
-
-    init(coachService: CoachServiceProtocol? = nil) {
-        self.coachService = coachService ?? ClaudeCoachService()
-    }
 
     @MainActor
     func loadCurrentProgram(modelContext: ModelContext) {
@@ -22,67 +14,22 @@ class ProgramViewModel {
         currentProgram = try? modelContext.fetch(descriptor).first
     }
 
+    /// Create the single program row that holds `goalText`. The old
+    /// version asked Claude to design a split, periodisation scheme and
+    /// per-muscle volume targets at signup — none of which the resolver
+    /// reads. Rotation plus replay does that job, so this is now local.
     @MainActor
-    func generateProgram(
-        goal: TrainingGoal,
-        specificTargets: String?,
-        daysPerWeek: Int,
-        experience: ExperienceLevel,
-        injuries: String?,
-        equipment: EquipmentAccess,
-        modelContext: ModelContext
-    ) async {
-        isGenerating = true
-        error = nil
-
-        let (system, user) = PromptBuilder.goalSettingPrompt(
-            goal: goal,
-            specificTargets: specificTargets,
-            daysPerWeek: daysPerWeek,
-            experience: experience,
-            injuries: injuries,
-            equipment: equipment
-        )
-
-        let model = ClaudeModel.current
-
-        print("[BenLift/Program] Generating program: goal=\(goal.displayName), days=\(daysPerWeek), exp=\(experience.displayName), model=\(model)")
-
-        do {
-            let response = try await coachService.generateProgram(systemPrompt: system, userPrompt: user, model: model)
-            print("[BenLift/Program] ✅ Program received: \(response.program.name)")
-
-            // Deactivate existing programs
-            let existing = FetchDescriptor<TrainingProgram>(predicate: #Predicate { $0.isActive == true })
-            if let programs = try? modelContext.fetch(existing) {
-                for p in programs { p.isActive = false }
-            }
-
-            // Create new program
-            let program = TrainingProgram(
-                name: response.program.name,
-                goal: goal.displayName,
-                specificTargets: specificTargets,
-                experienceLevel: experience.rawValue,
-                daysPerWeek: daysPerWeek,
-                periodization: response.program.periodization,
-                deloadFrequency: response.program.deloadFrequency
-            )
-            program.split = response.program.split
-            program.weeklyVolumeTargets = response.program.weeklyVolumeTargets
-            program.compoundPriority = response.program.compoundPriority
-            program.progressionScheme = response.program.progressionScheme
-
+    func ensureProgram(goalText: String = "", modelContext: ModelContext) {
+        loadCurrentProgram(modelContext: modelContext)
+        if let currentProgram {
+            if !goalText.isEmpty { currentProgram.goalText = goalText }
+        } else {
+            let program = TrainingProgram(name: "Training", goal: "")
+            program.goalText = goalText
             modelContext.insert(program)
-            try? modelContext.save()
             currentProgram = program
-
-        } catch {
-            print("[BenLift/Program] ❌ Program generation failed: \(error)")
-            self.error = error.localizedDescription
         }
-
-        isGenerating = false
+        try? modelContext.save()
     }
 
     func todaysSuggestedCategory() -> WorkoutCategory? {

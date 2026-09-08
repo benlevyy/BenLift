@@ -24,8 +24,6 @@ struct OnboardingView: View {
 
     // MARK: - Bootstrap call state
 
-    @State private var isBootstrapping = false
-    @State private var bootstrapError: String? = nil
     @State private var bootstrappedProgramName: String? = nil
 
     var body: some View {
@@ -212,34 +210,18 @@ struct OnboardingView: View {
                     .lineLimit(2...4)
             }
 
+            // No spinner and no error path: this writes a row and moves on.
+            // There is nothing to fail, because there is no longer a network
+            // call standing between the user and their first plan.
             Section {
                 Button {
-                    Task { await runBootstrap() }
+                    finishOnboarding()
                 } label: {
                     HStack {
-                        if isBootstrapping {
-                            ProgressView().padding(.trailing, 4)
-                            Text("Designing your program...")
-                        } else {
-                            Image(systemName: "sparkles")
-                            Text("Design my program")
-                        }
+                        Image(systemName: "checkmark.circle")
+                        Text("Save and continue")
                     }
                     .frame(maxWidth: .infinity)
-                }
-                .disabled(isBootstrapping)
-            }
-
-            if let bootstrapError {
-                Section {
-                    Text(bootstrapError)
-                        .font(.caption)
-                        .foregroundColor(.failedRed)
-                    Button("Continue anyway") {
-                        // User opt-out of retry — finish onboarding so they
-                        // aren't stuck. They can re-run from Settings later.
-                        hasCompletedOnboarding = true
-                    }
                 }
             }
         }
@@ -284,56 +266,63 @@ struct OnboardingView: View {
         .padding(.top, 8)
     }
 
-    // MARK: - Bootstrap call
+    // MARK: - Finish onboarding
     //
-    // 1. Build BootstrapInput from form state.
-    // 2. Call ClaudeCoachService.bootstrap (Haiku — cheap, no thinking).
-    // 3. Persist via BootstrapPersister (TrainingProgram + SeedPattern rows).
-    // 4. Advance to the completion step.
-    //
-    // Error path: surface a localized message inline + reveal a "Continue
-    // anyway" button so the user isn't trapped in onboarding. The flag is
-    // still set when they tap that button — pattern engine + planner can
-    // run un-bootstrapped, just with no seeds.
+    // This used to call Claude to design a starter program (split,
+    // periodisation, per-muscle volume targets) and persist it via
+    // BootstrapPersister. None of that is read any more: the plan comes from
+    // rotating push/pull/legs and replaying the last session of that type,
+    // and a cold start uses the default exercise library. So onboarding does
+    // the one thing that still matters — write down what he's training for,
+    // in his own words — and does it locally, instantly, with no API key
+    // required to get through the door.
 
     @MainActor
-    private func runBootstrap() async {
-        isBootstrapping = true
-        bootstrapError = nil
-
-        let input = BootstrapInput(
+    private func finishOnboarding() {
+        let program = TrainingProgram(
+            name: "Training",
             goal: goal.rawValue,
-            daysPerWeek: daysPerWeek,
-            experience: experience.rawValue,
-            equipment: equipment.rawValue,
-            focusAreas: focusAreas.map { $0.rawValue },
-            injuriesOrAvoid: injuriesOrAvoid.trimmedOrNil,
-            crossTraining: crossTraining.trimmedOrNil,
-            preferences: preferences.trimmedOrNil
+            experienceLevel: experience.rawValue,
+            daysPerWeek: daysPerWeek
         )
+        program.goalText = composedGoalText
+        modelContext.insert(program)
 
-        let coachService: CoachServiceProtocol = ClaudeCoachService()
-        let model = ClaudeModel.current
-
-        do {
-            print("[BenLift/Onboarding] → bootstrap (goal=\(input.goal), days=\(input.daysPerWeek))")
-            let response = try await coachService.bootstrap(input: input, model: model)
-            print("[BenLift/Onboarding] ✓ bootstrap response: \(response.programName)")
-
-            BootstrapPersister.persist(
-                response: response,
-                input: input,
-                modelContext: modelContext
-            )
-
-            bootstrappedProgramName = response.programName
-            isBootstrapping = false
-            step = 3
-        } catch {
-            print("[BenLift/Onboarding] ❌ bootstrap failed: \(error)")
-            bootstrapError = "Couldn't design your program right now. You can complete onboarding and we'll generate it later."
-            isBootstrapping = false
+        // Things to avoid become real rules, enforced by the resolver in
+        // Swift rather than requested of a model.
+        if let avoid = injuriesOrAvoid.trimmedOrNil {
+            modelContext.insert(UserRule(
+                kind: .programming,
+                subject: avoid,
+                reason: "From onboarding"
+            ))
         }
+
+        try? modelContext.save()
+        bootstrappedProgramName = "Ready"
+        step = 3
+    }
+
+    /// Fold the form into the single plain-text goal the coach reads. Prose,
+    /// because that's the field's whole point — it stays editable in Settings
+    /// and can say things no set of pickers could.
+    private var composedGoalText: String {
+        var parts: [String] = []
+        parts.append("Training for \(goal.rawValue), \(daysPerWeek) days a week. I'm \(experience.rawValue).")
+        if !focusAreas.isEmpty {
+            parts.append("Prioritising \(focusAreas.map { $0.rawValue }.joined(separator: ", ")).")
+        }
+        parts.append("Equipment: \(equipment.rawValue).")
+        if let cross = crossTraining.trimmedOrNil {
+            parts.append("Other training: \(cross).")
+        }
+        if let avoid = injuriesOrAvoid.trimmedOrNil {
+            parts.append("Avoid: \(avoid).")
+        }
+        if let prefs = preferences.trimmedOrNil {
+            parts.append(prefs)
+        }
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Step 3: Done

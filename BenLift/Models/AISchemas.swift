@@ -45,14 +45,6 @@ struct VolumeTarget: Codable {
     let repRange: String
 }
 
-struct ProgressionEvent: Codable, Identifiable {
-    var id: String { "\(exercise)-\(type)" }
-    let exercise: String
-    let type: String // rep_pr, weight_pr, plateau, regression
-    let detail: String
-    let recommendation: String
-}
-
 struct VolumeAnalysisEntry: Codable {
     let actual: Int
     let weeklyTarget: Int
@@ -139,38 +131,6 @@ struct DailyPlanResponse: Codable {
 /// One-shot response that returns both the recovery recommendation and the day's
 /// workout plan in a single LLM call. Replaces the prior split flow (Sonnet
 /// recommend -> Haiku plan) — ~2.2x faster, ~2.7x cheaper, equivalent quality.
-struct RecommendAndPlanResponse: Codable {
-    // Recommendation portion (mirrors RecoveryRecommendation)
-    let muscleGroupStatus: [MuscleGroupStatus]
-    let recommendedFocus: [String]
-    let recommendedSessionName: String
-    let reasoning: String
-
-    // Plan portion (mirrors DailyPlanResponse)
-    let exercises: [PlannedExercise]
-    let sessionStrategy: String?
-    let estimatedDuration: Int?
-    let deloadNote: String?
-
-    var asRecommendation: RecoveryRecommendation {
-        RecoveryRecommendation(
-            muscleGroupStatus: muscleGroupStatus,
-            recommendedFocus: recommendedFocus,
-            recommendedSessionName: recommendedSessionName,
-            reasoning: reasoning
-        )
-    }
-
-    var asPlan: DailyPlanResponse {
-        DailyPlanResponse(
-            exercises: exercises,
-            sessionStrategy: sessionStrategy,
-            estimatedDuration: estimatedDuration,
-            deloadNote: deloadNote
-        )
-    }
-}
-
 struct PlannedExercise: Identifiable {
     var id: String { name }
     let name: String
@@ -183,7 +143,7 @@ struct PlannedExercise: Identifiable {
     let intent: String?
     /// Per-exercise "why this pick" from daily_plan_v5's `evidenceNote`.
     /// Defaulted so every existing call site that constructs a
-    /// `PlannedExercise` directly (BaselinePlanner, quickSwap, manual
+    /// `PlannedExercise` directly (the resolver, chat swaps, manual
     /// entry) doesn't need to change — nil there is correct, since only
     /// the LLM path has this reasoning. Feeds the muscle-group TL;DR on
     /// Today (see TodayView.muscleGroupHeader).
@@ -239,7 +199,7 @@ extension PlannedExercise: Codable {
         // Handle suggestedWeight as Double, String, or null. Hard-cap at 2000 lb —
         // no legitimate human lift exceeds this, so any larger value is an LLM
         // hallucination or a comma-stripped concatenation ("15,000 lbs" → 15000).
-        // Null gets resolved downstream by CoachViewModel.pickStartingWeight.
+        // Null gets resolved downstream by the chat tool executor.
         let maxPlausible: Double = 2000
         if let d = try? container.decodeIfPresent(Double.self, forKey: .suggestedWeight) {
             suggestedWeight = (d.isFinite && d <= maxPlausible) ? d : nil
@@ -266,23 +226,7 @@ struct WarmupSet: Codable {
 
 // MARK: - Touchpoint 3: Mid-Workout Adapt Response
 
-struct MidWorkoutAdaptResponse: Codable {
-    let exercises: [PlannedExercise]
-    let rationale: String?
-}
-
 // MARK: - Touchpoint 4: Post-Workout Analysis Response
-
-struct PostWorkoutAnalysisResponse: Codable {
-    let summary: String
-    let performanceVsplan: PerformanceVsPlan?
-    let progressionEvents: [ProgressionEvent]
-    let volumeAnalysis: [String: VolumeAnalysisEntry]?
-    let recoveryNotes: String?
-    let overallRating: String
-    let coachNote: String
-    let observations: [String]?    // AI-observed patterns to accumulate for next intelligence refresh
-}
 
 struct PerformanceVsPlan: Codable {
     let adherence: Double?
@@ -290,16 +234,6 @@ struct PerformanceVsPlan: Codable {
 }
 
 // MARK: - Touchpoint 5: Weekly Review Response
-
-struct WeeklyReviewResponse: Codable {
-    let weekSummary: WeekSummaryData
-    let goalProgress: [GoalProgressEntry]?
-    let weeklyVolumeCompliance: [String: VolumeComplianceEntry]?
-    let strengthTrends: [StrengthTrend]?
-    let programAdjustments: [ProgramAdjustment]?
-    let recoveryReport: RecoveryReport?
-    let coachNote: String
-}
 
 struct WeekSummaryData: Codable {
     let sessionsCompleted: Int
@@ -405,15 +339,6 @@ struct WatchExerciseItem: Codable, Identifiable {
 /// Response shape for the v5 daily-plan prompt. Calendar decides muscle
 /// upstream — this prompt only designs the session (exercises, sets, reps,
 /// loads, order) with safety adjudication and weight anchoring.
-struct DailyPlanV5Response: Codable {
-    let recommendation: String
-    let strategy: String
-    let exercises: [PlannedExerciseV5]
-    let estimatedDuration: Int
-    let deloadNote: String?
-    let selfCheck: SelfCheckBlock?
-}
-
 struct PlannedExerciseV5: Codable {
     let name: String
     let sets: Int
@@ -456,39 +381,6 @@ struct RitualOmission: Codable {
 // on the `responseType` discriminator. Encode round-trips through the
 // inner case so downstream code can mutate and re-emit.
 
-enum IterateResponse: Codable {
-    case edit(IterateEdit)
-    case explain(IterateExplain)
-
-    private enum CodingKeys: String, CodingKey { case responseType }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let kind = try c.decode(String.self, forKey: .responseType)
-        let single = try decoder.singleValueContainer()
-        switch kind {
-        case "edit":
-            self = .edit(try single.decode(IterateEdit.self))
-        case "explain":
-            self = .explain(try single.decode(IterateExplain.self))
-        default:
-            throw DecodingError.dataCorruptedError(
-                forKey: .responseType,
-                in: c,
-                debugDescription: "Unknown iterate responseType: \(kind)"
-            )
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var single = encoder.singleValueContainer()
-        switch self {
-        case .edit(let e): try single.encode(e)
-        case .explain(let e): try single.encode(e)
-        }
-    }
-}
-
 struct IterateEdit: Codable {
     let responseType: String   // "edit"
     let editKind: String       // "swap" | "prioritize" | "load_adjust" | "add_finisher" | "remove"
@@ -513,25 +405,9 @@ struct IterateExplain: Codable {
 // One-time program design from onboarding answers. Seeds calendar pattern,
 // exercise rotation per muscle, weekly volume targets, progression scheme.
 
-struct BootstrapResponse: Codable {
-    let programName: String
-    let split: String                              // full_body | upper_lower | ppl | ppl_ul | custom
-    let weeklyPattern: [String: String]            // "monday" → "chest, shoulders, triceps"
-    let rotationPerMuscle: [String: [String]]
-    let weeklyVolumeTargets: [String: BootstrapVolumeTarget]
-    let progressionScheme: ProgressionScheme
-    let ruleOuts: [String]
-    let rationale: String
-}
-
 /// Distinct from the existing `VolumeTarget` (which carries `sets` + `repRange`
 /// for the older program-generation flow). Bootstrap volume targets have a
 /// `rationale` string instead of a rep range.
-struct BootstrapVolumeTarget: Codable {
-    let sets: Int
-    let rationale: String
-}
-
 struct ProgressionScheme: Codable {
     let compounds: String
     let isolation: String
@@ -539,17 +415,6 @@ struct ProgressionScheme: Codable {
 
 /// Onboarding input passed to the bootstrap prompt. Codable so we can
 /// serialize directly to JSON for the `{{ONBOARDING_JSON}}` template slot.
-struct BootstrapInput: Codable {
-    let goal: String              // "hypertrophy" | "strength" | "general_fitness" | "sport_specific"
-    let daysPerWeek: Int          // 3 | 4 | 5 | 6
-    let experience: String        // "never" | "<1yr" | "1-3yr" | "3+yr"
-    let equipment: String         // "full_gym" | "home_dumbbells" | "bodyweight"
-    let focusAreas: [String]
-    let injuriesOrAvoid: String?
-    let crossTraining: String?
-    let preferences: String?
-}
-
 // MARK: - Health Context (sent to Claude)
 
 struct HealthContext: Codable {

@@ -11,8 +11,6 @@ struct ManualWorkoutEntryView: View {
     @State private var exercises: [ManualExercise] = []
     @State private var showAddExercise = false
     @State private var expandedExerciseId: String?
-    @State private var savedSession: WorkoutSession?
-    @State private var analysisVM = AnalysisViewModel()
 
     struct ManualExercise: Identifiable {
         let id = UUID().uuidString
@@ -132,14 +130,6 @@ struct ManualWorkoutEntryView: View {
                     exercises.append(manual)
                     expandedExerciseId = manual.id
                 }
-            }
-            .sheet(item: $savedSession) { session in
-                PostWorkoutSheet(
-                    session: session,
-                    analysisVM: analysisVM,
-                    programVM: ProgramViewModel()
-                )
-                .onDisappear { dismiss() }
             }
         }
     }
@@ -357,17 +347,10 @@ struct ManualWorkoutEntryView: View {
         try? modelContext.save()
         print("[BenLift] Manually saved workout: \(session.entries.count) exercises")
 
-        // Show post-workout sheet with AI analysis
-        savedSession = session
-        Task {
-            await analysisVM.analyzeWorkout(
-                session: session,
-                planSummary: nil,
-                modelContext: modelContext,
-                program: nil,
-                healthContext: nil
-            )
-        }
+        // No post-workout analysis call any more — logging a session is a
+        // record, not a prompt. Anything worth saying about it can be asked
+        // in chat, where the whole history is available.
+        dismiss()
     }
 }
 

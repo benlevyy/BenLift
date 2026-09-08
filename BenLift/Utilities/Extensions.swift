@@ -25,16 +25,44 @@ extension Color {
         )
     }
 
-    // App color palette — forest, cream, tan, sage
-    static let pushBlue = Color(hex: "2D5F2D")      // forest green (primary)
-    static let pullGreen = Color(hex: "6B8F5E")     // sage
-    static let legsOrange = Color(hex: "C49A6C")    // tan
-    static let cardSurface = Color(hex: "F3EDE4")   // warm cream
-    static let appBackground = Color(hex: "FAF6F0")  // off-white cream
-    static let secondaryText = Color(hex: "8C7B6B")  // warm brown
-    static let prGreen = Color(hex: "4A7C3F")        // deep sage
-    static let failedRed = Color(hex: "B54A4A")      // muted brick red
-    static let accentBlue = Color(hex: "2D5F2D")     // forest green (accent)
+    // MARK: App palette — forest, cream, tan, sage
+    //
+    // Names describe the ROLE, not a hue. The old set had `pushBlue` and
+    // `accentBlue` holding the identical forest green, which made the
+    // primary/secondary compound dots on the plan list indistinguishable —
+    // a visual distinction that looked intentional but did not exist.
+
+    // Surfaces
+    static let appBackground = Color(hex: "FAF6F0")   // off-white cream
+    static let cardSurface = Color(hex: "F3EDE4")     // warm cream
+    static let controlFill = Color(hex: "E7DFD3")     // pressed / inert control
+
+    // Text
+    static let primaryText = Color(hex: "2D3128")     // near-black, warm
+    static let bodyText = Color(hex: "4A4237")        // running copy
+    static let secondaryText = Color(hex: "8C7B6B")   // warm brown
+    static let tertiaryText = Color(hex: "B3A697")    // captions, provenance
+
+    // Accent + status
+    static let accent = Color(hex: "2D5F2D")          // forest green
+    static let prGreen = Color(hex: "4A7C3F")         // progression
+    static let failedRed = Color(hex: "B54A4A")       // muted brick red
+    static let flagAmber = Color(hex: "A97B4A")       // cross-training flag
+    static let flagAmberText = Color(hex: "7A5730")
+
+    // Exercise intent — four genuinely distinct values so the dot means
+    // something. Ordered heaviest to lightest.
+    static let intentPrimary = Color(hex: "2D5F2D")   // forest
+    static let intentSecondary = Color(hex: "6B8F5E") // sage
+    static let intentIsolation = Color(hex: "C49A6C") // tan
+    static let intentFinisher = Color(hex: "B3A697")  // muted
+
+    // Legacy aliases — kept so untouched views still compile during the
+    // rebuild. Remove once nothing references them.
+    static let pushBlue = Color(hex: "2D5F2D")
+    static let pullGreen = Color(hex: "6B8F5E")
+    static let legsOrange = Color(hex: "C49A6C")
+    static let accentBlue = Color(hex: "2D5F2D")
 }
 
 // MARK: - Date Extensions

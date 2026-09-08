@@ -95,12 +95,11 @@ struct PhoneExerciseListView: View {
                 .foregroundColor(.accentBlue)
 
                 Button {
-                    workoutVM.adaptTargetIndex = nil
                     onAdapt()
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                        Text("AI Suggest Changes")
+                        Image(systemName: "bubble.left.and.text.bubble.right")
+                        Text("Ask the coach")
                     }
                     .font(.subheadline.bold())
                     .frame(maxWidth: .infinity)

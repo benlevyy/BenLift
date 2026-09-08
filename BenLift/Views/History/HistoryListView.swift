@@ -262,22 +262,37 @@ struct HistoryListView: View {
         }
     }
 
+    /// Sessions used to carry an AI-assigned rating ("PR Day", "Good") from
+    /// the post-workout analysis call. That call is gone — a badge summarising
+    /// the session was never worth a model round trip. What actually happened
+    /// is a better badge, and it's free.
     private func ratingBadge(for session: WorkoutSession) -> some View {
-        let sessionId = session.id
-        let descriptor = FetchDescriptor<PostWorkoutAnalysis>(
-            predicate: #Predicate { $0.sessionId == sessionId }
-        )
-        let analysis = try? modelContext.fetch(descriptor).first
+        let prs = session.entries.filter { entry in
+            guard let top = entry.workingSets.map(\.weight).max() else { return false }
+            return top > 0 && isPersonalBest(exercise: entry.exerciseName, weight: top, on: session.date)
+        }.count
 
         return Group {
-            if let analysis {
-                Text(analysis.overallRating.displayName)
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(analysis.overallRating.color.opacity(0.2))
-                    .foregroundColor(analysis.overallRating.color)
-                    .cornerRadius(6)
+            if prs > 0 {
+                HStack(spacing: 3) {
+                    Image(systemName: "star.fill").font(.system(size: 9))
+                    Text("\(prs) PR\(prs == 1 ? "" : "s")")
+                        .font(.caption2.bold())
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.prGreen.opacity(0.15))
+                .foregroundColor(.prGreen)
+                .cornerRadius(6)
+            }
+        }
+    }
+
+    /// True when no earlier session moved this much weight on this lift.
+    private func isPersonalBest(exercise: String, weight: Double, on date: Date) -> Bool {
+        !sessions.contains { earlier in
+            earlier.date < date && earlier.entries.contains {
+                $0.exerciseName == exercise && ($0.workingSets.map(\.weight).max() ?? 0) >= weight
             }
         }
     }
@@ -285,13 +300,6 @@ struct HistoryListView: View {
     // MARK: - Delete
 
     private func deleteSession(_ session: WorkoutSession) {
-        let sessionId = session.id
-        let analysisDescriptor = FetchDescriptor<PostWorkoutAnalysis>(
-            predicate: #Predicate { $0.sessionId == sessionId }
-        )
-        if let analyses = try? modelContext.fetch(analysisDescriptor) {
-            for analysis in analyses { modelContext.delete(analysis) }
-        }
         for entry in session.entries {
             for set in entry.sets { modelContext.delete(set) }
             modelContext.delete(entry)

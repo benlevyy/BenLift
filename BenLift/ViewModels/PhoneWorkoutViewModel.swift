@@ -131,10 +131,6 @@ class PhoneWorkoutViewModel {
 
     // MARK: - Mid-Workout Adapt (UI state, AI calls happen on phone)
 
-    var isAdapting: Bool = false
-    var adaptSuggestion: MidWorkoutAdaptResponse?
-    var adaptError: String?
-    var adaptTargetIndex: Int?
 
     /// Mid-workout adjustments the user has accepted this session.
     /// Passed into subsequent adapt prompts so the model can spot patterns
@@ -1203,142 +1199,12 @@ class PhoneWorkoutViewModel {
 
     // MARK: - Mid-Workout AI Adaptation
 
-    func requestAdaptation(
-        exerciseIndex: Int?,
-        reason: AdaptReason,
-        details: String?,
-        program: TrainingProgram?
-    ) async {
-        isAdapting = true
-        adaptError = nil
-        adaptSuggestion = nil
-        adaptTargetIndex = exerciseIndex
+    // Mid-workout adaptation used to be its own LLM round trip behind the
+    // MidWorkoutAdaptSheet. Chat replaces it: the same conversation that
+    // shaped the plan this morning edits it between sets, with the sets you
+    // have already logged in context. `applyLiveEdit` below is what the chat
+    // tool executor drives.
 
-        let originalPlan = exerciseStates.map { state in
-            "\(state.name): \(state.targetSets)x\(state.targetReps) @ \(Int(state.suggestedWeight)) lbs (\(state.intent ?? "unknown"))"
-        }.joined(separator: "\n")
-
-        let completedSoFar = exerciseStates.compactMap { state -> String? in
-            guard !state.loggedSets.isEmpty else { return nil }
-            let sets = state.loggedSets.map { "\(Int($0.weight))x\($0.reps.formattedReps)" }.joined(separator: ", ")
-            return "\(state.name): \(sets)"
-        }.joined(separator: "\n")
-
-        let remaining: String
-        if let targetIdx = exerciseIndex, targetIdx < exerciseStates.count {
-            let state = exerciseStates[targetIdx]
-            remaining = "\(state.name): \(state.targetSets)x\(state.targetReps) @ \(Int(state.suggestedWeight)) lbs"
-        } else {
-            remaining = exerciseStates.compactMap { state -> String? in
-                guard !state.isComplete else { return nil }
-                return "\(state.name): \(state.targetSets - state.workingSetsCompleted) sets remaining"
-            }.joined(separator: "\n")
-        }
-
-        let reasonText: String
-        if let targetIdx = exerciseIndex, targetIdx < exerciseStates.count {
-            reasonText = "\(reason.promptText) — specifically for \(exerciseStates[targetIdx].name)"
-        } else {
-            reasonText = reason.promptText
-        }
-
-        let (system, user) = PromptBuilder.midWorkoutAdaptPrompt(
-            originalPlan: originalPlan,
-            completedSoFar: completedSoFar.isEmpty ? "None yet" : completedSoFar,
-            remaining: remaining,
-            reason: reasonText,
-            details: details,
-            priorAdjustments: workoutAdjustments
-        )
-
-        let model = ClaudeModel.current
-        let service = ClaudeCoachService()
-
-        do {
-            let response = try await service.adaptMidWorkout(
-                systemPrompt: system,
-                userPrompt: user,
-                model: model
-            )
-            adaptSuggestion = response
-        } catch {
-            adaptError = error.localizedDescription
-        }
-
-        isAdapting = false
-    }
-
-    func acceptAdaptation() {
-        guard let suggestion = adaptSuggestion else { return }
-
-        if let targetIdx = adaptTargetIndex, let replacement = suggestion.exercises.first {
-            let originalName = (targetIdx < exerciseStates.count) ? exerciseStates[targetIdx].name : "exercise"
-            replaceExerciseCommand(at: targetIdx, with: watchInfo(for: replacement))
-            workoutAdjustments.append(AdjustmentRecord(
-                kind: .swap,
-                summary: "Swapped \(originalName) -> \(replacement.name)"
-            ))
-        } else {
-            // Untargeted "AI Suggest Changes" — reshape what remains.
-            //
-            // Prior behavior appended every suggestion on top of the existing
-            // plan, which stacked the list into a long redundant mess (the
-            // user still had the old exercises AND the new ones). The user's
-            // intent on this button is "change what I'm doing going forward,"
-            // not "pile more on."
-            //
-            // Rule: preserve anything the user has already invested in
-            // (logged sets) or explicitly set aside (skipped). Remap
-            // suggestions onto the remaining unlogged + non-skipped slots
-            // via `adaptExercise`. If there are more suggestions than open
-            // slots, append the excess. If there are more open slots than
-            // suggestions, skip the extras so the plan actually shrinks.
-            let remainingIndices: [Int] = exerciseStates.enumerated().compactMap { idx, ex in
-                (ex.loggedSets.isEmpty && !ex.effectivelySkipped) ? idx : nil
-            }
-
-            let suggestedInfos = suggestion.exercises.map(watchInfo(for:))
-
-            // Phase 1: replace as many remaining slots as we have suggestions.
-            for (i, info) in suggestedInfos.enumerated() where i < remainingIndices.count {
-                let slot = remainingIndices[i]
-                let originalName = (slot < exerciseStates.count) ? exerciseStates[slot].name : "exercise"
-                replaceExerciseCommand(at: slot, with: info)
-                workoutAdjustments.append(AdjustmentRecord(
-                    kind: .swap,
-                    summary: "Swapped \(originalName) -> \(info.name)"
-                ))
-            }
-
-            // Phase 2: any leftover open slots get skipped — the user asked
-            // for a shorter/different shape, honor it. Higher indices first
-            // so index shifts don't affect the earlier ones on the owner side
-            // (watch processes commands serially; skip is a flag, not a
-            // delete, so order technically doesn't matter here — but staying
-            // consistent with how a future .deleteExercise command would
-            // behave is cheap insurance).
-            if suggestedInfos.count < remainingIndices.count {
-                for slot in remainingIndices[suggestedInfos.count...].reversed() {
-                    skipExercise(at: slot)
-                }
-            }
-
-            // Phase 3: any suggestions beyond the open-slot count get
-            // appended. Rare (the model usually matches or trims).
-            if suggestedInfos.count > remainingIndices.count {
-                for info in suggestedInfos[remainingIndices.count...] {
-                    addExercise(info)
-                    workoutAdjustments.append(AdjustmentRecord(
-                        kind: .addExercise,
-                        summary: "Added \(info.name) mid-workout"
-                    ))
-                }
-            }
-        }
-
-        adaptSuggestion = nil
-        adaptTargetIndex = nil
-    }
 
     // MARK: - Remote Commands (watch → phone, during phone-owned session)
 
@@ -1413,6 +1279,82 @@ class PhoneWorkoutViewModel {
     /// Matches the watch's `.adaptExercise` semantics: the replaced slot
     /// becomes a fresh `SnapshotExercise` with no logged sets. (Callers
     /// are expected to only hit unlogged slots anyway.)
+    // MARK: - Live edits driven by chat
+
+    /// Index of an exercise in the running session, matched loosely so the
+    /// name Claude used ("overhead press") finds "Overhead Press".
+    func liveIndex(ofExerciseNamed name: String) -> Int? {
+        let target = name.lowercased()
+        if let exact = exerciseStates.firstIndex(where: { $0.name.lowercased() == target }) {
+            return exact
+        }
+        return exerciseStates.firstIndex { $0.name.lowercased().contains(target) }
+            ?? exerciseStates.firstIndex { target.contains($0.name.lowercased()) }
+    }
+
+    /// Drop an exercise from the running session. Anything already logged is
+    /// kept — skipping is the honest operation mid-workout, not deletion,
+    /// because those sets happened.
+    @discardableResult
+    func liveRemove(exerciseNamed name: String) -> Bool {
+        guard let index = liveIndex(ofExerciseNamed: name) else { return false }
+        skipExercise(at: index)
+        workoutAdjustments.append(AdjustmentRecord(kind: .skip, summary: "Dropped \(exerciseStates[index].name)"))
+        return true
+    }
+
+    /// Swap an exercise in the running session.
+    @discardableResult
+    func liveReplace(exerciseNamed name: String, with info: WatchExerciseInfo) -> Bool {
+        guard let index = liveIndex(ofExerciseNamed: name) else { return false }
+        let original = exerciseStates[index].name
+        replaceExerciseCommand(at: index, with: info)
+        workoutAdjustments.append(AdjustmentRecord(kind: .swap, summary: "Swapped \(original) -> \(info.name)"))
+        return true
+    }
+
+    /// Change the numbers on an exercise in the running session.
+    ///
+    /// `exerciseStates` is a computed overlay, so this goes through the same
+    /// mutation path the rest of the runner uses. Deliberately field-level
+    /// rather than reusing `replaceExerciseCommand`, which rebuilds the
+    /// exercise and would throw away sets already logged against it.
+    ///
+    /// In mirrored (watch-owned) mode there is no granular command for this —
+    /// the only one available rebuilds the exercise — so a partially-logged
+    /// exercise is refused rather than silently losing sets.
+    @discardableResult
+    func liveSetLoad(exerciseNamed name: String, weight: Double?, sets: Int?) -> Bool {
+        guard let index = liveIndex(ofExerciseNamed: name) else { return false }
+        guard weight != nil || sets != nil else { return false }
+
+        if workoutMode == .standalone {
+            commitStandaloneMutation { snap in
+                guard index < snap.exercises.count else { return }
+                if let weight { snap.exercises[index].suggestedWeight = weight }
+                if let sets { snap.exercises[index].targetSets = sets }
+            }
+            return true
+        }
+
+        let current = exerciseStates[index]
+        guard current.loggedSets.isEmpty else { return false }
+
+        sendCommand(.adaptExercise(index: index, replacement: WatchExerciseInfo(
+            name: current.name,
+            sets: sets ?? current.targetSets,
+            targetReps: current.targetReps,
+            suggestedWeight: weight ?? current.suggestedWeight,
+            warmupSets: current.warmupSets,
+            notes: current.notes,
+            intent: current.intent,
+            lastWeight: current.lastWeight,
+            lastReps: current.lastReps,
+            equipment: nil
+        )))
+        return true
+    }
+
     private func replaceExerciseCommand(at index: Int, with info: WatchExerciseInfo) {
         if workoutMode == .standalone {
             commitStandaloneMutation { snap in
@@ -1456,9 +1398,6 @@ class PhoneWorkoutViewModel {
     }
 
     func dismissAdaptation() {
-        adaptSuggestion = nil
-        adaptError = nil
-        adaptTargetIndex = nil
     }
 }
 

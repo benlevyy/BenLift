@@ -6,12 +6,10 @@ struct PhoneWorkoutView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Bindable var workoutVM: PhoneWorkoutViewModel
-    var programVM: ProgramViewModel
+    @Bindable var chatVM: ChatViewModel
     @State private var navigationPath: [Int] = [] // exercise indices
-    @State private var showAdaptSheet = false
-    /// Mode the adapt sheet should open in. Set by the caller before flipping
-    /// `showAdaptSheet` so the sheet doesn't have to sniff VM state.
-    @State private var adaptSheetMode: MidWorkoutAdaptSheet.Mode = .manual
+    /// Chat, opened over the runner. Same thread as Today — see WorkoutChatSheet.
+    @State private var showChat = false
     @State private var showFinishSheet = false
     /// Tracks the `restEndsAt` value the user has dismissed locally. The rest overlay
     /// stays hidden until the watch sends a new snapshot with a different restEndsAt
@@ -40,23 +38,18 @@ struct PhoneWorkoutView: View {
                                 navigationPath.append(index)
                             },
                             onAdapt: {
-                                adaptSheetMode = .manual
-                                showAdaptSheet = true
+                                showChat = true
                             },
                             onSwap: { index in
-                                // Swipe-left swap: auto-fill "user requested
-                                // alternative" reason, fire the LLM, open the
-                                // adapt sheet in compact mode where the result
-                                // renders with a single Accept button.
-                                workoutVM.adaptTargetIndex = index
-                                adaptSheetMode = .swipe
-                                showAdaptSheet = true
-                                Task {
-                                    await workoutVM.swipeSwap(
-                                        at: index,
-                                        program: programVM.currentProgram
-                                    )
-                                }
+                                // Swipe-left no longer fires a hidden LLM call
+                                // and waits. It seeds the request into chat, so
+                                // the swap is a sentence he can amend before
+                                // sending rather than a black box.
+                                let name = index < workoutVM.exerciseStates.count
+                                    ? workoutVM.exerciseStates[index].name
+                                    : "this exercise"
+                                chatVM.draft = "swap \(name) for something else"
+                                showChat = true
                             },
                             onFinish: { showFinishSheet = true }
                         )
@@ -66,8 +59,11 @@ struct PhoneWorkoutView: View {
                             workoutVM: workoutVM,
                             exerciseIndex: index,
                             onAdaptExercise: {
-                                workoutVM.adaptTargetIndex = index
-                                showAdaptSheet = true
+                                let name = index < workoutVM.exerciseStates.count
+                                    ? workoutVM.exerciseStates[index].name
+                                    : "this exercise"
+                                chatVM.draft = "swap \(name) for something else"
+                                showChat = true
                             },
                             onComplete: {
                                 navigationPath.removeLast()
@@ -96,13 +92,9 @@ struct PhoneWorkoutView: View {
             }
         }
         .animation(.smooth(duration: 0.35), value: workoutVM.isResting)
-        .sheet(isPresented: $showAdaptSheet) {
-            MidWorkoutAdaptSheet(
-                workoutVM: workoutVM,
-                program: programVM.currentProgram,
-                mode: adaptSheetMode
-            )
-            .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showChat) {
+            WorkoutChatSheet(chatVM: chatVM, workoutVM: workoutVM)
+                .presentationDetents([.large])
         }
         .sheet(isPresented: $showFinishSheet) {
             FinishWorkoutSheet(workoutVM: workoutVM) { effort in
@@ -122,7 +114,7 @@ struct PhoneWorkoutView: View {
         }
         .interactiveDismissDisabled(workoutVM.isWorkoutActive || workoutVM.snapshot == nil)
         .onReceive(NotificationCenter.default.publisher(for: .liveActivitySwapTapped)) { _ in
-            showAdaptSheet = true
+            showChat = true
         }
     }
 

@@ -13,15 +13,6 @@ class HistoryViewModel {
     }
 
     @MainActor
-    func analysis(for session: WorkoutSession, from context: ModelContext) -> PostWorkoutAnalysis? {
-        let sessionId = session.id
-        let descriptor = FetchDescriptor<PostWorkoutAnalysis>(
-            predicate: #Predicate { $0.sessionId == sessionId }
-        )
-        return try? context.fetch(descriptor).first
-    }
-
-    @MainActor
     func exerciseHistory(name: String, from context: ModelContext) -> [(date: Date, topWeight: Double, topReps: Double, e1RM: Double)] {
         let sessions = fetchSessions(from: context)
         return sessions.compactMap { session in

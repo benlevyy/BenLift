@@ -11,8 +11,6 @@ struct SettingsView: View {
     @AppStorage("weightIncrement") private var weightIncrement: Double = 5.0
     @AppStorage("dumbbellIncrement") private var dumbbellIncrement: Double = 2.5
     @AppStorage("warmUpGeneration") private var warmUpGeneration: Bool = true
-    @AppStorage("weeklyReviewDay") private var weeklyReviewDay: Int = 1
-    @AppStorage("weeklyReviewEnabled") private var weeklyReviewEnabled: Bool = true
     @AppStorage("weightUnit") private var weightUnitRaw: String = WeightUnit.lbs.rawValue
     @AppStorage("workoutNotificationsEnabled") private var workoutNotificationsEnabled: Bool = true
     @AppStorage("dailyReminderEnabled") private var dailyReminderEnabled: Bool = false
@@ -22,6 +20,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                goalSection
+                usageSection
+                rulesSection
                 apiConfigSection
                 healthKitSection
                 workoutPreferencesSection
@@ -185,19 +186,6 @@ struct SettingsView: View {
                 )
             }
 
-            Toggle("Weekly Review", isOn: $weeklyReviewEnabled)
-
-            if weeklyReviewEnabled {
-                Picker("Review Day", selection: $weeklyReviewDay) {
-                    Text("Sunday").tag(1)
-                    Text("Monday").tag(2)
-                    Text("Tuesday").tag(3)
-                    Text("Wednesday").tag(4)
-                    Text("Thursday").tag(5)
-                    Text("Friday").tag(6)
-                    Text("Saturday").tag(7)
-                }
-            }
         }
     }
 
@@ -256,7 +244,7 @@ struct SettingsView: View {
                 Button("Delete All", role: .destructive) { clearAllData() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Deletes all workout sessions, analyses, weekly reviews, and your training program. Exercise library is kept.")
+                Text("Deletes all workout sessions, plans, chat threads, rules, and your training program. Your exercise library and AI usage log are kept.")
             }
         }
         .sheet(isPresented: $showExportShare) {
@@ -316,8 +304,6 @@ struct SettingsView: View {
     }
 
     private func clearAllData() {
-        try? modelContext.delete(model: PostWorkoutAnalysis.self)
-        try? modelContext.delete(model: WeeklyReview.self)
         try? modelContext.delete(model: ExerciseEntry.self)
         try? modelContext.delete(model: SetLog.self)
         try? modelContext.delete(model: WorkoutSession.self)
@@ -326,16 +312,187 @@ struct SettingsView: View {
         // "Clear All Data" looked complete but silently kept every
         // AI-learned rule, observation, and calendar pin around.
         try? modelContext.delete(model: UserRule.self)
-        try? modelContext.delete(model: UserObservation.self)
         try? modelContext.delete(model: SessionEvent.self)
         try? modelContext.delete(model: MuscleGroupPin.self)
         try? modelContext.delete(model: SeedPattern.self)
         try? modelContext.delete(model: ActivityLog.self)
-        try? modelContext.delete(model: UserIntelligence.self)
-        try? modelContext.delete(model: UserProfile.self)
+        // The rebuild's own tables — a plan and thread for a day whose
+        // sessions no longer exist would be stale nonsense.
+        try? modelContext.delete(model: PlannedLift.self)
+        try? modelContext.delete(model: DailyPlan.self)
+        try? modelContext.delete(model: ChatMessage.self)
+        try? modelContext.delete(model: ChatThread.self)
         try? modelContext.save()
         print("[BenLift] Cleared ALL data")
     }
+
+    // MARK: - Goal
+
+    /// One plain-text field, replacing nine structured ones. Read by chat on
+    /// every turn; deliberately never read by the resolver.
+    @Query private var programs: [TrainingProgram]
+
+    private var activeProgram: TrainingProgram? {
+        programs.first { $0.isActive }
+    }
+
+    private var goalSection: some View {
+        Section {
+            TextEditor(text: Binding(
+                get: { activeProgram?.goalText ?? "" },
+                set: { newValue in
+                    if let program = activeProgram {
+                        program.goalText = newValue
+                    } else {
+                        let program = TrainingProgram(name: "Training", goal: "")
+                        program.goalText = newValue
+                        modelContext.insert(program)
+                    }
+                    try? modelContext.save()
+                }
+            ))
+            .frame(minHeight: 110)
+            .font(.system(size: 14.5))
+        } header: {
+            Text("Your goal")
+        } footer: {
+            Text("Plain text. The coach reads this on every message — lifting or not. Mention the other things you do and it can talk about those too.")
+        }
+    }
+
+    // MARK: - AI usage
+
+    @Query(sort: \AIUsageLog.timestamp, order: .reverse) private var usageLog: [AIUsageLog]
+
+    private var usageSection: some View {
+        Section {
+            usageRow("Today", entries: usage(sinceDaysAgo: 0))
+            usageRow("This week", entries: usage(sinceDaysAgo: 7))
+            usageRow(monthName, entries: usage(sinceDaysAgo: 30))
+            if !usageLog.isEmpty {
+                levelBreakdown
+            }
+        } header: {
+            Text("AI usage")
+        } footer: {
+            Text("One call per message you send. Nothing fires on open, on save, or on a timer.")
+        }
+    }
+
+    private func usage(sinceDaysAgo days: Int) -> [AIUsageLog] {
+        let cutoff = days == 0
+            ? Calendar.current.startOfDay(for: Date())
+            : Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        return usageLog.filter { $0.timestamp >= cutoff }
+    }
+
+    private func usageRow(_ label: String, entries: [AIUsageLog]) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text("\(entries.count) message\(entries.count == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Text(String(format: "$%.2f", entries.reduce(0) { $0 + $1.costUSD }))
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .frame(width: 56, alignment: .trailing)
+        }
+    }
+
+    private var monthName: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM"
+        return formatter.string(from: Date())
+    }
+
+    private var levelBreakdown: some View {
+        let month = usage(sinceDaysAgo: 30)
+        let counts = Intelligence.allCases.map { level in
+            (level, month.filter { $0.intelligence == level }.count)
+        }
+        let total = max(1, counts.reduce(0) { $0 + $1.1 })
+
+        return VStack(alignment: .leading, spacing: 10) {
+            GeometryReader { geo in
+                HStack(spacing: 2) {
+                    ForEach(counts, id: \.0) { level, count in
+                        if count > 0 {
+                            Capsule()
+                                .fill(color(for: level))
+                                .frame(width: max(3, geo.size.width * CGFloat(count) / CGFloat(total)))
+                        }
+                    }
+                }
+            }
+            .frame(height: 8)
+
+            HStack(spacing: 16) {
+                ForEach(counts, id: \.0) { level, count in
+                    HStack(spacing: 5) {
+                        Circle().fill(color(for: level)).frame(width: 7, height: 7)
+                        Text("\(level.displayName) \(count)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func color(for level: Intelligence) -> Color {
+        switch level {
+        case .quick: return .accent
+        case .balanced: return .intentSecondary
+        case .deep: return .intentIsolation
+        }
+    }
+
+    // MARK: - Rules
+
+    @Query private var allRules: [UserRule]
+
+    private var activeRules: [UserRule] {
+        allRules.filter { $0.isActive }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    @ViewBuilder
+    private var rulesSection: some View {
+        if !activeRules.isEmpty {
+            Section {
+                ForEach(activeRules) { rule in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rule.subject)
+                            if let reason = rule.reason, !reason.isEmpty {
+                                Text(reason)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Text(rule.createdAt.formatted(.dateTime.day().month(.abbreviated)))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .swipeActions {
+                        Button("Remove", role: .destructive) {
+                            rule.isActive = false
+                            try? modelContext.save()
+                        }
+                    }
+                }
+            } header: {
+                Text("Rules the coach follows")
+            } footer: {
+                Text("Enforced in the app before the coach is involved — an excluded lift simply never appears.")
+            }
+        }
+    }
+
 }
 
 // MARK: - Share Sheet

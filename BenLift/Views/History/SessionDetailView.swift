@@ -5,9 +5,7 @@ import Charts
 struct SessionDetailView: View {
     @Environment(\.modelContext) private var modelContext
     let session: WorkoutSession
-    @State private var analysis: PostWorkoutAnalysis?
     @State private var isEditing = false
-    @State private var analysisVM = AnalysisViewModel()
     @State private var showAddExercise = false
     @State private var editSnapshot = ""  // fingerprint of data when edit started
 
@@ -16,36 +14,6 @@ struct SessionDetailView: View {
             VStack(alignment: .leading, spacing: 20) {
                 // Header
                 headerSection
-
-                // AI analysis status
-                if analysisVM.isAnalyzing {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Reanalyzing workout...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondaryText)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color.cardSurface)
-                    .cornerRadius(12)
-                }
-
-                if let error = analysisVM.analysisError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(.failedRed)
-                }
-
-                // Coach note
-                if let analysis {
-                    coachSection(analysis)
-                }
-
-                // PR badges
-                if let analysis, !analysis.progressionEvents.isEmpty {
-                    prSection(analysis.progressionEvents)
-                }
 
                 // Exercises
                 if isEditing {
@@ -109,60 +77,7 @@ struct SessionDetailView: View {
 
             Spacer()
 
-            if let analysis {
-                Text(analysis.overallRating.displayName)
-                    .font(.headline)
-                    .foregroundColor(analysis.overallRating.color)
-            }
         }
-    }
-
-    // MARK: - Coach
-
-    private func coachSection(_ analysis: PostWorkoutAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Coach Notes")
-                .font(.caption.bold())
-                .foregroundColor(.secondaryText)
-                .textCase(.uppercase)
-
-            Text(analysis.coachNote)
-                .font(.body)
-
-            if let recovery = analysis.recoveryNotes {
-                Text(recovery)
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
-                    .italic()
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cardSurface)
-        .cornerRadius(12)
-    }
-
-    // MARK: - PRs
-
-    private func prSection(_ events: [ProgressionEvent]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(events) { event in
-                HStack(spacing: 8) {
-                    Image(systemName: event.type.contains("pr") ? "star.fill" : "arrow.right")
-                        .foregroundColor(event.type.contains("pr") ? .prGreen : .secondaryText)
-                    VStack(alignment: .leading) {
-                        Text("\(event.exercise) — \(event.type.replacingOccurrences(of: "_", with: " ").capitalized)")
-                            .font(.subheadline.bold())
-                        Text(event.detail)
-                            .font(.caption)
-                            .foregroundColor(.secondaryText)
-                    }
-                }
-            }
-        }
-        .padding()
-        .background(Color.prGreen.opacity(0.1))
-        .cornerRadius(12)
     }
 
     // MARK: - Read-Only Exercises
@@ -414,30 +329,12 @@ struct SessionDetailView: View {
 
         try? modelContext.save()
 
-        guard hasChanges else {
-            print("[BenLift] No changes detected, skipping re-analysis")
-            return
-        }
+        guard hasChanges else { return }
 
+        // Editing a past session used to trigger a fresh analysis call. It
+        // no longer does anything except change the record — which is all
+        // editing a past session should ever have done.
         print("[BenLift] Saved session edits: \(session.entries.count) exercises")
-
-        // Delete old analysis and regenerate
-        if let oldAnalysis = analysis {
-            modelContext.delete(oldAnalysis)
-            try? modelContext.save()
-            analysis = nil
-        }
-
-        Task {
-            await analysisVM.analyzeWorkout(
-                session: session,
-                planSummary: nil,
-                modelContext: modelContext,
-                program: nil,
-                healthContext: nil
-            )
-            loadAnalysis()
-        }
     }
 
     private func sessionFingerprint() -> String {
@@ -447,13 +344,4 @@ struct SessionDetailView: View {
         }.joined(separator: ";")
     }
 
-    // MARK: - Load Analysis
-
-    private func loadAnalysis() {
-        let sessionId = session.id
-        let descriptor = FetchDescriptor<PostWorkoutAnalysis>(
-            predicate: #Predicate { $0.sessionId == sessionId }
-        )
-        analysis = try? modelContext.fetch(descriptor).first
-    }
 }

@@ -155,19 +155,33 @@ final class ExerciseEntry {
     /// distinguish a bail from an omission. Default false for safe migration
     /// of rows written before this field existed.
     var isSkipped: Bool = false
+    /// The rep range this entry was prescribed, e.g. "8-12". Without it a
+    /// logged 3x10 is ambiguous — we can't tell whether 10 was the top of
+    /// the range (progress the load) or the middle (hold it). Optional so
+    /// rows written before double progression existed migrate cleanly;
+    /// `PlanResolver` holds the weight when it's nil rather than guessing.
+    var targetReps: String?
+    /// The load the plan called for, as distinct from what was logged.
+    /// Lets the resolver tell "did the prescribed weight" from "worked up
+    /// to something else".
+    var prescribedWeight: Double?
 
     init(
         id: UUID = UUID(),
         exerciseName: String,
         order: Int,
         sets: [SetLog] = [],
-        isSkipped: Bool = false
+        isSkipped: Bool = false,
+        targetReps: String? = nil,
+        prescribedWeight: Double? = nil
     ) {
         self.id = id
         self.exerciseName = exerciseName
         self.order = order
         self.sets = sets
         self.isSkipped = isSkipped
+        self.targetReps = targetReps
+        self.prescribedWeight = prescribedWeight
     }
 
     var sortedSets: [SetLog] {
@@ -234,7 +248,19 @@ final class TrainingProgram {
     var createdAt: Date
     var isActive: Bool
 
-    // MARK: - Coaching Profile (persistent context for AI)
+    // MARK: - Goal
+    /// The single plain-text field the user writes about what they're
+    /// training for. Replaces the nine overlapping free-text columns below
+    /// (goal / specificTargets / musclePriorities / otherActivities /
+    /// activitySchedule / ongoingConcerns / recoveryNotes / coachingStyle /
+    /// customCoachNotes), which are kept only so existing rows migrate and
+    /// can be folded into this on first launch.
+    ///
+    /// Read by chat on every turn. Deliberately NOT read by `PlanResolver` —
+    /// the plan is rotation + replay, and stays that way.
+    var goalText: String = ""
+
+    // MARK: - Coaching Profile (DEPRECATED — folded into `goalText`)
     var otherActivities: String?       // e.g. "Bouldering Wed/Sun"
     var activitySchedule: String?      // e.g. "Boulder Wed evening, Sun morning"
     var musclePriorities: String?      // e.g. "Focus chest and shoulders, maintain legs"
@@ -301,105 +327,7 @@ final class TrainingProgram {
 
 // MARK: - Post-Workout Analysis
 
-@Model
-final class PostWorkoutAnalysis {
-    var id: UUID
-    var sessionId: UUID
-    var summary: String
-    var overallRating: OverallRating
-    var progressionEventsData: Data?
-    var volumeAnalysisData: Data?
-    var recoveryNotes: String?
-    var coachNote: String
-    var createdAt: Date
-
-    init(
-        id: UUID = UUID(),
-        sessionId: UUID,
-        summary: String,
-        overallRating: OverallRating,
-        recoveryNotes: String? = nil,
-        coachNote: String
-    ) {
-        self.id = id
-        self.sessionId = sessionId
-        self.summary = summary
-        self.overallRating = overallRating
-        self.recoveryNotes = recoveryNotes
-        self.coachNote = coachNote
-        self.createdAt = Date()
-    }
-
-    var progressionEvents: [ProgressionEvent] {
-        get { progressionEventsData?.decodeJSON([ProgressionEvent].self) ?? [] }
-        set { progressionEventsData = Data.encodeJSON(newValue) }
-    }
-
-    var volumeAnalysis: [String: VolumeAnalysisEntry] {
-        get { volumeAnalysisData?.decodeJSON([String: VolumeAnalysisEntry].self) ?? [:] }
-        set { volumeAnalysisData = Data.encodeJSON(newValue) }
-    }
-}
-
 // MARK: - Weekly Review
-
-@Model
-final class WeeklyReview {
-    var id: UUID
-    var weekStartDate: Date
-    var sessionsCompleted: Int
-    var sessionsPlanned: Int
-    var totalVolume: Double
-    var goalProgressData: Data?
-    var volumeComplianceData: Data?
-    var strengthTrendsData: Data?
-    var programAdjustmentsData: Data?
-    var recoveryReportData: Data?
-    var coachNote: String
-    var createdAt: Date
-
-    init(
-        id: UUID = UUID(),
-        weekStartDate: Date,
-        sessionsCompleted: Int,
-        sessionsPlanned: Int,
-        totalVolume: Double,
-        coachNote: String
-    ) {
-        self.id = id
-        self.weekStartDate = weekStartDate
-        self.sessionsCompleted = sessionsCompleted
-        self.sessionsPlanned = sessionsPlanned
-        self.totalVolume = totalVolume
-        self.coachNote = coachNote
-        self.createdAt = Date()
-    }
-
-    var goalProgress: [GoalProgressEntry] {
-        get { goalProgressData?.decodeJSON([GoalProgressEntry].self) ?? [] }
-        set { goalProgressData = Data.encodeJSON(newValue) }
-    }
-
-    var volumeCompliance: [String: VolumeComplianceEntry] {
-        get { volumeComplianceData?.decodeJSON([String: VolumeComplianceEntry].self) ?? [:] }
-        set { volumeComplianceData = Data.encodeJSON(newValue) }
-    }
-
-    var strengthTrends: [StrengthTrend] {
-        get { strengthTrendsData?.decodeJSON([StrengthTrend].self) ?? [] }
-        set { strengthTrendsData = Data.encodeJSON(newValue) }
-    }
-
-    var programAdjustments: [ProgramAdjustment] {
-        get { programAdjustmentsData?.decodeJSON([ProgramAdjustment].self) ?? [] }
-        set { programAdjustmentsData = Data.encodeJSON(newValue) }
-    }
-
-    var recoveryReport: RecoveryReport? {
-        get { recoveryReportData?.decodeJSON(RecoveryReport.self) }
-        set { recoveryReportData = newValue.flatMap { Data.encodeJSON($0) } }
-    }
-}
 
 // MARK: - Activity Log (non-lifting activities from HealthKit)
 
@@ -429,120 +357,7 @@ final class ActivityLog {
     }
 }
 
-// MARK: - Living User Profile (DEPRECATED — replaced by UserIntelligence)
-
-@Model
-final class UserProfile {
-    var id: UUID
-    var profileText: String
-    var lastUpdated: Date
-
-    init(
-        id: UUID = UUID(),
-        profileText: String = "",
-        lastUpdated: Date = Date()
-    ) {
-        self.id = id
-        self.profileText = profileText
-        self.lastUpdated = lastUpdated
-    }
-}
-
 // MARK: - User Intelligence (AI-generated from data)
-
-@Model
-final class UserIntelligence {
-    var id: UUID
-    var lastRefreshed: Date
-
-    // AI-generated structured sections (populated by Sonnet refresh)
-    var activityPatterns: String
-    var trainingPatterns: String
-    var strengthProfile: String
-    var recoveryProfile: String
-    var exercisePreferences: String
-    var notableObservations: String
-
-    // Accumulates between refreshes (written by Haiku post-workout)
-    var pendingObservations: String
-
-    // User-provided fields (minimal input)
-    var injuries: String
-    var userNotes: String
-
-    // Track staleness
-    var workoutsSinceRefresh: Int
-
-    init(
-        id: UUID = UUID(),
-        lastRefreshed: Date = .distantPast,
-        activityPatterns: String = "",
-        trainingPatterns: String = "",
-        strengthProfile: String = "",
-        recoveryProfile: String = "",
-        exercisePreferences: String = "",
-        notableObservations: String = "",
-        pendingObservations: String = "",
-        injuries: String = "",
-        userNotes: String = "",
-        workoutsSinceRefresh: Int = 0
-    ) {
-        self.id = id
-        self.lastRefreshed = lastRefreshed
-        self.activityPatterns = activityPatterns
-        self.trainingPatterns = trainingPatterns
-        self.strengthProfile = strengthProfile
-        self.recoveryProfile = recoveryProfile
-        self.exercisePreferences = exercisePreferences
-        self.notableObservations = notableObservations
-        self.pendingObservations = pendingObservations
-        self.injuries = injuries
-        self.userNotes = userNotes
-        self.workoutsSinceRefresh = workoutsSinceRefresh
-    }
-
-    var hasBeenRefreshed: Bool {
-        lastRefreshed != .distantPast
-    }
-
-    var isStale: Bool {
-        Date().daysSince(lastRefreshed) >= 7 || workoutsSinceRefresh >= 5
-    }
-
-    var formattedForPrompt: String {
-        var sections: [String] = []
-
-        if !activityPatterns.isEmpty {
-            sections.append("Activity patterns: \(activityPatterns)")
-        }
-        if !trainingPatterns.isEmpty {
-            sections.append("Training patterns: \(trainingPatterns)")
-        }
-        if !strengthProfile.isEmpty {
-            sections.append("Strength profile: \(strengthProfile)")
-        }
-        if !recoveryProfile.isEmpty {
-            sections.append("Recovery profile: \(recoveryProfile)")
-        }
-        if !exercisePreferences.isEmpty {
-            sections.append("Exercise preferences: \(exercisePreferences)")
-        }
-        if !notableObservations.isEmpty {
-            sections.append("Notable observations: \(notableObservations)")
-        }
-        if !pendingObservations.isEmpty {
-            sections.append("Recent observations (not yet synthesized): \(pendingObservations)")
-        }
-        if !injuries.isEmpty {
-            sections.append("INJURIES/CONCERNS (user-reported): \(injuries)")
-        }
-        if !userNotes.isEmpty {
-            sections.append("User notes: \(userNotes)")
-        }
-
-        return sections.joined(separator: "\n")
-    }
-}
 
 // MARK: - UserRule (explicit user decisions the AI MUST respect)
 
@@ -620,68 +435,6 @@ enum UserRuleKind: String, Codable, CaseIterable {
 }
 
 // MARK: - Observation (AI-discovered patterns — probabilistic)
-
-/// What the AI learned about the user through pattern-finding during an
-/// intelligence refresh. Unlike rules, these are probabilistic — the AI
-/// can weigh them but isn't required to obey them. They supersede on
-/// `(kind, subject)` match during subsequent refreshes (bumping
-/// `lastReinforcedAt`) and auto-archive after 90 days without being
-/// re-observed. Top 5 active ones ride in every plan prompt.
-///
-/// Named `UserObservation` (not bare `Observation`) to avoid collision
-/// with Apple's `Observation` module (which SwiftData types namespace
-/// themselves through).
-@Model
-final class UserObservation {
-    var id: UUID
-    var kindRaw: String
-    /// Scoped identifier so supersede can dedupe — usually an exercise
-    /// name, muscle group, or the literal string "global" for
-    /// cross-cutting findings.
-    var subject: String
-    /// The prose the AI produced. Short, declarative, passed into
-    /// prompts verbatim.
-    var text: String
-    var confidenceRaw: String
-    var createdAt: Date
-    var lastReinforcedAt: Date
-    var isActive: Bool
-
-    init(
-        id: UUID = UUID(),
-        kind: ObservationKind,
-        subject: String,
-        text: String,
-        confidence: ObservationConfidence = .medium,
-        createdAt: Date = Date(),
-        lastReinforcedAt: Date? = nil,
-        isActive: Bool = true
-    ) {
-        self.id = id
-        self.kindRaw = kind.rawValue
-        self.subject = subject
-        self.text = text
-        self.confidenceRaw = confidence.rawValue
-        self.createdAt = createdAt
-        self.lastReinforcedAt = lastReinforcedAt ?? createdAt
-        self.isActive = isActive
-    }
-
-    var kind: ObservationKind {
-        ObservationKind(rawValue: kindRaw) ?? .unknown
-    }
-
-    var confidence: ObservationConfidence {
-        ObservationConfidence(rawValue: confidenceRaw) ?? .medium
-    }
-
-    /// True when the observation hasn't been reinforced in 90 days —
-    /// the refresh job soft-archives these so the active set stays
-    /// current.
-    var isStale: Bool {
-        Date().timeIntervalSince(lastReinforcedAt) > 90 * 24 * 3600
-    }
-}
 
 enum ObservationKind: String, Codable, CaseIterable {
     /// Correlation between two signals ("HRV dips after climbing").
