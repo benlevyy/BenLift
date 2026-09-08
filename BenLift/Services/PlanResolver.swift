@@ -46,7 +46,8 @@ enum PlanResolver {
 
         let sessions = completedSessions(modelContext: modelContext)
         let category = resolveCategory(for: day, sessions: sessions, modelContext: modelContext)
-        let source = lastSession(of: category, in: sessions, before: day)
+        let lookup = exerciseLookup(modelContext: modelContext)
+        let source = lastSession(of: category, in: sessions, before: day, lookup: lookup)
 
         print("[BenLift/Resolver] \(sessions.count) completed sessions; today = \(category.displayName)")
         if let source {
@@ -114,7 +115,9 @@ enum PlanResolver {
         // `sessions` is already newest-first and filtered to ones with real
         // logged work, so the most recent entry is what we advance from.
         // Nothing logged ever → start the cycle at push.
-        guard let last = sessions.first, let lastCategory = category(of: last) else {
+        let lookup = exerciseLookup(modelContext: modelContext)
+        guard let last = sessions.first,
+              let lastCategory = category(of: last, lookup: lookup) else {
             return .push
         }
         return next(after: lastCategory)
@@ -488,10 +491,11 @@ enum PlanResolver {
     private static func lastSession(
         of category: WorkoutCategory,
         in sessions: [WorkoutSession],
-        before day: Date
+        before day: Date,
+        lookup: [String: Exercise]
     ) -> WorkoutSession? {
         sessions.first { session in
-            session.date < day && self.category(of: session) == category
+            session.date < day && self.category(of: session, lookup: lookup) == category
         }
     }
 

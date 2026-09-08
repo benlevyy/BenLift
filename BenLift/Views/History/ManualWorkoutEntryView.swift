@@ -314,8 +314,13 @@ struct ManualWorkoutEntryView: View {
             nil
         }
 
+        // Label it on the way in. Leaving `category` nil is what produced
+        // runs of identically-mislabelled days: every manual session fell
+        // through to inference, and inference used to count `core` — which
+        // belongs to all three categories — so mixed days resolved by tie.
         let session = WorkoutSession(
             date: workoutDate,
+            category: PlanResolver.categoryForMuscleGroups(muscleGroups),
             sessionName: sessionName.isEmpty ? nil : sessionName,
             muscleGroups: muscleGroups,
             duration: duration,

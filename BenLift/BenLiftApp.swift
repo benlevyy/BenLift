@@ -66,6 +66,7 @@ struct BenLiftApp: App {
             DefaultExercises.seedIfNeeded(in: context)
             Self.migrateGoalTextIfNeeded(in: context)
             Self.retireImplicitExerciseRules(in: context)
+            Self.backfillSessionCategories(in: context)
         }
 
         // One-shot: re-save the API key with AfterFirstUnlock so a locked
@@ -160,6 +161,45 @@ struct BenLiftApp: App {
             }
         }
         UserDefaults.standard.set(true, forKey: "didRetireImplicitRules")
+    }
+
+    /// Manually-entered sessions were never labelled — `ManualWorkoutEntryView`
+    /// didn't pass a `category` — so every one of them fell through to
+    /// inference at read time. Inference then counted `core`, which belongs to
+    /// all three categories, so mixed days scored near-ties and resolved
+    /// arbitrarily. Hence long runs of days all labelled the same thing.
+    ///
+    /// Backfill the label once, from the exercises actually logged. Additive
+    /// only: a session that already carries a category is never touched, and
+    /// nothing about the exercises or sets changes.
+    private static func backfillSessionCategories(in context: ModelContext) {
+        guard !UserDefaults.standard.bool(forKey: "didBackfillSessionCategories") else { return }
+
+        let exercises = (try? context.fetch(FetchDescriptor<Exercise>())) ?? []
+        let lookup = Dictionary(
+            exercises.map { ($0.name.lowercased(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let sessions = (try? context.fetch(FetchDescriptor<WorkoutSession>())) ?? []
+        var labelled = 0
+        var undecided = 0
+        for session in sessions where session.category == nil {
+            if let inferred = PlanResolver.inferCategory(of: session, lookup: lookup) {
+                session.category = inferred
+                labelled += 1
+            } else {
+                // A genuine tie, or nothing recognisable. Left alone rather
+                // than guessed at — that guessing is the bug.
+                undecided += 1
+            }
+        }
+
+        if labelled > 0 || undecided > 0 {
+            try? context.save()
+            print("[BenLift] Labelled \(labelled) session(s); \(undecided) left undecided")
+        }
+        UserDefaults.standard.set(true, forKey: "didBackfillSessionCategories")
     }
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
