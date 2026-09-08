@@ -268,11 +268,12 @@ enum PlanResolver {
         modelContext: ModelContext
     ) -> ProgressionResult {
         let sets = entry.workingSets
-        let base = sets.map(\.weight).max() ?? entry.prescribedWeight ?? 0
 
         guard !sets.isEmpty else {
-            return ProgressionResult(weight: base, kind: .new, delta: 0)
+            return ProgressionResult(weight: entry.prescribedWeight ?? 0, kind: .new, delta: 0)
         }
+
+        let base = workingWeight(of: sets) ?? entry.prescribedWeight ?? 0
 
         // No prescribed range means we can't tell "hit the top" from "landed
         // in the middle". Hold rather than guess — one session under the new
@@ -302,6 +303,39 @@ enum PlanResolver {
         return ProgressionResult(weight: base, kind: .held, delta: 0)
     }
 
+    /// The weight you actually worked at, as distinct from the heaviest thing
+    /// you touched.
+    ///
+    /// This used to be `max`, which is wrong in the two most common shapes a
+    /// set list takes. Work up to a top single and back off — 185, 185, 225 —
+    /// and max prescribes 225 for all three sets next time. Fat-finger one
+    /// entry and that number anchors the lift permanently. Both read as the
+    /// app inventing weights.
+    ///
+    /// So: the most frequent weight wins, heavier breaking a tie. Straight
+    /// sets return their weight, back-offs return the working weight rather
+    /// than the top single, and a lone typo loses to the majority. Sets below
+    /// 70% of the top are dropped first — those are warmups that were never
+    /// marked as such, and they'd otherwise win the count on a day with more
+    /// warmup sets than working ones.
+    ///
+    /// A true pyramid, where every set differs, has no majority; the heaviest
+    /// wins the tie, which is the old behaviour and the right answer there.
+    static func workingWeight(of sets: [SetLog]) -> Double? {
+        let weights = sets.map(\.weight).filter { $0 > 0 }
+        guard let top = weights.max() else { return nil }
+
+        let candidates = weights.filter { $0 >= top * 0.7 }
+        guard !candidates.isEmpty else { return top }
+
+        var counts: [Double: Int] = [:]
+        for weight in candidates { counts[weight, default: 0] += 1 }
+
+        return counts
+            .max { a, b in a.value == b.value ? a.key < b.key : a.value < b.value }?
+            .key
+    }
+
     /// True when the two most recent performances of this exercise were both
     /// at the same load — i.e. it already held once and is about to hold again.
     private static func stalled(
@@ -312,7 +346,7 @@ enum PlanResolver {
         let performances: [Double] = history.compactMap { session in
             session.entries
                 .first { $0.exerciseName == exerciseName && !$0.isSkipped }
-                .flatMap { $0.workingSets.map(\.weight).max() }
+                .flatMap { workingWeight(of: $0.workingSets) }
         }
         guard performances.count >= 2 else { return false }
         return abs(performances[0] - weight) < 0.01 && abs(performances[1] - weight) < 0.01

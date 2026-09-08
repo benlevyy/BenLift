@@ -257,6 +257,13 @@ struct WatchWorkoutPlan: Codable {
     /// library to find their usual movements. Optional so older plans (and
     /// the watch's own `startEmptyWorkout`) decode cleanly.
     var recentExercises: [String]? = nil
+    /// Last working weight per exercise name, lower-cased keys, from the
+    /// phone's history. The watch carries its own hardcoded library with
+    /// textbook weights — a bench is 135 whoever you are — so an exercise
+    /// added mid-workout on the watch used to arrive with a number that had
+    /// nothing to do with what the user actually lifts. This is how it gets
+    /// the real one. Optional so older payloads decode.
+    var recentWeights: [String: Double]? = nil
 }
 
 struct WatchExerciseInfo: Codable, Identifiable {

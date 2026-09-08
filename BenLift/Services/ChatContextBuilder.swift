@@ -330,7 +330,7 @@ enum ChatContextBuilder {
             let lifts = session.sortedEntries
                 .filter { !$0.isSkipped && !$0.workingSets.isEmpty }
                 .map { entry -> String in
-                    let top = entry.workingSets.map(\.weight).max() ?? 0
+                    let top = PlanResolver.workingWeight(of: entry.workingSets) ?? 0
                     return "\(entry.exerciseName) \(formatWeight(top))"
                 }
                 .joined(separator: ", ")

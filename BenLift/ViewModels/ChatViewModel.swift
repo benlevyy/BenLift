@@ -224,6 +224,44 @@ final class ChatViewModel {
         }
     }
 
+    // MARK: Watch handoff
+
+    /// Build the payload for Start, carrying enough history that the watch's
+    /// add-exercise picker suggests real weights rather than its hardcoded
+    /// library defaults.
+    ///
+    /// The watch has no database. Anything it needs to know about what the
+    /// user actually lifts has to travel with the plan.
+    func watchPlan(modelContext: ModelContext) -> WatchWorkoutPlan? {
+        guard let plan else { return nil }
+
+        let descriptor = FetchDescriptor<WorkoutSession>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        let sessions = ((try? modelContext.fetch(descriptor)) ?? []).prefix(30)
+
+        var weights: [String: Double] = [:]
+        var frequency: [String: Int] = [:]
+        for session in sessions {
+            for entry in session.entries where !entry.isSkipped {
+                let key = entry.exerciseName.lowercased()
+                frequency[key, default: 0] += 1
+                // Newest wins: sessions are newest-first, so only fill a gap.
+                if weights[key] == nil,
+                   let working = PlanResolver.workingWeight(of: entry.workingSets) {
+                    weights[key] = working
+                }
+            }
+        }
+
+        let recent = frequency
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .prefix(20)
+            .map(\.key)
+
+        return plan.toWatchPlan(recentExercises: Array(recent), recentWeights: weights)
+    }
+
     // MARK: Rule approval
 
     /// Write the rule. Only reachable from the approve button — nothing else

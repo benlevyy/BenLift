@@ -449,8 +449,12 @@ final class ChatToolExecutor {
         for session in sessions {
             if let entry = session.entries.first(where: {
                 $0.exerciseName.lowercased() == name.lowercased() && !$0.isSkipped
-            }), let heaviest = entry.workingSets.map(\.weight).max() {
-                return heaviest
+            }), let working = PlanResolver.workingWeight(of: entry.workingSets) {
+                // Same statistic the resolver uses. Otherwise a lift added
+                // through chat starts at a different number than the identical
+                // lift arriving by replay, which is exactly what "the weights
+                // feel random" is made of.
+                return working
             }
         }
         return exercise(named: name)?.defaultWeight ?? 0

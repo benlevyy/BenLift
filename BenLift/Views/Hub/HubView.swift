@@ -162,7 +162,7 @@ struct HubView: View {
         for session in sessions.prefix(20) {
             for entry in session.sortedEntries where !entry.isSkipped {
                 guard !seen.contains(entry.exerciseName),
-                      let top = entry.workingSets.map(\.weight).max(), top > 0 else { continue }
+                      let top = PlanResolver.workingWeight(of: entry.workingSets), top > 0 else { continue }
                 seen.insert(entry.exerciseName)
                 result.append((entry.exerciseName, top, session.date))
             }

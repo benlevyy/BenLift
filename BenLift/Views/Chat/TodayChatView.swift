@@ -359,7 +359,7 @@ struct TodayChatView: View {
     // MARK: Actions
 
     private func start() {
-        guard let plan = chatVM.plan, let watchPlan = plan.toWatchPlan() else { return }
+        guard let watchPlan = chatVM.watchPlan(modelContext: modelContext) else { return }
         phoneMirroring.startStandaloneSession(plan: watchPlan)
     }
 }

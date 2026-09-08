@@ -215,7 +215,10 @@ extension DailyPlan {
     /// Convert to the payload the Watch and the phone runner both consume.
     /// Returns nil for an empty plan so Start can't launch a session with
     /// nothing in it.
-    func toWatchPlan(recentExercises: [String] = []) -> WatchWorkoutPlan? {
+    func toWatchPlan(
+        recentExercises: [String] = [],
+        recentWeights: [String: Double] = [:]
+    ) -> WatchWorkoutPlan? {
         guard !lifts.isEmpty else { return nil }
 
         let exercises = sortedLifts.map { lift in
@@ -247,7 +250,8 @@ extension DailyPlan {
             // The plan is deterministic unless chat touched it — this flag
             // is what History uses to mark a session as AI-influenced.
             aiPlanUsed: wasEdited,
-            recentExercises: recentExercises.isEmpty ? nil : recentExercises
+            recentExercises: recentExercises.isEmpty ? nil : recentExercises,
+            recentWeights: recentWeights.isEmpty ? nil : recentWeights
         )
     }
 }

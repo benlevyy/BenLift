@@ -87,7 +87,10 @@ struct WatchAddExerciseView: View {
                   !raw.isEmpty else { return [] }
             return raw.compactMap { MuscleGroup(rawValue: $0) }
         }()
-        let pool = Self.exercisePool(for: focus).filter { !alreadyInPlan.contains($0.name) }
+        let pool = Self.exercisePool(
+            for: focus,
+            knownWeights: workoutVM.currentPlan?.recentWeights ?? [:]
+        ).filter { !alreadyInPlan.contains($0.name) }
         guard !searchText.isEmpty else { return pool }
         return pool.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
@@ -140,14 +143,23 @@ struct WatchAddExerciseView: View {
     /// Filter the shared library by muscle-group focus; empty focus returns
     /// the full catalog (manual/empty workout case). Callers still dedupe
     /// against exercises already in the active plan.
-    static func exercisePool(for focus: [MuscleGroup]) -> [WatchExerciseInfo] {
+    /// - Parameter knownWeights: last working weight per exercise, sent down
+    ///   with the plan. The `library` weights below are textbook numbers — a
+    ///   bench is 135 whoever you are — so they're a last resort, used only
+    ///   for a movement with no history. Without this, adding an exercise
+    ///   mid-workout suggested a weight unrelated to what the user lifts,
+    ///   which is most of what "the weights feel random" means on the watch.
+    static func exercisePool(
+        for focus: [MuscleGroup],
+        knownWeights: [String: Double] = [:]
+    ) -> [WatchExerciseInfo] {
         let scoped = focus.isEmpty ? library : library.filter { focus.contains($0.muscleGroup) }
         return scoped.map { item in
             WatchExerciseInfo(
                 name: item.name,
                 sets: 3,
                 targetReps: "8-12",
-                suggestedWeight: item.weight,
+                suggestedWeight: knownWeights[item.name.lowercased()] ?? item.weight,
                 warmupSets: nil,
                 notes: nil,
                 intent: "isolation",
