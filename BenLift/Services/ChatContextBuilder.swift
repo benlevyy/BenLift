@@ -213,7 +213,7 @@ enum ChatContextBuilder {
     private static func recentLiftingLines(modelContext: ModelContext) -> String? {
         let cutoff = Calendar.current.date(byAdding: .day, value: -21, to: Date()) ?? Date()
         let descriptor = FetchDescriptor<WorkoutSession>(
-            sort: [SortDescriptor(\.date, order: .reverse)]
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         let sessions = ((try? modelContext.fetch(descriptor)) ?? [])
             .filter { $0.date >= cutoff }

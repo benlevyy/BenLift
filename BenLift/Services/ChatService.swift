@@ -1,5 +1,25 @@
 import Foundation
 
+// MARK: - System prompt blocks
+
+/// A block of the system prompt. The first block carries the cache breakpoint
+/// so Anthropic caches the stable coaching instructions across calls; volatile
+/// state (today's plan, history) goes in a later, uncached block. Any byte
+/// change in the cached prefix invalidates everything after it, so the split
+/// matters.
+struct SystemBlock {
+    let text: String
+    let isCached: Bool
+
+    static func cached(_ text: String) -> SystemBlock {
+        SystemBlock(text: text, isCached: true)
+    }
+
+    static func dynamic(_ text: String) -> SystemBlock {
+        SystemBlock(text: text, isCached: false)
+    }
+}
+
 // MARK: - Wire types
 
 /// One tool call Claude asked for. `input` is left as a raw dictionary —
@@ -73,7 +93,8 @@ enum ChatServiceError: LocalizedError {
 /// Runs the tool loop: Claude proposes plan edits as `tool_use` blocks, the
 /// caller applies them against SwiftData and hands back results, and the loop
 /// continues until Claude stops calling tools and just answers.
-actor ChatService {
+@MainActor
+final class ChatService {
     private let baseURL = URL(string: "https://api.anthropic.com/v1/messages")!
     private let anthropicVersion = "2023-06-01"
     private let session = URLSession.shared
@@ -93,7 +114,7 @@ actor ChatService {
         history: [(role: String, text: String)],
         systemBlocks: [SystemBlock],
         intelligence: Intelligence,
-        toolHandler: @Sendable @escaping ([ChatToolCall]) async -> [ChatToolResult]
+        toolHandler: @escaping ([ChatToolCall]) async -> [ChatToolResult]
     ) async throws -> ChatTurnResult {
 
         guard let apiKey = KeychainService.load(key: KeychainService.apiKeyKey), !apiKey.isEmpty else {
@@ -148,7 +169,7 @@ actor ChatService {
             messages.append(["role": "assistant", "content": blocks])
 
             let results = await toolHandler(toolCalls)
-            appliedTools.append(contentsOf: toolCalls.map(\.name))
+            appliedTools.append(contentsOf: toolCalls.map { $0.name })
 
             // All results go back in ONE user message — splitting them trains
             // the model out of making parallel calls.
@@ -178,7 +199,7 @@ actor ChatService {
 
         let systemPayload: [[String: Any]] = systemBlocks.map { block in
             var dict: [String: Any] = ["type": "text", "text": block.text]
-            if block.cacheControl != nil {
+            if block.isCached {
                 dict["cache_control"] = ["type": "ephemeral"]
             }
             return dict

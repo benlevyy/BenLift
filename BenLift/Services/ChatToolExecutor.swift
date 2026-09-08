@@ -263,7 +263,7 @@ struct ChatToolExecutor {
         let groupFilter = (call.input["muscle_group"] as? String).flatMap(MuscleGroup.init(rawValue:))
 
         let descriptor = FetchDescriptor<WorkoutSession>(
-            sort: [SortDescriptor(\.date, order: .reverse)]
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         let sessions = ((try? modelContext.fetch(descriptor)) ?? []).filter { $0.date >= cutoff }
         guard !sessions.isEmpty else {
@@ -331,7 +331,7 @@ struct ChatToolExecutor {
     /// Last load actually logged for this lift, else the library default.
     private func suggestedWeight(for name: String) -> Double {
         let descriptor = FetchDescriptor<WorkoutSession>(
-            sort: [SortDescriptor(\.date, order: .reverse)]
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         let sessions = (try? modelContext.fetch(descriptor)) ?? []
         for session in sessions {

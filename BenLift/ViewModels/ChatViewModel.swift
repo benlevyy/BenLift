@@ -69,7 +69,7 @@ final class ChatViewModel {
     }
 
     private static func thread(for day: Date, modelContext: ModelContext) -> ChatThread {
-        let descriptor = FetchDescriptor<ChatThread>(sort: [SortDescriptor(\.date, order: .reverse)])
+        let descriptor = FetchDescriptor<ChatThread>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         let threads = (try? modelContext.fetch(descriptor)) ?? []
         if let existing = threads.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) {
             return existing
@@ -129,9 +129,7 @@ final class ChatViewModel {
                 history: history,
                 systemBlocks: blocks,
                 intelligence: level,
-                toolHandler: { calls in
-                    await MainActor.run { executor.execute(calls) }
-                }
+                toolHandler: { calls in executor.execute(calls) }
             )
 
             let reply = ChatMessage(

@@ -807,22 +807,6 @@ class PhoneWorkoutViewModel {
         optimisticallySkipped.remove(exerciseStates[index].name)
         sendCommand(.unskipExercise(index: index))
     }
-
-    /// Convenience wrapper around `requestAdaptation` for the swipe-left
-    /// gesture. Uses `.other` as the reason so the LLM doesn't over-index on
-    /// "pain" or "too hard" when the user is just asking for an alternative.
-    /// Caller should present `adaptSuggestion` as an inline card on the swiped
-    /// row and auto-accept on tap.
-    @MainActor
-    func swipeSwap(at index: Int, program: TrainingProgram?) async {
-        await requestAdaptation(
-            exerciseIndex: index,
-            reason: .other,
-            details: "User requested an alternative via swipe",
-            program: program
-        )
-    }
-
     // MARK: - AI learning log (SessionEvent)
 
     /// Inspect the diff between the previous and next snapshot and write a

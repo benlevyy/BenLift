@@ -7,7 +7,7 @@ struct DataExportService {
     // MARK: - Export Structs
 
     struct BenLiftBackup: Codable {
-        let version: Int = 1
+        let version: Int
         let exportDate: Date
         let sessions: [SessionBackup]
         let program: ProgramBackup?
@@ -89,7 +89,7 @@ struct DataExportService {
         let isActive: Bool
     }
 
-        struct SessionEventBackup: Codable {
+    struct SessionEventBackup: Codable {
         let id: UUID
         let timestamp: Date
         let kindRaw: String
@@ -170,7 +170,71 @@ struct DataExportService {
             )
         }
 
-        // Analyses
+        // Custom exercises only
+        let exercises = (try? modelContext.fetch(FetchDescriptor<Exercise>(
+            predicate: #Predicate { $0.isCustom == true }
+        ))) ?? []
+        let exerciseBackups = exercises.map { e in
+            ExerciseBackup(
+                name: e.name, muscleGroup: e.muscleGroup.rawValue,
+                equipment: e.equipment.rawValue, defaultWeight: e.defaultWeight
+            )
+        }
+
+        // User rules — durable constraints the resolver enforces in Swift.
+        let rules = (try? modelContext.fetch(FetchDescriptor<UserRule>())) ?? []
+        let ruleBackups = rules.map { r in
+            UserRuleBackup(
+                id: r.id, kindRaw: r.kindRaw, subject: r.subject, target: r.target,
+                reason: r.reason, createdAt: r.createdAt,
+                lastReinforcedAt: r.lastReinforcedAt, isActive: r.isActive
+            )
+        }
+
+        // Session events — the behaviour signal from inside a workout.
+        let events = (try? modelContext.fetch(FetchDescriptor<SessionEvent>())) ?? []
+        let eventBackups = events.map { ev in
+            SessionEventBackup(
+                id: ev.id, timestamp: ev.timestamp, kindRaw: ev.kindRaw,
+                exerciseName: ev.exerciseName, replacementName: ev.replacementName,
+                exerciseIndex: ev.exerciseIndex, contextJSON: ev.contextJSON,
+                sessionDate: ev.sessionDate
+            )
+        }
+
+        // Calendar pins — user-set future-day muscle targets.
+        let pins = (try? modelContext.fetch(FetchDescriptor<MuscleGroupPin>())) ?? []
+        let pinBackups = pins.map { p in
+            MuscleGroupPinBackup(
+                id: p.id, date: p.date, muscleGroups: p.muscleGroups.map(\.rawValue),
+                label: p.label, note: p.note, createdAt: p.createdAt
+            )
+        }
+
+        // Seed patterns — weekday defaults for the week strip.
+        let seeds = (try? modelContext.fetch(FetchDescriptor<SeedPattern>())) ?? []
+        let seedBackups = seeds.map { s in
+            SeedPatternBackup(
+                id: s.id, weekday: s.weekday, muscleGroups: s.muscleGroups.map(\.rawValue),
+                sourceRaw: s.sourceRaw, createdAt: s.createdAt
+            )
+        }
+
+        let backup = BenLiftBackup(
+            version: 1,
+            exportDate: Date(),
+            sessions: sessionBackups,
+            program: programBackup,
+            customExercises: exerciseBackups,
+            userRules: ruleBackups,
+            sessionEvents: eventBackups,
+            muscleGroupPins: pinBackups,
+            seedPatterns: seedBackups
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(backup)
     }
 

@@ -103,7 +103,7 @@ struct PatternEngine {
         // Most-recent-completed-day-per-muscle index — uses derived primary
         // (not the muscleGroups[] array) so cross-muscle days are scored
         // by what they actually trained most.
-        let mostRecentByMuscle: [MuscleGroup: Date] = recentSessions.reduce(into: [:]) { acc, s in
+        _ = recentSessions.reduce(into: [MuscleGroup: Date]()) { acc, s in
             guard let m = primaryByID[s.id] else { return }
             if (acc[m] ?? .distantPast) < s.date { acc[m] = s.date }
         }

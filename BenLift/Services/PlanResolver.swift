@@ -455,7 +455,7 @@ enum PlanResolver {
     // MARK: Fetch helpers
 
     static func existingPlan(on day: Date, modelContext: ModelContext) -> DailyPlan? {
-        let descriptor = FetchDescriptor<DailyPlan>(sort: [SortDescriptor(\.date, order: .reverse)])
+        let descriptor = FetchDescriptor<DailyPlan>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         guard let plans = try? modelContext.fetch(descriptor) else { return nil }
         return plans.first { Calendar.current.isDate($0.date, inSameDayAs: day) }
     }
@@ -463,7 +463,7 @@ enum PlanResolver {
     /// Sessions that actually have logged work, newest first.
     private static func completedSessions(modelContext: ModelContext) -> [WorkoutSession] {
         let descriptor = FetchDescriptor<WorkoutSession>(
-            sort: [SortDescriptor(\.date, order: .reverse)]
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         let all = (try? modelContext.fetch(descriptor)) ?? []
         return all.filter { session in
