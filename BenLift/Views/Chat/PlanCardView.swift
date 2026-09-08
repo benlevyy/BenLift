@@ -10,6 +10,9 @@ struct PlanCardView: View {
     var title: String = "Today's plan"
     var showsStart: Bool = true
     var onStart: (() -> Void)?
+    /// Shown only once chat has edited the plan — before that, the plan on
+    /// screen already is the default, so a reset would do nothing.
+    var onReset: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -25,9 +28,7 @@ struct PlanCardView: View {
                 }
             }
 
-            if let note = plan.resolverNote {
-                provenance(note)
-            }
+            footer
 
             if showsStart {
                 startButton
@@ -177,6 +178,40 @@ struct PlanCardView: View {
     }
 
     // MARK: Footer
+
+    /// Provenance, plus the way back. A plan chat has edited no longer matches
+    /// what the resolver would produce, so it says so and offers to rebuild —
+    /// rather than leaving the footer claiming a lineage that's now wrong.
+    @ViewBuilder
+    private var footer: some View {
+        if plan.wasEdited {
+            HStack(spacing: 6) {
+                Image(systemName: "pencil")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Edited")
+                    .font(.system(size: 11.5))
+                Spacer(minLength: 8)
+                if let onReset {
+                    Button {
+                        Haptics.selection()
+                        onReset()
+                    } label: {
+                        Text("Reset to default")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.accent)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .foregroundStyle(Color.tertiaryText)
+            .padding(.leading, 2)
+        } else if let note = plan.resolverNote {
+            provenance(note)
+        }
+    }
 
     private func provenance(_ note: String) -> some View {
         HStack(spacing: 6) {

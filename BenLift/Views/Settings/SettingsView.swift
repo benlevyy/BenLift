@@ -31,6 +31,7 @@ struct SettingsView: View {
                 librarySection
                 dataSection
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Settings")
             .onAppear { viewModel.loadAPIKey() }
         }
@@ -336,6 +337,11 @@ struct SettingsView: View {
         programs.first { $0.isActive }
     }
 
+    /// A vertical TextEditor has no submit action — Return inserts a newline,
+    /// which is correct for prose and leaves no way to put the keyboard away.
+    /// Hence the toolbar Done.
+    @FocusState private var goalFocused: Bool
+
     private var goalSection: some View {
         Section {
             TextEditor(text: Binding(
@@ -353,6 +359,16 @@ struct SettingsView: View {
             ))
             .frame(minHeight: 110)
             .font(.system(size: 14.5))
+            .focused($goalFocused)
+            .toolbar {
+                if goalFocused {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { goalFocused = false }
+                            .font(.subheadline.bold())
+                    }
+                }
+            }
         } header: {
             Text("Your goal")
         } footer: {

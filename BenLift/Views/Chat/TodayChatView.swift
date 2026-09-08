@@ -13,6 +13,7 @@ struct TodayChatView: View {
 
     @State private var weekStripExpanded = false
     @State private var showIntelligencePicker = false
+    @State private var confirmReset = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -22,6 +23,21 @@ struct TodayChatView: View {
             inputBar
         }
         .background(Color.appBackground)
+        .confirmationDialog(
+            "Reset today's plan?",
+            isPresented: $confirmReset,
+            titleVisibility: .visible
+        ) {
+            Button("Reset to default", role: .destructive) {
+                Haptics.warning()
+                withAnimation(.smooth(duration: 0.3)) {
+                    chatVM.resetPlanToDefault(modelContext: modelContext)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rebuilds from your last session of this type. The changes made in chat are discarded; the conversation stays.")
+        }
         .onAppear {
             chatVM.load(modelContext: modelContext)
             Task {
@@ -114,7 +130,8 @@ struct TodayChatView: View {
                             plan: plan,
                             title: "Today's plan",
                             showsStart: chatVM.latestPlanCardMessageID == nil,
-                            onStart: start
+                            onStart: start,
+                            onReset: { confirmReset = true }
                         )
                         .id("plan-top")
                     }
@@ -208,7 +225,13 @@ struct TodayChatView: View {
                 // collapse so the transcript doesn't stack full plans.
                 if message.producedPlanCard, let plan = chatVM.plan {
                     if message.id == chatVM.latestPlanCardMessageID {
-                        PlanCardView(plan: plan, title: "Updated plan", showsStart: true, onStart: start)
+                        PlanCardView(
+                            plan: plan,
+                            title: "Updated plan",
+                            showsStart: true,
+                            onStart: start,
+                            onReset: { confirmReset = true }
+                        )
                     } else {
                         CollapsedPlanRow(plan: plan, liftCount: plan.lifts.count)
                     }

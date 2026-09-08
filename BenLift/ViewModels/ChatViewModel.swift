@@ -100,6 +100,29 @@ final class ChatViewModel {
         load(modelContext: modelContext)
     }
 
+    /// Discard chat's edits and rebuild today's plan from history.
+    ///
+    /// `reresolve` deliberately refuses to touch an edited plan — those edits
+    /// are the user's and shouldn't evaporate on a stray pull-to-refresh. That
+    /// left no way back to the deterministic plan once chat had touched it,
+    /// which is what this is for. Deliberate, and confirmed at the call site.
+    func resetPlanToDefault(modelContext: ModelContext) {
+        let today = Calendar.current.startOfDay(for: Date())
+
+        if let existing = PlanResolver.existingPlan(on: today, modelContext: modelContext) {
+            modelContext.delete(existing)
+        }
+
+        // The messages that produced those edits no longer describe the plan
+        // on screen, so they stop rendering plan cards. The conversation
+        // itself stays — it's a record of what was said, and still useful
+        // context for the next turn.
+        thread?.messages.forEach { $0.producedPlanCard = false }
+
+        try? modelContext.save()
+        load(modelContext: modelContext)
+    }
+
     private static func thread(for day: Date, modelContext: ModelContext) -> ChatThread {
         let descriptor = FetchDescriptor<ChatThread>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         let threads = (try? modelContext.fetch(descriptor)) ?? []
