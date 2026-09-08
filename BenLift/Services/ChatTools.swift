@@ -111,6 +111,28 @@ enum ChatTools {
         ),
 
         tool(
+            name: "set_focus",
+            description: """
+            Pin what to train on a given day, overriding the push/pull/legs \
+            rotation. Use for "let's do legs today instead", or for planning \
+            around something ahead: "I'm climbing Thursday, do push that day". \
+            days_ahead 0 is today and rebuilds today's plan from scratch, so \
+            only use it when the user wants a different day type, not for \
+            swapping a lift.
+            """,
+            properties: [
+                "muscle_groups": [
+                    "type": "array",
+                    "description": "Muscle groups to train that day.",
+                    "items": ["type": "string", "enum": MuscleGroup.allCases.map(\.rawValue)]
+                ],
+                "days_ahead": integer("0 for today, 1 for tomorrow, and so on."),
+                "note": string("Short reason, shown on the day in the week strip.")
+            ],
+            required: ["muscle_groups", "days_ahead"]
+        ),
+
+        tool(
             name: "query_history",
             description: """
             Look up what the user actually did. Use before answering questions \

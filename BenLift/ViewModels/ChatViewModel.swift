@@ -19,6 +19,11 @@ final class ChatViewModel {
     private(set) var isSending = false
     var sendError: String?
 
+    /// Rules Claude has proposed and the user hasn't answered yet. Rendered
+    /// as an approve/dismiss card in the transcript — nothing is written to
+    /// the database until it's approved.
+    private(set) var pendingRules: [PendingRuleProposal] = []
+
     /// The level the user picked. Auto-escalation can raise a single turn
     /// above this, but never lowers it.
     var intelligence: Intelligence {
@@ -43,6 +48,17 @@ final class ChatViewModel {
     /// safe to call from `onAppear` every time.
     func load(modelContext: ModelContext) {
         let today = Calendar.current.startOfDay(for: Date())
+
+        // A pin set from the week strip lands straight in SwiftData, and
+        // `resolve` never overwrites a stored plan — so without this, pinning
+        // a day after its plan exists silently does nothing.
+        if let stored = PlanResolver.existingPlan(on: today, modelContext: modelContext),
+           !stored.wasEdited,
+           let pinned = PlanResolver.pinnedCategory(on: today, modelContext: modelContext),
+           stored.category != pinned {
+            modelContext.delete(stored)
+            try? modelContext.save()
+        }
 
         let resolved = PlanResolver.resolve(
             for: today,
@@ -160,6 +176,12 @@ final class ChatViewModel {
             reply.thread = thread
             thread.messages.append(reply)
 
+            pendingRules.append(contentsOf: executor.pendingRules)
+            if executor.didChangeFocus {
+                // The day type changed, so the plan was rebuilt underneath us.
+                load(modelContext: modelContext)
+            }
+
             modelContext.insert(AIUsageLog(
                 intelligence: level,
                 inputTokens: result.usage.inputTokens,
@@ -177,6 +199,30 @@ final class ChatViewModel {
             modelContext.delete(userMessage)
             try? modelContext.save()
         }
+    }
+
+    // MARK: Rule approval
+
+    /// Write the rule. Only reachable from the approve button — nothing else
+    /// creates a UserRule any more.
+    func approve(_ proposal: PendingRuleProposal, modelContext: ModelContext) {
+        let rule = UserRule(
+            kind: proposal.kind,
+            subject: proposal.subject,
+            target: proposal.target,
+            reason: proposal.reason
+        )
+        modelContext.insert(rule)
+        try? modelContext.save()
+        pendingRules.removeAll { $0.id == proposal.id }
+
+        // An exerciseOut rule changes what the resolver produces, so today's
+        // plan is out of date the moment it's approved.
+        if proposal.kind == .exerciseOut { reresolve(modelContext: modelContext) }
+    }
+
+    func dismiss(_ proposal: PendingRuleProposal) {
+        pendingRules.removeAll { $0.id == proposal.id }
     }
 
     // MARK: Escalation

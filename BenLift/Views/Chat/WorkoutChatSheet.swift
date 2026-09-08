@@ -24,6 +24,13 @@ struct WorkoutChatSheet: View {
                         ForEach(messages) { message in
                             messageView(message).id(message.id)
                         }
+                        ForEach(chatVM.pendingRules) { proposal in
+                            RuleProposalCard(
+                                proposal: proposal,
+                                onApprove: { chatVM.approve(proposal, modelContext: modelContext) },
+                                onDismiss: { chatVM.dismiss(proposal) }
+                            )
+                        }
                         if chatVM.isSending { thinkingRow }
                         if let error = chatVM.sendError { errorRow(error) }
                         Color.clear.frame(height: 8).id("bottom")

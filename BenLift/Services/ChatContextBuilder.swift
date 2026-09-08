@@ -62,6 +62,15 @@ enum ChatContextBuilder {
     upright rows" is an edit plus create_rule. When he says "remember that", \
     the thing to remember is whatever he just told you.
 
+    create_rule does NOT save anything. It proposes a rule and he gets an \
+    approve/dismiss card. Say what the rule would do in one sentence; never \
+    say it's saved, and don't ask him to confirm in text — the card does that.
+
+    Changing the DAY TYPE is set_focus, not a pile of swaps. "Legs today \
+    instead" is one set_focus call, which rebuilds the plan from his last legs \
+    session. Use it for future days too — "I'm climbing Thursday, do push that \
+    day" pins Thursday and the app honours it when Thursday comes.
+
     ANSWERING
 
     Call query_history before saying anything about weights, progress, or \

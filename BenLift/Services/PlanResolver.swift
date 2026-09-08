@@ -143,7 +143,7 @@ enum PlanResolver {
         }
     }
 
-    private static func pinnedCategory(on day: Date, modelContext: ModelContext) -> WorkoutCategory? {
+    static func pinnedCategory(on day: Date, modelContext: ModelContext) -> WorkoutCategory? {
         let descriptor = FetchDescriptor<MuscleGroupPin>()
         guard let pins = try? modelContext.fetch(descriptor) else { return nil }
         guard let pin = pins.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) else {

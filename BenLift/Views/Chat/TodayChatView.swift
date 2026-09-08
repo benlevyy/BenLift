@@ -124,6 +124,15 @@ struct TodayChatView: View {
                             .id(message.id)
                     }
 
+                    ForEach(chatVM.pendingRules) { proposal in
+                        RuleProposalCard(
+                            proposal: proposal,
+                            onApprove: { chatVM.approve(proposal, modelContext: modelContext) },
+                            onDismiss: { chatVM.dismiss(proposal) }
+                        )
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+
                     if chatVM.isSending {
                         thinkingRow
                     }
@@ -142,6 +151,9 @@ struct TodayChatView: View {
                 chatVM.reresolve(modelContext: modelContext)
             }
             .onChange(of: messages.count) { _, _ in
+                withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: chatVM.pendingRules.count) { _, _ in
                 withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: chatVM.isSending) { _, sending in

@@ -8,24 +8,76 @@ import SwiftData
 /// match anything comes back as a readable tool error rather than throwing,
 /// so Claude can correct itself on the next round instead of the whole turn
 /// failing.
+/// A rule Claude wants to create, held until the user says yes.
+///
+/// Rules are hard filters in the resolver — an excluded lift simply never
+/// appears — so creating one silently is exactly how the old app ended up
+/// with a pile of standing preferences nobody agreed to. Nothing is written
+/// until it's approved.
+struct PendingRuleProposal: Identifiable, Equatable {
+    let id = UUID()
+    let kind: UserRuleKind
+    let subject: String
+    let target: String?
+    let reason: String?
+
+    var summary: String {
+        switch kind {
+        case .exerciseOut:  return "Never program \(subject)"
+        case .preferOver:   return "Use \(target ?? "an alternative") instead of \(subject)"
+        case .equipment:    return subject
+        case .programming:  return subject
+        case .unknown:      return subject
+        }
+    }
+}
+
 @MainActor
-struct ChatToolExecutor {
+final class ChatToolExecutor {
     let modelContext: ModelContext
     let plan: DailyPlan
     /// Set while a workout is running. Edits then land on BOTH the stored
     /// plan and the live session, so "kill the overhead press" between sets
     /// actually changes what the runner (and the Watch) shows — not just
     /// tomorrow's record of today.
-    var liveWorkout: PhoneWorkoutViewModel?
+    let liveWorkout: PhoneWorkoutViewModel?
+    /// Restricts which tools run. Session review gets the read-only set —
+    /// editing a plan from three weeks ago is meaningless.
+    let allowedTools: Set<String>?
+
+    /// Rules proposed this turn, awaiting the user's yes.
+    private(set) var pendingRules: [PendingRuleProposal] = []
+    /// Set when the day's focus changed and the plan has to be rebuilt.
+    private(set) var didChangeFocus = false
+
+    init(
+        modelContext: ModelContext,
+        plan: DailyPlan,
+        liveWorkout: PhoneWorkoutViewModel? = nil,
+        allowedTools: Set<String>? = nil
+    ) {
+        self.modelContext = modelContext
+        self.plan = plan
+        self.liveWorkout = liveWorkout
+        self.allowedTools = allowedTools
+    }
 
     func execute(_ calls: [ChatToolCall]) -> [ChatToolResult] {
         let results = calls.map { call -> ChatToolResult in
+            if let allowedTools, !allowedTools.contains(call.name) {
+                return ChatToolResult(
+                    toolUseId: call.id,
+                    content: "\(call.name) isn't available here — this is a past session, not today's plan.",
+                    isError: true
+                )
+            }
             switch call.name {
             case "replace_exercise": return replaceExercise(call)
             case "add_exercise":     return addExercise(call)
             case "remove_exercise":  return removeExercise(call)
             case "set_load":         return setLoad(call)
             case "reorder":          return reorder(call)
+            case "set_focus":        return setFocus(call)
             case "create_rule":      return createRule(call)
             case "query_history":    return queryHistory(call)
             default:
@@ -216,6 +268,57 @@ struct ChatToolExecutor {
         return ok(call, "Moved \(lift.name) to position \(to + 1).")
     }
 
+    // MARK: - Focus (calendar pins)
+
+    /// Pin a day's muscle groups. The resolver reads today's pin ahead of the
+    /// rotation, so this is the mechanism for "legs today instead" — and for
+    /// future days it just sits there until that day comes round.
+    private func setFocus(_ call: ChatToolCall) -> ChatToolResult {
+        guard let raw = call.input["muscle_groups"] as? [String], !raw.isEmpty else {
+            return error(call, "set_focus needs at least one muscle group.")
+        }
+        let groups = raw.compactMap(MuscleGroup.init(rawValue:))
+        guard !groups.isEmpty else {
+            return error(call, "None of those are muscle groups I know: \(raw.joined(separator: ", ")).")
+        }
+
+        let daysAhead = max(0, call.input["days_ahead"] as? Int ?? 0)
+        guard let target = Calendar.current.date(byAdding: .day, value: daysAhead, to: Date()) else {
+            return error(call, "Couldn't work out which day that is.")
+        }
+        let day = Calendar.current.startOfDay(for: target)
+
+        let descriptor = FetchDescriptor<MuscleGroupPin>()
+        let pins = (try? modelContext.fetch(descriptor)) ?? []
+        if let existing = pins.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) {
+            existing.muscleGroups = groups
+            if let note = call.input["note"] as? String { existing.note = note }
+        } else {
+            let pin = MuscleGroupPin(date: day, muscleGroups: groups)
+            pin.note = call.input["note"] as? String
+            modelContext.insert(pin)
+        }
+
+        let names = groups.map(\.displayName).joined(separator: " + ")
+
+        if daysAhead == 0 {
+            // Today's plan was resolved against the old focus and is stored;
+            // `resolve` never overwrites a stored plan, so it has to go or the
+            // pin does nothing. A different day type makes the old lifts moot
+            // anyway.
+            if let stored = PlanResolver.existingPlan(on: day, modelContext: modelContext) {
+                modelContext.delete(stored)
+            }
+            didChangeFocus = true
+            try? modelContext.save()
+            return ok(call, "Today is now \(names). Rebuilt the plan from the last session of that type — describe it in one sentence.")
+        }
+
+        try? modelContext.save()
+        let when = daysAhead == 1 ? "Tomorrow" : "In \(daysAhead) days"
+        return ok(call, "\(when) is pinned to \(names).")
+    }
+
     // MARK: - Rules
 
     private func createRule(_ call: ChatToolCall) -> ChatToolResult {
@@ -227,22 +330,24 @@ struct ChatToolExecutor {
 
         let descriptor = FetchDescriptor<UserRule>()
         let existing = (try? modelContext.fetch(descriptor)) ?? []
-        if let match = existing.first(where: {
-            $0.kindRaw == kindRaw && $0.subject.lowercased() == subject.lowercased()
+        if existing.contains(where: {
+            $0.isActive && $0.kindRaw == kindRaw && $0.subject.lowercased() == subject.lowercased()
         }) {
-            match.isActive = true
-            match.lastReinforcedAt = Date()
-            return ok(call, "Already had that rule — reinforced it.")
+            return ok(call, "That rule is already active — nothing to change.")
         }
 
-        let rule = UserRule(
+        // Staged, not written. The user approves it in the transcript.
+        pendingRules.append(PendingRuleProposal(
             kind: kind,
             subject: subject,
             target: call.input["target"] as? String,
             reason: call.input["reason"] as? String
-        )
-        modelContext.insert(rule)
-        return ok(call, "Saved: \(subject). It'll shape every future plan.")
+        ))
+
+        return ok(call, """
+        Proposed — waiting on his approval, not saved yet. Tell him what the \
+        rule would do in one short sentence. Do not claim it's saved.
+        """)
     }
 
     private func archiveExerciseOutRule(for name: String) {
