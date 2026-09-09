@@ -42,16 +42,24 @@ struct SplitWeekStrip: View {
                 )
             }
 
-            if !upcoming.isEmpty {
-                HStack(spacing: 5) {
-                    Text("Up next")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.tertiaryText)
-                    Text(upcoming.joined(separator: " → "))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Color.secondaryText)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+            if !plannedAhead.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(plannedAhead) { plan in
+                        HStack(spacing: 6) {
+                            Image(systemName: icon(for: plan.activityType))
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color.flagAmber)
+                                .frame(width: 14)
+                            Text(whenLabel(for: plan.date))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.secondaryText)
+                            Text(plan.note ?? plan.displayName)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Color.secondaryText)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                    }
                 }
                 .padding(.horizontal, 2)
             }
@@ -131,16 +139,25 @@ struct SplitWeekStrip: View {
 
     // MARK: Future — what the rotation will produce
 
-    /// The next entries in the cycle, in order. Deliberately not pinned to
-    /// calendar days: the rotation advances when you train, not when the
-    /// earth turns, so "Pull → Legs → Push" is the truth and "Thursday:
-    /// Legs" would be a guess.
-    private var upcoming: [String] {
-        let days = TrainingSplit.current.days
-        guard days.count > 1 else { return [] }
-        guard let todayName = plan?.dayName,
-              let index = days.firstIndex(where: { $0.name == todayName }) else { return [] }
-        return (1...min(3, days.count)).map { days[(index + $0) % days.count].name }
+    /// What the user has told the coach they're doing on days to come.
+    ///
+    /// This replaced a preview of the rotation's next few day types, which
+    /// was answering a question nobody asks — the cycle is three names long
+    /// and never surprises anyone. What isn't knowable from the app alone is
+    /// tomorrow's climb, so that's what the space shows.
+    private var plannedAhead: [PlannedActivity] {
+        let tomorrow = Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400))
+        return PlannedActivity.upcoming(in: modelContext)
+            .filter { $0.date >= tomorrow }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    private func whenLabel(for date: Date) -> String {
+        if Calendar.current.isDateInTomorrow(date) { return "Tomorrow" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE"
+        return formatter.string(from: date)
     }
 
     // MARK: Cell

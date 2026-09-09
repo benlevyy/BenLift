@@ -319,6 +319,7 @@ struct SettingsView: View {
         try? modelContext.delete(model: UserRule.self)
         try? modelContext.delete(model: SessionEvent.self)
         try? modelContext.delete(model: MuscleGroupPin.self)
+        try? modelContext.delete(model: PlannedActivity.self)
         try? modelContext.delete(model: ActivityLog.self)
         // The rebuild's own tables — a plan and thread for a day whose
         // sessions no longer exist would be stale nonsense.

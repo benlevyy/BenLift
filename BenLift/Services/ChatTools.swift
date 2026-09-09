@@ -130,6 +130,29 @@ enum ChatTools {
         ),
 
         tool(
+            name: "plan_activity",
+            description: """
+            Record cross-training the user is doing on a future day — "I'm \
+            climbing tomorrow", "long run Saturday". HealthKit only knows \
+            what already happened, so this is the only way the app learns \
+            about it in advance. Use it whenever they mention a future \
+            session, even in passing. Set cancel true to remove one they've \
+            called off. This is for non-lifting activity only; lifting days \
+            come from the split rotation.
+            """,
+            properties: [
+                "activity_type": enumString(
+                    "What they're doing.",
+                    PlannedActivity.knownTypes
+                ),
+                "days_ahead": integer("1 for tomorrow, 2 for the day after, and so on."),
+                "note": string("Anything they said about it — \"long one\", \"just easy miles\"."),
+                "cancel": boolean("True to remove a previously recorded plan for that day.")
+            ],
+            required: ["activity_type", "days_ahead"]
+        ),
+
+        tool(
             name: "query_history",
             description: """
             Look up what the user actually did. Use before answering questions \
@@ -191,6 +214,10 @@ enum ChatTools {
 
     private static func number(_ description: String) -> [String: Any] {
         ["type": "number", "description": description]
+    }
+
+    private static func boolean(_ description: String) -> [String: Any] {
+        ["type": "boolean", "description": description]
     }
 
     private static func enumString(_ description: String, _ values: [String]) -> [String: Any] {

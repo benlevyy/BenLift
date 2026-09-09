@@ -28,6 +28,8 @@ struct BenLiftApp: App {
             // Today-override carrier — written by chat's set_focus, read by
             // the resolver ahead of the rotation.
             MuscleGroupPin.self,
+            // Future cross-training the user has told the coach about.
+            PlannedActivity.self,
             // Chat-first rebuild: the deterministic plan, the daily thread,
             // and the API spend log.
             DailyPlan.self,
@@ -68,6 +70,7 @@ struct BenLiftApp: App {
             Self.retireImplicitExerciseRules(in: context)
             Self.backfillSessionCategories(in: context)
             Self.clearFutureDatedPins(in: context)
+            PlannedActivity.pruneStale(in: context)
         }
 
         // One-shot: re-save the API key with AfterFirstUnlock so a locked

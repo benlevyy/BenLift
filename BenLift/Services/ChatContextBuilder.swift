@@ -169,8 +169,15 @@ enum ChatContextBuilder {
     Changing the DAY TYPE is set_focus, not a pile of swaps. "Legs today \
     instead" is one set_focus call, which rebuilds the plan from their last \
     session of that day type. It only applies to today — if they ask you to \
-    plan a future day, say the rotation handles it and they can change any \
-    day when it arrives.
+    plan a future LIFTING day, say the rotation handles it and they can \
+    change any day when it arrives.
+
+    Future cross-training is different, and worth catching. The app only \
+    learns about a climb or a run after HealthKit records it, so when they \
+    mention one that hasn't happened — "climbing tomorrow", "long run \
+    Saturday" — call plan_activity, even if they only said it in passing. \
+    Acknowledge it in a few words. Don't rework today's plan around it \
+    unless they ask; knowing is the point, and they can decide what it means.
 
     ANSWERING
 
@@ -233,6 +240,14 @@ enum ChatContextBuilder {
         }
         if let cross = crossTrainingLines(crossTraining) {
             sections.append("OTHER TRAINING, LAST 7 DAYS\n\(cross)")
+        }
+        if let planned = plannedLines(modelContext: modelContext) {
+            sections.append("""
+            WHAT THEY'VE TOLD YOU IS COMING
+            \(planned)
+            Recorded by them, not observed. Worth weighing when they ask what \
+            to do today; not a reason to change the plan on your own.
+            """)
         }
         if let history = recentLiftingLines(modelContext: modelContext) {
             sections.append("RECENT LIFTING\n\(history)")
@@ -305,6 +320,20 @@ enum ChatContextBuilder {
             var line = "- \(rule.subject)"
             if let target = rule.target { line += " → use \(target)" }
             if let reason = rule.reason, !reason.isEmpty { line += " (\(reason))" }
+            return line
+        }.joined(separator: "\n")
+    }
+
+    private static func plannedLines(modelContext: ModelContext) -> String? {
+        let tomorrow = Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400))
+        let upcoming = PlannedActivity.upcoming(in: modelContext).filter { $0.date >= tomorrow }
+        guard !upcoming.isEmpty else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE d MMM"
+        return upcoming.prefix(5).map { plan in
+            var line = "- \(formatter.string(from: plan.date)): \(plan.activityType)"
+            if let note = plan.note, !note.isEmpty { line += " (\(note))" }
             return line
         }.joined(separator: "\n")
     }

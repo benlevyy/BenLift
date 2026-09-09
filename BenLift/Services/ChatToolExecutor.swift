@@ -80,6 +80,7 @@ final class ChatToolExecutor {
             case "set_load":         return setLoad(call)
             case "reorder":          return reorder(call)
             case "set_focus":        return setFocus(call)
+            case "plan_activity":    return planActivity(call)
             case "create_rule":      return createRule(call)
             case "query_history":    return queryHistory(call)
             default:
@@ -314,6 +315,56 @@ final class ChatToolExecutor {
 
         let names = groups.map(\.displayName).joined(separator: " + ")
         return ok(call, "Today is now \(names). Rebuilt the plan from the last session of that type — describe it in one sentence.")
+    }
+
+    // MARK: - Future cross-training
+
+    /// Record (or cancel) a non-lifting session on a future day.
+    ///
+    /// Deliberately does not touch the plan. Knowing about tomorrow's climb
+    /// is context for the conversation and something to see in the strip; if
+    /// it should change today's training, that's a judgement to make out
+    /// loud rather than a rule to apply silently.
+    private func planActivity(_ call: ChatToolCall) -> ChatToolResult {
+        guard let type = call.input["activity_type"] as? String,
+              PlannedActivity.knownTypes.contains(type) else {
+            return error(call, "plan_activity needs one of: \(PlannedActivity.knownTypes.joined(separator: ", ")).")
+        }
+        guard let daysAhead = call.input["days_ahead"] as? Int, daysAhead >= 1, daysAhead <= 21 else {
+            return error(call, "days_ahead must be between 1 and 21.")
+        }
+        guard let target = Calendar.current.date(byAdding: .day, value: daysAhead, to: Date()) else {
+            return error(call, "Couldn't work out which day that is.")
+        }
+        let day = Calendar.current.startOfDay(for: target)
+        let cancelling = call.input["cancel"] as? Bool ?? false
+
+        let existing = ((try? modelContext.fetch(FetchDescriptor<PlannedActivity>())) ?? [])
+            .filter { Calendar.current.isDate($0.date, inSameDayAs: day) && $0.activityType == type }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE"
+        let when = daysAhead == 1 ? "tomorrow" : formatter.string(from: day)
+
+        if cancelling {
+            guard !existing.isEmpty else {
+                return ok(call, "Nothing was recorded for \(when) anyway.")
+            }
+            for plan in existing { modelContext.delete(plan) }
+            return ok(call, "Cleared \(type) for \(when).")
+        }
+
+        if let already = existing.first {
+            if let note = call.input["note"] as? String { already.note = note }
+            return ok(call, "Already had \(type) down for \(when).")
+        }
+
+        modelContext.insert(PlannedActivity(
+            date: day,
+            activityType: type,
+            note: call.input["note"] as? String
+        ))
+        return ok(call, "Noted — \(type) \(when). Acknowledge it in a few words; don't change today's plan over it unless they ask.")
     }
 
     // MARK: - Rules
