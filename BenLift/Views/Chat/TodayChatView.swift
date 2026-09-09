@@ -14,6 +14,7 @@ struct TodayChatView: View {
     @State private var weekStripExpanded = false
     @State private var showIntelligencePicker = false
     @State private var confirmReset = false
+    @State private var confirmClearChat = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -37,6 +38,21 @@ struct TodayChatView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Rebuilds from your last session of this type. The changes made in chat are discarded; the conversation stays.")
+        }
+        .confirmationDialog(
+            "Clear today's chat?",
+            isPresented: $confirmClearChat,
+            titleVisibility: .visible
+        ) {
+            Button("Clear chat", role: .destructive) {
+                Haptics.warning()
+                withAnimation(.smooth(duration: 0.3)) {
+                    chatVM.clearChat(modelContext: modelContext)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deletes today's conversation. The plan stays as it is — reset it separately if you want the default back.")
         }
         .onAppear {
             chatVM.load(modelContext: modelContext)
@@ -78,6 +94,29 @@ struct TodayChatView: View {
 
                 if phoneMirroring.phoneWorkoutVM.isWorkoutActive {
                     resumeButton
+                }
+
+                Menu {
+                    Button {
+                        confirmReset = true
+                    } label: {
+                        Label("Reset plan to default", systemImage: "arrow.counterclockwise")
+                    }
+                    .disabled(!(chatVM.plan?.wasEdited ?? false))
+
+                    Button(role: .destructive) {
+                        confirmClearChat = true
+                    } label: {
+                        Label("Clear today's chat", systemImage: "trash")
+                    }
+                    .disabled(!chatVM.hasConversation)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.secondaryText)
+                        .frame(width: 34, height: 34)
+                        .background(Color.cardSurface)
+                        .clipShape(Circle())
                 }
             }
             .padding(.horizontal, 20)
@@ -124,16 +163,23 @@ struct TodayChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     if let plan = chatVM.plan {
-                        // The opening card only shows Start when no later
-                        // edit has produced a newer one.
-                        PlanCardView(
-                            plan: plan,
-                            title: "Today's plan",
-                            showsStart: chatVM.latestPlanCardMessageID == nil,
-                            onStart: start,
-                            onReset: { confirmReset = true }
-                        )
-                        .id("plan-top")
+                        // Live card until an edit supersedes it — then it
+                        // collapses to the resolver's original, reopenable.
+                        // Before snapshots, this card kept showing the edited
+                        // plan, duplicating the latest card below it.
+                        if chatVM.latestPlanCardMessageID == nil {
+                            PlanCardView(
+                                plan: plan,
+                                title: "Today's plan",
+                                showsStart: true,
+                                onStart: start,
+                                onReset: { confirmReset = true }
+                            )
+                            .id("plan-top")
+                        } else if let original = plan.originalSnapshot {
+                            CollapsedPlanRow(snapshot: original)
+                                .id("plan-top")
+                        }
                     }
 
                     ForEach(messages) { message in
@@ -223,8 +269,8 @@ struct TodayChatView: View {
 
                 // The edited plan re-renders as a fresh card; earlier ones
                 // collapse so the transcript doesn't stack full plans.
-                if message.producedPlanCard, let plan = chatVM.plan {
-                    if message.id == chatVM.latestPlanCardMessageID {
+                if message.producedPlanCard {
+                    if message.id == chatVM.latestPlanCardMessageID, let plan = chatVM.plan {
                         PlanCardView(
                             plan: plan,
                             title: "Updated plan",
@@ -232,8 +278,8 @@ struct TodayChatView: View {
                             onStart: start,
                             onReset: { confirmReset = true }
                         )
-                    } else {
-                        CollapsedPlanRow(plan: plan, liftCount: plan.lifts.count)
+                    } else if let snapshot = message.planSnapshot {
+                        CollapsedPlanRow(snapshot: snapshot)
                     }
                 }
             }

@@ -21,6 +21,9 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 structureSection
+                if trainingSplitRaw == TrainingSplit.custom.rawValue {
+                    CustomSplitDaysSection()
+                }
                 goalSection
                 usageSection
                 rulesSection

@@ -100,6 +100,10 @@ enum PlanResolver {
             crossTrainingFlag: flag
         )
 
+        // Freeze the default before chat can touch it, so there is always a
+        // "what the resolver said" to reopen after edits supersede the card.
+        plan.originalSnapshot = PlanSnapshot(of: plan, title: "Today's plan")
+
         modelContext.insert(plan)
         try? modelContext.save()
         return plan

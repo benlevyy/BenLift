@@ -277,26 +277,75 @@ struct PlanCardView: View {
 
 // MARK: - Collapsed (superseded) card
 
-/// What a plan card shrinks to once a later edit has replaced it. Keeps the
-/// transcript readable instead of stacking full plans.
+/// A plan version that has been superseded by a later edit. Collapsed to one
+/// line so the transcript doesn't stack full plans; tapping opens the frozen
+/// snapshot read-only — what the plan looked like at that moment, not what it
+/// looks like now.
 struct CollapsedPlanRow: View {
-    let plan: DailyPlan
-    let liftCount: Int
+    let snapshot: PlanSnapshot
+    @State private var expanded = false
 
     var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 12, weight: .semibold))
-            Text("\(plan.displayName) · \(liftCount) lift\(liftCount == 1 ? "" : "s")")
-                .font(.system(size: 13))
-            Spacer()
-            Text("superseded")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.tertiaryText)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                Haptics.selection()
+                withAnimation(.smooth(duration: 0.25)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.tertiaryText)
+                        .frame(width: 12)
+                    Text("\(snapshot.title) · \(snapshot.lifts.count) lift\(snapshot.lifts.count == 1 ? "" : "s")")
+                        .font(.system(size: 13))
+                    Spacer()
+                    Text("superseded")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.tertiaryText)
+                }
+                .foregroundStyle(Color.secondaryText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(spacing: 3) {
+                    ForEach(Array(snapshot.lifts.enumerated()), id: \.offset) { _, lift in
+                        HStack(spacing: 8) {
+                            Text(lift.name)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color.bodyText)
+                                .lineLimit(1)
+                            if let note = lift.note {
+                                Text(note)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.tertiaryText)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 6)
+                            Text("\(lift.sets) × \(lift.targetReps)")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.secondaryText)
+                                .monospacedDigit()
+                            Text(lift.weight.truncatingRemainder(dividingBy: 1) == 0
+                                 ? String(Int(lift.weight))
+                                 : String(format: "%.1f", lift.weight))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.bodyText)
+                                .monospacedDigit()
+                                .frame(minWidth: 34, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                    }
+                }
+                .padding(.bottom, 10)
+                .transition(.opacity)
+            }
         }
-        .foregroundStyle(Color.secondaryText)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
         .background(Color.cardSurface.opacity(0.7))
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
     }

@@ -38,6 +38,41 @@ struct CrossTrainingFlag: Codable, Equatable {
     var appliedAdjustments: [String]
 }
 
+// MARK: - Plan snapshot
+
+/// A frozen copy of a plan's lifts at a moment in time.
+///
+/// The live plan is mutated in place by chat edits, so "the plan before that
+/// swap" doesn't exist anywhere unless it was captured. The resolver captures
+/// one at creation (the pristine default), and every chat edit captures one
+/// on the message that made it — which is what lets superseded cards in the
+/// transcript collapse and still be reopened.
+struct PlanSnapshot: Codable, Equatable {
+    struct Lift: Codable, Equatable {
+        var name: String
+        var sets: Int
+        var targetReps: String
+        var weight: Double
+        var note: String?
+    }
+
+    var title: String
+    var lifts: [Lift]
+
+    init(of plan: DailyPlan, title: String) {
+        self.title = title
+        self.lifts = plan.sortedLifts.map { lift in
+            Lift(
+                name: lift.name,
+                sets: lift.sets,
+                targetReps: lift.targetReps,
+                weight: lift.weight,
+                note: lift.usesStraps ? "straps" : lift.noteText
+            )
+        }
+    }
+}
+
 // MARK: - Daily Plan
 
 /// Today's resolved plan. Written once by `PlanResolver` on first open of
@@ -67,6 +102,10 @@ final class DailyPlan {
     /// 1.0 normally; 0.9 when the last session of this type is >14 days old.
     var stalenessScale: Double
     var crossTrainingFlagData: Data?
+    /// The plan exactly as the resolver produced it, before any chat edit —
+    /// what the collapsed "Today's plan" row reopens to once edits have
+    /// superseded it. Written once at resolve time, never updated.
+    var originalSnapshotData: Data?
     /// Set once chat (or a manual edit) has touched the plan, so a later
     /// resolve knows not to clobber it.
     var wasEdited: Bool
@@ -113,6 +152,11 @@ final class DailyPlan {
     var crossTrainingFlag: CrossTrainingFlag? {
         get { crossTrainingFlagData?.decodeJSON(CrossTrainingFlag.self) }
         set { crossTrainingFlagData = newValue.flatMap { Data.encodeJSON($0) } }
+    }
+
+    var originalSnapshot: PlanSnapshot? {
+        get { originalSnapshotData?.decodeJSON(PlanSnapshot.self) }
+        set { originalSnapshotData = newValue.flatMap { Data.encodeJSON($0) } }
     }
 
     var sortedLifts: [PlannedLift] {

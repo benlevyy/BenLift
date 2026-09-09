@@ -61,8 +61,16 @@ final class ChatViewModel {
             // The split changed in Settings — an unedited plan for a day type
             // the split no longer has is rebuilt on next open. This is the
             // only wiring the Settings picker needs.
-            if let storedDayName, !split.days.contains(where: { $0.name == storedDayName }) {
-                invalid = true
+            if let storedDayName {
+                if let day = split.days.first(where: { $0.name == storedDayName }) {
+                    // Same day name, different muscles — a custom day was
+                    // edited. The plan no longer trains what the day says.
+                    if Set(day.muscleGroups) != Set(stored.muscleGroups) {
+                        invalid = true
+                    }
+                } else {
+                    invalid = true
+                }
             }
 
             if let pinned = PlanResolver.pinnedDay(on: today, split: split, modelContext: modelContext),
@@ -226,6 +234,12 @@ final class ChatViewModel {
             reply.thread = thread
             thread.messages.append(reply)
 
+            // Freeze what the plan looks like after this turn's edits, so the
+            // card can be reopened after a later edit supersedes it.
+            if reply.producedPlanCard, let plan {
+                reply.planSnapshot = PlanSnapshot(of: plan, title: "Updated plan")
+            }
+
             pendingRules.append(contentsOf: executor.pendingRules)
             if executor.didChangeFocus {
                 // The day type changed, so the plan was rebuilt underneath us.
@@ -287,6 +301,22 @@ final class ChatViewModel {
             .map(\.key)
 
         return plan.toWatchPlan(recentExercises: Array(recent), recentWeights: weights)
+    }
+
+    // MARK: Clearing
+
+    /// Wipe today's conversation. The plan is untouched — an edited plan
+    /// stays edited (the card footer still offers Reset to default), and the
+    /// next message starts from a clean context.
+    func clearChat(modelContext: ModelContext) {
+        guard let thread else { return }
+        for message in thread.messages {
+            modelContext.delete(message)
+        }
+        thread.messages.removeAll()
+        pendingRules.removeAll()
+        sendError = nil
+        try? modelContext.save()
     }
 
     // MARK: Rule approval

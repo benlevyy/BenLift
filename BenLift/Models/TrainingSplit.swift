@@ -10,10 +10,35 @@ struct SplitDay: Equatable {
 /// an ordered list of days — the resolver walks the cycle, matches history
 /// against each day's muscle groups, and replays. Adding a split here is the
 /// whole job of adding one to the app.
+/// One user-defined day of a custom split, persisted as JSON in UserDefaults
+/// — it's configuration, not training data, so it lives beside the split
+/// selection rather than in SwiftData.
+struct CustomSplitDay: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var name: String
+    var muscleGroupsRaw: [String]
+
+    var muscleGroups: [MuscleGroup] {
+        muscleGroupsRaw.compactMap(MuscleGroup.init(rawValue:))
+    }
+
+    static let storageKey = "customSplitDays"
+
+    static func load() -> [CustomSplitDay] {
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return [] }
+        return data.decodeJSON([CustomSplitDay].self) ?? []
+    }
+
+    static func save(_ days: [CustomSplitDay]) {
+        UserDefaults.standard.set(Data.encodeJSON(days), forKey: storageKey)
+    }
+}
+
 enum TrainingSplit: String, Codable, CaseIterable, Identifiable {
     case pushPullLegs
     case upperLower
     case fullBody
+    case custom
 
     var id: String { rawValue }
 
@@ -31,6 +56,7 @@ enum TrainingSplit: String, Codable, CaseIterable, Identifiable {
         case .pushPullLegs: return "Push / Pull / Legs"
         case .upperLower: return "Upper / Lower"
         case .fullBody: return "Full Body"
+        case .custom: return "Custom"
         }
     }
 
@@ -53,6 +79,15 @@ enum TrainingSplit: String, Codable, CaseIterable, Identifiable {
                     .chest, .back, .shoulders, .quads, .hamstrings, .glutes, .core,
                 ]),
             ]
+        case .custom:
+            // A day needs a name and at least one muscle group to be usable —
+            // the editor enforces that, and this filters anything that slips
+            // through. An empty custom split falls back to push/pull/legs so
+            // the resolver never walks an empty cycle.
+            let days = CustomSplitDay.load()
+                .filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty && !$0.muscleGroups.isEmpty }
+                .map { SplitDay(name: $0.name, muscleGroups: $0.muscleGroups + [.core]) }
+            return days.isEmpty ? TrainingSplit.pushPullLegs.days : days
         }
     }
 

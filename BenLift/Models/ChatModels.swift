@@ -105,6 +105,9 @@ final class ChatMessage {
     var appliedToolsData: Data?
     /// True when this assistant turn produced a new plan card.
     var producedPlanCard: Bool
+    /// The plan as it stood after this turn's edits — what the collapsed card
+    /// for this message reopens to once a later edit supersedes it.
+    var planSnapshotData: Data?
     var thread: ChatThread?
 
     init(
@@ -142,5 +145,10 @@ final class ChatMessage {
     var appliedTools: [String] {
         get { appliedToolsData?.decodeJSON([String].self) ?? [] }
         set { appliedToolsData = newValue.isEmpty ? nil : Data.encodeJSON(newValue) }
+    }
+
+    var planSnapshot: PlanSnapshot? {
+        get { planSnapshotData?.decodeJSON(PlanSnapshot.self) }
+        set { planSnapshotData = newValue.flatMap { Data.encodeJSON($0) } }
     }
 }
