@@ -87,7 +87,7 @@ enum ChatContextBuilder {
         formatter.dateFormat = "EEEE d MMMM yyyy"
         var header = "THE SESSION THEY'RE LOOKING AT\n\(formatter.string(from: session.date)) — \(session.displayName)"
         if let duration = session.duration, duration > 0 {
-            header += " · \(TimeInterval(duration).formattedDurationShort)"
+            header += " · \(TimeInterval(duration).spokenDuration)"
         }
         if let feeling = session.feeling {
             header += " · felt \(feeling)/5"
@@ -343,9 +343,11 @@ enum ChatContextBuilder {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE"
         return activities.prefix(10).map { activity in
-            var line = "- \(formatter.string(from: activity.date)): \(activity.type) \(activity.duration.formattedDurationShort)"
+            // Units spelled out: "50m" beside a ride was being read as 50
+            // miles rather than 50 minutes.
+            var line = "- \(formatter.string(from: activity.date)): \(activity.type), \(activity.duration.spokenDuration)"
             if let miles = activity.distanceMiles, miles > 0 {
-                line += String(format: ", %.1fmi", miles)
+                line += String(format: ", %.1f miles", miles)
             }
             return line
         }.joined(separator: "\n")

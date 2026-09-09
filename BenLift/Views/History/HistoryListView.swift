@@ -6,7 +6,7 @@ struct HistoryListView: View {
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
     @State private var showClearConfirm = false
     @State private var showManualEntry = false
-    @State private var activities: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = []
+    @State private var activities: [(type: String, date: Date, duration: TimeInterval, distanceMiles: Double?, calories: Double?, source: String)] = []
     /// Search query — filters the timeline to sessions containing any
     /// exercise whose name matches (case-insensitive contains). Empty
     /// string = show everything, including HealthKit activities.
@@ -15,7 +15,7 @@ struct HistoryListView: View {
     // Unified timeline item
     private enum TimelineItem: Identifiable {
         case workout(WorkoutSession)
-        case activity(index: Int, type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)
+        case activity(index: Int, type: String, date: Date, duration: TimeInterval, distanceMiles: Double?, calories: Double?, source: String)
 
         var id: String {
             switch self {
@@ -54,7 +54,10 @@ struct HistoryListView: View {
         // search-result list focused on lifts.
         if !filterActive {
             for (i, act) in activities.enumerated() {
-                items.append(.activity(index: i, type: act.type, date: act.date, duration: act.duration, calories: act.calories, source: act.source))
+                items.append(.activity(
+                    index: i, type: act.type, date: act.date, duration: act.duration,
+                    distanceMiles: act.distanceMiles, calories: act.calories, source: act.source
+                ))
             }
         }
         return items.sorted { $0.date > $1.date }
@@ -85,8 +88,8 @@ struct HistoryListView: View {
                                 } label: {
                                     sessionRow(session)
                                 }
-                            case .activity(_, let type, let date, let duration, let calories, let source):
-                                activityRow(type: type, date: date, duration: duration, calories: calories, source: source)
+                            case .activity(_, let type, let date, let duration, let miles, let calories, let source):
+                                activityRow(type: type, date: date, duration: duration, distanceMiles: miles, calories: calories, source: source)
                             }
                         }
                         .onDelete { offsets in
@@ -148,7 +151,7 @@ struct HistoryListView: View {
 
     // MARK: - Activity Row
 
-    private func activityRow(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String) -> some View {
+    private func activityRow(type: String, date: Date, duration: TimeInterval, distanceMiles: Double?, calories: Double?, source: String) -> some View {
         HStack(spacing: 12) {
             Image(systemName: activityIcon(type))
                 .font(.body)
@@ -168,6 +171,11 @@ struct HistoryListView: View {
                     Text(duration.formattedDuration)
                         .font(.caption)
                         .foregroundColor(.secondaryText)
+                    if let miles = distanceMiles, miles > 0 {
+                        Text(String(format: "%.1f mi", miles))
+                            .font(.caption)
+                            .foregroundColor(.secondaryText)
+                    }
                     if let cal = calories {
                         Text("\(Int(cal)) cal")
                             .font(.caption)

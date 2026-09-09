@@ -557,9 +557,9 @@ enum PlanResolver {
         }
         // Distance is the more meaningful number when there is one.
         if let miles = activity.distanceMiles, miles > 0 {
-            return "\(verb) \(String(format: "%.1f", miles))mi \(when)"
+            return "\(verb) \(String(format: "%.1f", miles)) miles \(when)"
         }
-        return "\(verb) \(activity.duration.formattedDurationShort) \(when)"
+        return "\(verb) for \(activity.duration.spokenDuration) \(when)"
     }
 
     /// Names that are grip-limited (straps help) or redundant forearm work
@@ -666,6 +666,19 @@ enum PlanResolver {
 
 extension TimeInterval {
     /// "1h 20m" / "45m" — for the cross-training flag headline.
+    /// Duration for text a language model reads. "50m" is genuinely
+    /// ambiguous next to a bike ride — it was being read as 50 miles — so
+    /// this always spells the unit out. Never use `formattedDurationShort`
+    /// in a prompt.
+    var spokenDuration: String {
+        let totalMinutes = Int(self) / 60
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)min" : "\(hours)h" }
+        return "\(minutes) min"
+    }
+
+    /// Compact form for UI, where a duration is unmistakable in context.
     var formattedDurationShort: String {
         let totalMinutes = Int(self) / 60
         let hours = totalMinutes / 60

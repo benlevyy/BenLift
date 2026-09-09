@@ -117,7 +117,7 @@ final class ChatViewModel {
                 type: $0.type,
                 date: $0.date,
                 duration: $0.duration,
-                distanceMiles: nil
+                distanceMiles: $0.distanceMiles
             )
         }
     }

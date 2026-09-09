@@ -148,10 +148,10 @@ class HealthKitService {
     /// same rows. Three minutes is long enough to absorb a launch and a bit
     /// of tab-switching, short enough that a workout finishing elsewhere
     /// still shows up promptly.
-    private var activitiesCache: [Int: (fetched: Date, rows: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)])] = [:]
+    private var activitiesCache: [Int: (fetched: Date, rows: [(type: String, date: Date, duration: TimeInterval, distanceMiles: Double?, calories: Double?, source: String)])] = [:]
     private let activitiesCacheTTL: TimeInterval = 180
 
-    func fetchRecentActivities(days: Int = 7) async -> [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] {
+    func fetchRecentActivities(days: Int = 7) async -> [(type: String, date: Date, duration: TimeInterval, distanceMiles: Double?, calories: Double?, source: String)] {
         if let cached = activitiesCache[days],
            Date().timeIntervalSince(cached.fetched) < activitiesCacheTTL {
             return cached.rows
@@ -169,7 +169,7 @@ class HealthKitService {
             let workouts = try await descriptor.result(for: healthStore)
             debugLog("[BenLift/HK] fetchRecentActivities: HealthKit returned \(workouts.count) raw workouts in last \(days)d")
 
-            let filtered: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] = workouts.compactMap { workout in
+            let filtered: [(type: String, date: Date, duration: TimeInterval, distanceMiles: Double?, calories: Double?, source: String)] = workouts.compactMap { workout in
                 // Skip our own strength training workouts
                 if workout.workoutActivityType == .traditionalStrengthTraining {
                     // Check if it's from BenLift — skip those
@@ -183,12 +183,19 @@ class HealthKitService {
                 let calories = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())
                 let source = workout.sourceRevision.source.name
 
-                return (type: type, date: workout.startDate, duration: workout.duration, calories: calories, source: source)
+                return (
+                    type: type,
+                    date: workout.startDate,
+                    duration: workout.duration,
+                    distanceMiles: distanceMiles(of: workout),
+                    calories: calories,
+                    source: source
+                )
             }
             if filtered.isEmpty {
                 debugLog("[BenLift/HK] fetchRecentActivities: no non-BenLift activities — if you expected one, check Health app > Browse > Workouts, and confirm BenLift has read access in Settings > Health > Data Access & Devices.")
             } else {
-                debugLog("[BenLift/HK] fetchRecentActivities: \(filtered.count) activities -> \(filtered.map { "\($0.date.shortFormatted) \($0.type)" }.joined(separator: ", "))")
+                debugLog("[BenLift/HK] fetchRecentActivities: \(filtered.count) activities -> \(filtered.map { "\($0.date.shortFormatted) \($0.type)\($0.distanceMiles.map { String(format: " %.1fmi", $0) } ?? "")" }.joined(separator: ", "))")
             }
             activitiesCache[days] = (Date(), filtered)
             return filtered
@@ -196,6 +203,28 @@ class HealthKitService {
             print("[BenLift/HK] Fetch activities error: \(error)")
             return []
         }
+    }
+
+    /// Distance in miles, when the activity has one worth reporting.
+    ///
+    /// A 50-mile ride and a 50-minute ride are different sessions, and until
+    /// this existed the app only knew the duration — so a ride's real scale
+    /// was invisible. Nil for activities where distance means nothing (a
+    /// climbing session, a lifting session).
+    private func distanceMiles(of workout: HKWorkout) -> Double? {
+        let identifier: HKQuantityTypeIdentifier?
+        switch workout.workoutActivityType {
+        case .cycling: identifier = .distanceCycling
+        case .running, .walking, .hiking: identifier = .distanceWalkingRunning
+        case .swimming: identifier = .distanceSwimming
+        default: identifier = nil
+        }
+        guard let identifier,
+              let quantity = workout.statistics(for: HKQuantityType(identifier))?.sumQuantity() else {
+            return nil
+        }
+        let miles = quantity.doubleValue(for: HKUnit.mile())
+        return miles > 0 ? miles : nil
     }
 
     private func activityTypeName(_ type: HKWorkoutActivityType) -> String {

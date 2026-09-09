@@ -46,7 +46,12 @@ struct HubView: View {
         // Parenthesised: `await raw.map { }` would try to call map on the
         // unresolved async-let binding rather than on its result.
         activities = (await raw).map {
-            CrossTrainingActivity(type: $0.type, date: $0.date, duration: $0.duration, distanceMiles: nil)
+            CrossTrainingActivity(
+                type: $0.type,
+                date: $0.date,
+                duration: $0.duration,
+                distanceMiles: $0.distanceMiles
+            )
         }
         healthContext = await context
         vo2Max = await vo2
