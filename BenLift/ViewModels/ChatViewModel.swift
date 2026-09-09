@@ -236,7 +236,8 @@ final class ChatViewModel {
 
             // Freeze what the plan looks like after this turn's edits, so the
             // card can be reopened after a later edit supersedes it.
-            if reply.producedPlanCard, let plan {
+            if reply.producedPlanCard {
+                // `plan` is already unwrapped by the guard at the top of send().
                 reply.planSnapshot = PlanSnapshot(of: plan, title: "Updated plan")
             }
 
