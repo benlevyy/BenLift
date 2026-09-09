@@ -3,6 +3,11 @@ import SwiftData
 
 /// The week at a glance, expanded from the header title.
 ///
+/// Shows everything trained, not just what was lifted. Most weeks here have
+/// more climbing and riding in them than barbell work, and a strip that only
+/// counted app-logged sessions rendered those days blank — which read as rest
+/// days that weren't.
+///
 /// Replaces the old pattern-engine strip, which predicted future days from
 /// three-week modal patterns — a system the resolver stopped consulting when
 /// rotation took over, so the strip could confidently show a Thursday the
@@ -12,6 +17,8 @@ import SwiftData
 /// opinion of its own.
 struct SplitWeekStrip: View {
     let plan: DailyPlan?
+    /// Non-lifting sessions from HealthKit, already loaded by the view model.
+    let activities: [CrossTrainingActivity]
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
@@ -20,9 +27,19 @@ struct SplitWeekStrip: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 ForEach(pastDays, id: \.label) { day in
-                    cell(weekday: day.label, name: day.name, style: .past)
+                    cell(
+                        weekday: day.label,
+                        name: day.name,
+                        activityTypes: day.activityTypes,
+                        style: .past
+                    )
                 }
-                cell(weekday: "Today", name: plan?.displayName ?? "—", style: .today)
+                cell(
+                    weekday: "Today",
+                    name: plan?.displayName ?? "—",
+                    activityTypes: todayActivityTypes,
+                    style: .today
+                )
             }
 
             if !upcoming.isEmpty {
@@ -49,6 +66,7 @@ struct SplitWeekStrip: View {
     private struct PastDay {
         let label: String
         let name: String?
+        let activityTypes: [String]
     }
 
     private var pastDays: [PastDay] {
@@ -64,7 +82,43 @@ struct SplitWeekStrip: View {
             let name = session.flatMap {
                 PlanResolver.splitDay(of: $0, in: split, lookup: lookup)?.name ?? $0.displayName
             }
-            return PastDay(label: formatter.string(from: date), name: name)
+            // Deduped and capped: two climbs in a day is still one icon, and
+            // three icons is all a cell this narrow can carry.
+            var seen: [String] = []
+            for activity in activities where calendar.isDate(activity.date, inSameDayAs: date) {
+                if !seen.contains(activity.type) { seen.append(activity.type) }
+            }
+            return PastDay(
+                label: formatter.string(from: date),
+                name: name,
+                activityTypes: Array(seen.prefix(3))
+            )
+        }
+    }
+
+    private var todayActivityTypes: [String] {
+        let calendar = Calendar.current
+        var seen: [String] = []
+        for activity in activities where calendar.isDate(activity.date, inSameDayAs: Date()) {
+            if !seen.contains(activity.type) { seen.append(activity.type) }
+        }
+        return Array(seen.prefix(3))
+    }
+
+    /// Matches the Hub's iconography so the same activity reads the same way
+    /// in both places.
+    private func icon(for type: String) -> String {
+        switch type {
+        case "climbing": return "figure.climbing"
+        case "running": return "figure.run"
+        case "cycling": return "figure.outdoor.cycle"
+        case "swimming": return "figure.pool.swim"
+        case "hiking": return "figure.hiking"
+        case "rowing": return "figure.rower"
+        case "yoga": return "figure.yoga"
+        case "hiit": return "figure.highintensity.intervaltraining"
+        case "strength_training", "functional_training": return "dumbbell"
+        default: return "figure.mixed.cardio"
         }
     }
 
@@ -93,17 +147,44 @@ struct SplitWeekStrip: View {
 
     private enum CellStyle { case past, today }
 
-    private func cell(weekday: String, name: String?, style: CellStyle) -> some View {
-        VStack(spacing: 3) {
+    private func cell(
+        weekday: String,
+        name: String?,
+        activityTypes: [String],
+        style: CellStyle
+    ) -> some View {
+        // A day with a climb but no lift isn't empty — it says "climbing"
+        // rather than the dot that used to imply a rest day.
+        let hasLift = name != nil
+        let label = name ?? (activityTypes.isEmpty ? "·" : activityTypes[0].replacingOccurrences(of: "_", with: " ").capitalized)
+
+        return VStack(spacing: 3) {
             Text(weekday)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(style == .today ? Color.accent : Color.tertiaryText)
-            Text(name ?? "·")
+            Text(label)
                 .font(.system(size: 12, weight: style == .today ? .semibold : .regular))
-                .foregroundStyle(name == nil ? Color.tertiaryText
-                                 : style == .today ? Color.primaryText : Color.bodyText)
+                .foregroundStyle(!hasLift && activityTypes.isEmpty ? Color.tertiaryText
+                                 : style == .today ? Color.primaryText
+                                 : hasLift ? Color.bodyText : Color.secondaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+
+            // Icons only where they add something the label doesn't already
+            // say — no dumbbell beside "Pull", no climbing icon beside
+            // "Climbing".
+            if !activityTypes.isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(Array(activityTypes.dropFirst(hasLift ? 0 : 1).enumerated()), id: \.offset) { _, type in
+                        Image(systemName: icon(for: type))
+                            .font(.system(size: 9))
+                            .foregroundStyle(Color.flagAmber)
+                    }
+                }
+                .frame(height: 10)
+            } else {
+                Color.clear.frame(height: 10)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)

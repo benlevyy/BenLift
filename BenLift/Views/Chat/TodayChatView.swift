@@ -124,7 +124,7 @@ struct TodayChatView: View {
             .padding(.bottom, 12)
 
             if weekStripExpanded {
-                SplitWeekStrip(plan: chatVM.plan)
+                SplitWeekStrip(plan: chatVM.plan, activities: chatVM.crossTraining)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 10)
                     .transition(.opacity.combined(with: .move(edge: .top)))

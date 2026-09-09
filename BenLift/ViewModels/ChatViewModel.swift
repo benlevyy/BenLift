@@ -40,7 +40,10 @@ final class ChatViewModel {
     private(set) var activeIntelligence: Intelligence?
 
     private let service = ChatService()
-    private var crossTraining: [CrossTrainingActivity] = []
+    /// Read by the week strip so it can show climbs, rides and runs beside
+    /// the lifting. Loaded once from HealthKit and shared rather than fetched
+    /// again per view.
+    private(set) var crossTraining: [CrossTrainingActivity] = []
 
     // MARK: Load
 
