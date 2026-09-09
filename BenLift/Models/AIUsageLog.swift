@@ -55,8 +55,11 @@ final class AIUsageLog {
     static let cacheReadMultiplier: Double = 0.1
 
     static func cost(inputTokens: Int, outputTokens: Int, cachedInputTokens: Int) -> Double {
-        let uncachedInput = max(0, inputTokens - cachedInputTokens)
-        let inputCost = Double(uncachedInput) / 1_000_000 * inputRatePerMTok
+        // `input_tokens` from the API already excludes cache reads — they
+        // arrive in `cache_read_input_tokens` separately. Subtracting cached
+        // from input here double-counted the discount and under-reported
+        // every row in the usage log.
+        let inputCost = Double(inputTokens) / 1_000_000 * inputRatePerMTok
         let cacheCost = Double(cachedInputTokens) / 1_000_000 * inputRatePerMTok * cacheReadMultiplier
         let outputCost = Double(outputTokens) / 1_000_000 * outputRatePerMTok
         return inputCost + cacheCost + outputCost

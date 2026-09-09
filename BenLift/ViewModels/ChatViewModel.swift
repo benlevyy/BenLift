@@ -53,11 +53,30 @@ final class ChatViewModel {
         // `resolve` never overwrites a stored plan — so without this, pinning
         // a day after its plan exists silently does nothing.
         if let stored = PlanResolver.existingPlan(on: today, modelContext: modelContext),
-           !stored.wasEdited,
-           let pinned = PlanResolver.pinnedCategory(on: today, modelContext: modelContext),
-           stored.category != pinned {
-            modelContext.delete(stored)
-            try? modelContext.save()
+           !stored.wasEdited {
+            var invalid = false
+
+            if let pinned = PlanResolver.pinnedCategory(on: today, modelContext: modelContext),
+               stored.category != pinned {
+                invalid = true
+            }
+
+            // First open of the day resolves before HealthKit has answered, so
+            // the plan is persisted with no cross-training flag — and resolve
+            // never overwrites a stored plan, so without this check the flag
+            // (and its straps/dropped-forearm adjustments) would never appear
+            // at all. Once activities land, an unedited flagless plan that
+            // should carry one is rebuilt.
+            if stored.crossTrainingFlag == nil,
+               let category = stored.category,
+               PlanResolver.crossTrainingFlag(for: category, activities: crossTraining, on: today) != nil {
+                invalid = true
+            }
+
+            if invalid {
+                modelContext.delete(stored)
+                try? modelContext.save()
+            }
         }
 
         let resolved = PlanResolver.resolve(

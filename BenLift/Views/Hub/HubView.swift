@@ -13,7 +13,6 @@ import SwiftData
 /// for him, and for chat when he asks.
 struct HubView: View {
     @Environment(\.modelContext) private var modelContext
-    @Bindable var programVM: ProgramViewModel
 
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
 

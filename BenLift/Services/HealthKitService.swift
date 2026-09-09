@@ -142,7 +142,20 @@ class HealthKitService {
 
     // MARK: - Recent Activities (climbing, cardio, etc. from other apps)
 
+    /// Short-lived cache for activity fetches. Four screens ask for recent
+    /// activities with four different windows, several of them on every
+    /// appear — a single launch used to hit HealthKit a dozen times for the
+    /// same rows. Three minutes is long enough to absorb a launch and a bit
+    /// of tab-switching, short enough that a workout finishing elsewhere
+    /// still shows up promptly.
+    private var activitiesCache: [Int: (fetched: Date, rows: [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)])] = [:]
+    private let activitiesCacheTTL: TimeInterval = 180
+
     func fetchRecentActivities(days: Int = 7) async -> [(type: String, date: Date, duration: TimeInterval, calories: Double?, source: String)] {
+        if let cached = activitiesCache[days],
+           Date().timeIntervalSince(cached.fetched) < activitiesCacheTTL {
+            return cached.rows
+        }
         let startDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: Date(), options: .strictStartDate)
 
@@ -177,6 +190,7 @@ class HealthKitService {
             } else {
                 debugLog("[BenLift/HK] fetchRecentActivities: \(filtered.count) activities -> \(filtered.map { "\($0.date.shortFormatted) \($0.type)" }.joined(separator: ", "))")
             }
+            activitiesCache[days] = (Date(), filtered)
             return filtered
         } catch {
             print("[BenLift/HK] Fetch activities error: \(error)")

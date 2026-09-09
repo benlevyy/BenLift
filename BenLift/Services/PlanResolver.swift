@@ -45,8 +45,11 @@ enum PlanResolver {
         }
 
         let sessions = completedSessions(modelContext: modelContext)
-        let category = resolveCategory(for: day, sessions: sessions, modelContext: modelContext)
+        // One fetch of the exercise table for the whole resolve pass — this
+        // used to be re-fetched by category inference, replay, and every
+        // deload rounding individually.
         let lookup = exerciseLookup(modelContext: modelContext)
+        let category = resolveCategory(for: day, sessions: sessions, lookup: lookup, modelContext: modelContext)
         let source = lastSession(of: category, in: sessions, before: day, lookup: lookup)
 
         debugLog("[BenLift/Resolver] \(sessions.count) completed sessions; today = \(category.displayName)")
@@ -57,7 +60,7 @@ enum PlanResolver {
         }
 
         var lifts = source
-            .map { replayLifts(from: $0, modelContext: modelContext) }
+            .map { replayLifts(from: $0, lookup: lookup, modelContext: modelContext) }
             ?? templateLifts(for: category, modelContext: modelContext)
 
         let beforeRules = lifts.count
@@ -71,7 +74,7 @@ enum PlanResolver {
         if let source, daysBetween(source.date, day) > stalenessThresholdDays {
             scale = stalenessScale
             for lift in lifts {
-                lift.weight = roundToIncrement(lift.weight * scale, for: lift.name, modelContext: modelContext)
+                lift.weight = roundToIncrement(lift.weight * scale, for: lift.name, lookup: lookup)
             }
         }
 
@@ -107,6 +110,7 @@ enum PlanResolver {
     static func resolveCategory(
         for day: Date,
         sessions: [WorkoutSession],
+        lookup: [String: Exercise],
         modelContext: ModelContext
     ) -> WorkoutCategory {
         if let pinned = pinnedCategory(on: day, modelContext: modelContext) {
@@ -115,7 +119,6 @@ enum PlanResolver {
         // `sessions` is already newest-first and filtered to ones with real
         // logged work, so the most recent entry is what we advance from.
         // Nothing logged ever → start the cycle at push.
-        let lookup = exerciseLookup(modelContext: modelContext)
         guard let last = sessions.first,
               let lastCategory = category(of: last, lookup: lookup) else {
             return .push
@@ -189,20 +192,18 @@ enum PlanResolver {
         guard let pin = pins.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) else {
             return nil
         }
-        let groups = Set(pin.muscleGroups)
-        guard !groups.isEmpty else { return nil }
-        return WorkoutCategory.allCases.max { a, b in
-            groups.intersection(a.muscleGroups).count < groups.intersection(b.muscleGroups).count
-        }
+        // Same scoring as everywhere else — the old max-intersection here
+        // still counted `core`, the bug already fixed in session inference.
+        return categoryForMuscleGroups(pin.muscleGroups)
     }
 
     // MARK: Step 2 — which exercises
 
     private static func replayLifts(
         from session: WorkoutSession,
+        lookup: [String: Exercise],
         modelContext: ModelContext
     ) -> [PlannedLift] {
-        let lookup = exerciseLookup(modelContext: modelContext)
         let history = completedSessions(modelContext: modelContext)
 
         return session.sortedEntries
@@ -214,7 +215,7 @@ enum PlanResolver {
                     for: entry,
                     equipment: exercise?.equipment,
                     history: history,
-                    modelContext: modelContext
+                    lookup: lookup
                 )
                 return PlannedLift(
                     name: entry.exerciseName,
@@ -265,7 +266,7 @@ enum PlanResolver {
         for entry: ExerciseEntry,
         equipment: Equipment?,
         history: [WorkoutSession],
-        modelContext: ModelContext
+        lookup: [String: Exercise]
     ) -> ProgressionResult {
         let sets = entry.workingSets
 
@@ -296,7 +297,7 @@ enum PlanResolver {
         }
 
         if stalled(exerciseName: entry.exerciseName, at: base, history: history) {
-            let deloaded = roundToIncrement(base * 0.9, for: entry.exerciseName, modelContext: modelContext)
+            let deloaded = roundToIncrement(base * 0.9, for: entry.exerciseName, lookup: lookup)
             return ProgressionResult(weight: deloaded, kind: .deloaded, delta: deloaded - base)
         }
 
@@ -582,9 +583,9 @@ enum PlanResolver {
     private static func roundToIncrement(
         _ weight: Double,
         for exerciseName: String,
-        modelContext: ModelContext
+        lookup: [String: Exercise]
     ) -> Double {
-        let equipment = exerciseLookup(modelContext: modelContext)[exerciseName.lowercased()]?.equipment
+        let equipment = lookup[exerciseName.lowercased()]?.equipment
         let increment = equipment?.defaultIncrement ?? 5.0
         guard increment > 0 else { return weight }
         return (weight / increment).rounded() * increment

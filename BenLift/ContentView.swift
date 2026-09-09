@@ -3,8 +3,8 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @State private var chatVM = ChatViewModel()
-    @State private var programVM = ProgramViewModel()
 
     /// App-scoped mirroring controller — owns the PhoneWorkoutViewModel and
     /// the sheet-presentation flag. Injected from BenLiftApp so callbacks
@@ -23,7 +23,7 @@ struct ContentView: View {
                     Label("History", systemImage: "clock.arrow.circlepath")
                 }
 
-            HubView(programVM: programVM)
+            HubView()
                 .tabItem {
                     Label("Hub", systemImage: "chart.line.uptrend.xyaxis")
                 }
@@ -46,13 +46,22 @@ struct ContentView: View {
             .presentationDragIndicator(.hidden)
         }
         .onAppear {
-            programVM.loadCurrentProgram(modelContext: modelContext)
             // No network call here, deliberately. The plan is resolved from
             // history in Swift — opening the app never waits on a model.
             chatVM.load(modelContext: modelContext)
 
             if WatchSyncService.shared.isWorkoutActive {
                 phoneMirroring.joinActiveWorkoutIfNeeded()
+            }
+        }
+        // onAppear doesn't re-fire for an app left open overnight — without
+        // this, the phone on the nightstand still shows yesterday's plan in
+        // the morning. load() is cheap and self-deduplicating (it returns the
+        // stored plan for the current day), so re-running it on every
+        // foreground is free.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                chatVM.load(modelContext: modelContext)
             }
         }
         .onChange(of: WatchSyncService.shared.isWorkoutActive) { _, isActive in
