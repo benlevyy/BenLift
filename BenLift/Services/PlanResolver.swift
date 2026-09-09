@@ -49,19 +49,20 @@ enum PlanResolver {
         // used to be re-fetched by category inference, replay, and every
         // deload rounding individually.
         let lookup = exerciseLookup(modelContext: modelContext)
-        let category = resolveCategory(for: day, sessions: sessions, lookup: lookup, modelContext: modelContext)
-        let source = lastSession(of: category, in: sessions, before: day, lookup: lookup)
+        let split = TrainingSplit.current
+        let splitDay = resolveDay(for: day, split: split, sessions: sessions, lookup: lookup, modelContext: modelContext)
+        let source = lastSession(matching: splitDay, in: sessions, before: day, split: split, lookup: lookup)
 
-        debugLog("[BenLift/Resolver] \(sessions.count) completed sessions; today = \(category.displayName)")
+        debugLog("[BenLift/Resolver] \(sessions.count) completed sessions; today = \(splitDay.name) (\(split.displayName))")
         if let source {
             debugLog("[BenLift/Resolver] replaying \(source.date.shortFormatted) — \(source.sortedEntries.filter { !$0.isSkipped }.count) entries")
         } else {
-            debugLog("[BenLift/Resolver] no prior \(category.displayName) session — using template")
+            debugLog("[BenLift/Resolver] no prior \(splitDay.name) session — using template")
         }
 
         var lifts = source
             .map { replayLifts(from: $0, lookup: lookup, modelContext: modelContext) }
-            ?? templateLifts(for: category, modelContext: modelContext)
+            ?? templateLifts(for: splitDay)
 
         let beforeRules = lifts.count
         lifts = applyRules(to: lifts, modelContext: modelContext)
@@ -80,7 +81,7 @@ enum PlanResolver {
 
         // Cross-training — surfaced as fact, with only the adjustments that
         // hold regardless of how hard the session actually was.
-        let flag = crossTrainingFlag(for: category, activities: activities, on: day)
+        let flag = crossTrainingFlag(for: splitDay.muscleGroups, activities: activities, on: day)
         if let flag {
             lifts = applyFlagAdjustments(flag, to: lifts)
         }
@@ -89,8 +90,9 @@ enum PlanResolver {
 
         let plan = DailyPlan(
             date: day,
-            category: category,
-            muscleGroups: category.muscleGroups,
+            category: split.category(for: splitDay),
+            dayName: splitDay.name,
+            muscleGroups: splitDay.muscleGroups,
             lifts: lifts,
             replayedFromDate: source?.date,
             resolverNote: note(source: source, lifts: lifts, scaled: scale < 1.0),
@@ -105,33 +107,67 @@ enum PlanResolver {
 
     // MARK: Step 1 — which day
 
-    /// Pin wins over rotation. Otherwise advance push → pull → legs from the
-    /// most recent completed session.
-    static func resolveCategory(
+    /// Pin wins over rotation. Otherwise advance the split's cycle from the
+    /// most recent session whose day can be determined — a session that
+    /// genuinely spans days scores nil and is walked past, not guessed at.
+    static func resolveDay(
         for day: Date,
+        split: TrainingSplit,
         sessions: [WorkoutSession],
         lookup: [String: Exercise],
         modelContext: ModelContext
-    ) -> WorkoutCategory {
-        if let pinned = pinnedCategory(on: day, modelContext: modelContext) {
+    ) -> SplitDay {
+        if let pinned = pinnedDay(on: day, split: split, modelContext: modelContext) {
             return pinned
         }
-        // `sessions` is already newest-first and filtered to ones with real
-        // logged work, so the most recent entry is what we advance from.
-        // Nothing logged ever → start the cycle at push.
-        guard let last = sessions.first,
-              let lastCategory = category(of: last, lookup: lookup) else {
-            return .push
+        let days = split.days
+        for session in sessions.prefix(10) {
+            if let matched = splitDay(of: session, in: split, lookup: lookup),
+               let index = days.firstIndex(of: matched) {
+                return days[(index + 1) % days.count]
+            }
         }
-        return next(after: lastCategory)
+        return days[0]
     }
 
-    static func next(after category: WorkoutCategory) -> WorkoutCategory {
-        switch category {
-        case .push: return .pull
-        case .pull: return .legs
-        case .legs: return .push
+    /// Which of the split's days a session was, from the exercises actually
+    /// logged. Same core-excluded, count-weighted, tie-refusing scoring as
+    /// the PPL labeler — just against the active split's days. Falls back to
+    /// the stored PPL category when scoring can't decide and the split still
+    /// speaks that language.
+    static func splitDay(
+        of session: WorkoutSession,
+        in split: TrainingSplit,
+        lookup: [String: Exercise]
+    ) -> SplitDay? {
+        var groups: [MuscleGroup] = session.entries
+            .filter { !$0.isSkipped }
+            .compactMap { lookup[$0.exerciseName.lowercased()]?.muscleGroup }
+        if groups.isEmpty { groups = session.muscleGroups }
+
+        if let scored = bestDay(for: groups, in: split) { return scored }
+
+        if let stored = session.category {
+            return split.days.first { $0.name.lowercased() == stored.rawValue }
         }
+        return nil
+    }
+
+    /// Best-matching day for a bag of muscle groups — the shared scoring
+    /// under everything above, plus pins.
+    static func bestDay(for groups: [MuscleGroup], in split: TrainingSplit) -> SplitDay? {
+        let scored = groups.filter { $0 != .core }
+        guard !scored.isEmpty else { return nil }
+
+        let counts = split.days.map { day in
+            (day, scored.filter { day.muscleGroups.contains($0) }.count)
+        }
+        guard let best = counts.max(by: { $0.1 < $1.1 }), best.1 > 0 else { return nil }
+        guard counts.filter({ $0.1 == best.1 }).count == 1 else {
+            // A full tie on a single-day split isn't ambiguity, it's the answer.
+            return split.days.count == 1 ? split.days[0] : nil
+        }
+        return best.0
     }
 
     /// A session's category: the stored one when it has it, otherwise
@@ -186,15 +222,13 @@ enum PlanResolver {
         return best.0
     }
 
-    static func pinnedCategory(on day: Date, modelContext: ModelContext) -> WorkoutCategory? {
+    static func pinnedDay(on day: Date, split: TrainingSplit, modelContext: ModelContext) -> SplitDay? {
         let descriptor = FetchDescriptor<MuscleGroupPin>()
         guard let pins = try? modelContext.fetch(descriptor) else { return nil }
         guard let pin = pins.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) else {
             return nil
         }
-        // Same scoring as everywhere else — the old max-intersection here
-        // still counted `core`, the bug already fixed in session inference.
-        return categoryForMuscleGroups(pin.muscleGroups)
+        return bestDay(for: pin.muscleGroups, in: split)
     }
 
     // MARK: Step 2 — which exercises
@@ -230,25 +264,42 @@ enum PlanResolver {
             }
     }
 
-    /// Cold start — no session of this type has ever been logged.
-    private static func templateLifts(
-        for category: WorkoutCategory,
-        modelContext: ModelContext
-    ) -> [PlannedLift] {
-        DefaultExercises.exercises(for: category)
-            .prefix(5)
-            .enumerated()
-            .map { index, def in
-                PlannedLift(
-                    name: def.name,
-                    order: index,
-                    sets: 3,
-                    targetReps: "8-12",
-                    weight: def.defaultWeight ?? 0,
-                    muscleGroup: def.muscleGroup,
-                    progression: .new
-                )
+    /// Cold start — no session of this day type has ever been logged.
+    ///
+    /// Round-robins the library across the day's muscle groups instead of
+    /// taking a prefix. The old prefix(5) of the push list was five chest
+    /// movements in a row — the library is ordered by muscle, so a prefix is
+    /// always a monoculture. One pick per group, then seconds, until the cap.
+    private static func templateLifts(for day: SplitDay) -> [PlannedLift] {
+        var byGroup: [MuscleGroup: [DefaultExercises.ExerciseDef]] = [:]
+        for def in DefaultExercises.all where day.muscleGroups.contains(def.muscleGroup) {
+            byGroup[def.muscleGroup, default: []].append(def)
+        }
+
+        let cap = day.muscleGroups.filter { $0 != .core }.count >= 5 ? 6 : 5
+        var picks: [DefaultExercises.ExerciseDef] = []
+        while picks.count < cap {
+            var advanced = false
+            for group in day.muscleGroups where group != .core {
+                guard picks.count < cap, var pool = byGroup[group], !pool.isEmpty else { continue }
+                picks.append(pool.removeFirst())
+                byGroup[group] = pool
+                advanced = true
             }
+            if !advanced { break }
+        }
+
+        return picks.enumerated().map { index, def in
+            PlannedLift(
+                name: def.name,
+                order: index,
+                sets: 3,
+                targetReps: "8-12",
+                weight: def.defaultWeight ?? 0,
+                muscleGroup: def.muscleGroup,
+                progression: .new
+            )
+        }
     }
 
     // MARK: Step 3 — which weights (double progression)
@@ -397,7 +448,6 @@ enum PlanResolver {
 
     // MARK: Step 5 — cross-training collisions
 
-    /// Pairings worth saying something about, and what to say.
     ///
     /// This table IS the mechanism. A flag exists when a pairing is in here
     /// and does not exist otherwise — there is no muscle-overlap scoring and
@@ -409,49 +459,60 @@ enum PlanResolver {
     /// `adjustments` are only the changes that hold whether the session was
     /// hard or easy — HealthKit reports duration, not intensity. Anything
     /// that depends on how hard he actually went is a question for chat.
-    private static let guidance: [Pairing: Guidance] = [
-        Pairing("climbing", .pull): Guidance(
+    /// Guidance keyed by what the day actually trains, so it works for any
+    /// split. First matching rule wins, so order encodes priority: a day that
+    /// trains back gets the straps guidance even if it also trains shoulders
+    /// (Pull, Upper), and only a back-free pressing day falls through to the
+    /// shoulders note (Push).
+    struct GuidanceRule {
+        let activity: String
+        let trains: MuscleGroup
+        let detail: String
+        let adjustments: [String]
+    }
+
+    static let guidanceRules: [GuidanceRule] = [
+        GuidanceRule(
+            activity: "climbing", trains: .back,
             detail: "Grip is the limiter, not your back — straps are on, and direct forearm work is dropped.",
             adjustments: ["straps", "dropped forearm work"]
         ),
-        Pairing("climbing", .push): Guidance(
+        GuidanceRule(
+            activity: "climbing", trains: .shoulders,
             detail: "Shoulders took a beating on overhangs. Loads are unchanged — ease into the first pressing set.",
             adjustments: []
         ),
-        Pairing("rowing", .pull): Guidance(
+        GuidanceRule(
+            activity: "rowing", trains: .back,
             detail: "That was most of a pull session already. Loads are unchanged — cut a set if the back feels cooked.",
             adjustments: []
         ),
-        Pairing("running", .legs): Guidance(
+        GuidanceRule(
+            activity: "running", trains: .quads,
             detail: "Quads and calves are pre-fatigued. Loads are unchanged — cut a set if the first one feels heavy.",
             adjustments: []
         ),
-        Pairing("hiking", .legs): Guidance(
+        GuidanceRule(
+            activity: "hiking", trains: .quads,
             detail: "Quads and calves are pre-fatigued. Loads are unchanged — cut a set if the first one feels heavy.",
             adjustments: []
         ),
-        Pairing("cycling", .legs): Guidance(
+        GuidanceRule(
+            activity: "cycling", trains: .quads,
             detail: "Quads have volume in them already. Loads are unchanged — the stimulus is different enough to keep.",
             adjustments: []
         ),
     ]
 
-    struct Pairing: Hashable {
-        let activity: String
-        let category: WorkoutCategory
-        init(_ activity: String, _ category: WorkoutCategory) {
-            self.activity = activity
-            self.category = category
-        }
-    }
 
-    struct Guidance {
-        let detail: String
-        let adjustments: [String]
+    /// First rule whose activity matches and whose trained muscle the day
+    /// includes — order in `guidanceRules` is priority.
+    static func rule(for activityType: String, trains groups: [MuscleGroup]) -> GuidanceRule? {
+        guidanceRules.first { $0.activity == activityType && groups.contains($0.trains) }
     }
 
     static func crossTrainingFlag(
-        for category: WorkoutCategory,
+        for groups: [MuscleGroup],
         activities: [CrossTrainingActivity],
         on day: Date
     ) -> CrossTrainingFlag? {
@@ -461,12 +522,12 @@ enum PlanResolver {
             .filter {
                 let hours = day.timeIntervalSince($0.date) / 3600
                 return hours >= 0 && hours <= 48
-                    && guidance[Pairing($0.type, category)] != nil
+                    && rule(for: $0.type, trains: groups) != nil
             }
             .max { $0.duration < $1.duration }
 
         guard let activity = candidate,
-              let advice = guidance[Pairing(activity.type, category)] else { return nil }
+              let advice = rule(for: activity.type, trains: groups) else { return nil }
 
         return CrossTrainingFlag(
             activityType: activity.type,
@@ -564,13 +625,14 @@ enum PlanResolver {
     }
 
     private static func lastSession(
-        of category: WorkoutCategory,
+        matching day: SplitDay,
         in sessions: [WorkoutSession],
-        before day: Date,
+        before date: Date,
+        split: TrainingSplit,
         lookup: [String: Exercise]
     ) -> WorkoutSession? {
         sessions.first { session in
-            session.date < day && self.category(of: session, lookup: lookup) == category
+            session.date < date && splitDay(of: session, in: split, lookup: lookup) == day
         }
     }
 

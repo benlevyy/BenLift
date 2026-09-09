@@ -50,6 +50,11 @@ final class DailyPlan {
     var date: Date
     /// Push / pull / legs, when the rotation produced one.
     var categoryRaw: String?
+    /// The split day this plan was resolved for ("Upper", "Push", ...). The
+    /// category above only exists for push/pull/legs; this is the identity
+    /// that works for every split. Optional so plans from before splits
+    /// existed migrate cleanly.
+    var dayName: String?
     var muscleGroupsData: Data?
     @Relationship(deleteRule: .cascade, inverse: \PlannedLift.plan)
     var lifts: [PlannedLift]
@@ -71,6 +76,7 @@ final class DailyPlan {
         id: UUID = UUID(),
         date: Date,
         category: WorkoutCategory? = nil,
+        dayName: String? = nil,
         muscleGroups: [MuscleGroup] = [],
         lifts: [PlannedLift] = [],
         replayedFromDate: Date? = nil,
@@ -83,6 +89,7 @@ final class DailyPlan {
         self.id = id
         self.date = date
         self.categoryRaw = category?.rawValue
+        self.dayName = dayName
         self.muscleGroupsData = Data.encodeJSON(muscleGroups)
         self.lifts = lifts
         self.replayedFromDate = replayedFromDate
@@ -115,6 +122,7 @@ final class DailyPlan {
     /// Card title — "Push", "Pull", "Legs", or the muscle list for a plan
     /// the rotation couldn't categorise.
     var displayName: String {
+        if let dayName { return dayName }
         if let category { return category.displayName }
         let groups = muscleGroups
         if groups.isEmpty { return "Workout" }

@@ -20,6 +20,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                structureSection
                 goalSection
                 usageSection
                 rulesSection
@@ -335,6 +336,22 @@ struct SettingsView: View {
 
     private var activeProgram: TrainingProgram? {
         programs.first { $0.isActive }
+    }
+
+    @AppStorage(TrainingSplit.storageKey) private var trainingSplitRaw: String = TrainingSplit.pushPullLegs.rawValue
+
+    private var structureSection: some View {
+        Section {
+            Picker("Split", selection: $trainingSplitRaw) {
+                ForEach(TrainingSplit.allCases) { split in
+                    Text(split.displayName).tag(split.rawValue)
+                }
+            }
+        } header: {
+            Text("Training structure")
+        } footer: {
+            Text("The rotation your days cycle through. Takes effect on the next plan — today's rebuilds automatically unless you've edited it in chat.")
+        }
     }
 
     /// A vertical TextEditor has no submit action — Return inserts a newline,

@@ -55,9 +55,18 @@ final class ChatViewModel {
         if let stored = PlanResolver.existingPlan(on: today, modelContext: modelContext),
            !stored.wasEdited {
             var invalid = false
+            let split = TrainingSplit.current
+            let storedDayName = stored.dayName ?? stored.category?.displayName
 
-            if let pinned = PlanResolver.pinnedCategory(on: today, modelContext: modelContext),
-               stored.category != pinned {
+            // The split changed in Settings — an unedited plan for a day type
+            // the split no longer has is rebuilt on next open. This is the
+            // only wiring the Settings picker needs.
+            if let storedDayName, !split.days.contains(where: { $0.name == storedDayName }) {
+                invalid = true
+            }
+
+            if let pinned = PlanResolver.pinnedDay(on: today, split: split, modelContext: modelContext),
+               storedDayName != pinned.name {
                 invalid = true
             }
 
@@ -68,8 +77,7 @@ final class ChatViewModel {
             // at all. Once activities land, an unedited flagless plan that
             // should carry one is rebuilt.
             if stored.crossTrainingFlag == nil,
-               let category = stored.category,
-               PlanResolver.crossTrainingFlag(for: category, activities: crossTraining, on: today) != nil {
+               PlanResolver.crossTrainingFlag(for: stored.muscleGroups, activities: crossTraining, on: today) != nil {
                 invalid = true
             }
 

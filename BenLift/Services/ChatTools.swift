@@ -113,8 +113,7 @@ enum ChatTools {
         tool(
             name: "set_focus",
             description: """
-            Pin what to train on a given day, overriding the push/pull/legs \
-            rotation. Use for "let's do legs today instead", or for planning \
+            Pin what to train on a given day, overriding the split rotation. Use for "let's do legs today instead", or for planning \
             around something ahead: "I'm climbing Thursday, do push that day". \
             days_ahead 0 is today and rebuilds today's plan from scratch, so \
             only use it when the user wants a different day type, not for \

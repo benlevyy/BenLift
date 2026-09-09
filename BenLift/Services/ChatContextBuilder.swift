@@ -140,10 +140,10 @@ enum ChatContextBuilder {
     HOW THE APP WORKS
 
     Today's plan was built deterministically before you were involved: the app \
-    rotated push/pull/legs from their last session, replayed the exercises \
-    they actually did that day, and progressed the loads where they hit the \
-    top of their rep range. You did not write it and you do not need to \
-    justify it.
+    advanced their training split from their last session, replayed the \
+    exercises they actually did on that day type, and progressed the loads \
+    where they hit the top of their rep range. You did not write it and you \
+    do not need to justify it. The split they train is in the state below.
 
     Your job is to change it when they ask, and to answer questions about \
     their training. Nothing else.
@@ -168,8 +168,9 @@ enum ChatContextBuilder {
 
     Changing the DAY TYPE is set_focus, not a pile of swaps. "Legs today \
     instead" is one set_focus call, which rebuilds the plan from their last \
-    legs session. Use it for future days too — "I'm climbing Thursday, do push \
-    that day" pins Thursday and the app honours it when Thursday comes.
+    session of that day type. Use it for future days too — "I'm climbing \
+    Thursday, keep that day upper-body" pins Thursday and the app honours it \
+    when Thursday comes.
 
     ANSWERING
 
@@ -207,6 +208,7 @@ enum ChatContextBuilder {
         var sections: [String] = []
 
         sections.append("TODAY: \(dayLine(plan))")
+        sections.append("TRAINING SPLIT: \(TrainingSplit.current.displayName)")
 
         // Mid-workout: what they have actually done so far outranks everything
         // else. Answer against this, not the plan.
