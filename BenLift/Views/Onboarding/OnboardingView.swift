@@ -92,7 +92,7 @@ struct OnboardingView: View {
             Text("Claude API Key")
                 .font(.title2.bold())
 
-            Text("Your API key is stored securely in Keychain and used to generate workout plans and analysis.")
+            Text("Optional. Your workouts are planned on-device and work without this — a key only turns on the coach you can chat with. Stored in your Keychain, never sent anywhere else.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondaryText)
                 .padding(.horizontal)
@@ -121,7 +121,7 @@ struct OnboardingView: View {
                 }
 
                 if apiKey.isEmpty {
-                    Text("You can add it later in Settings. AI features won't work without it.")
+                    Text("You can add one later in Settings. Everything except chat works without it.")
                         .font(.caption)
                         .foregroundColor(.secondaryText)
                         .multilineTextAlignment(.center)

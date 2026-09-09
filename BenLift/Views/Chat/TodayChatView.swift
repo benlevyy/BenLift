@@ -282,7 +282,43 @@ struct TodayChatView: View {
 
     // MARK: Input
 
+    /// Chat is the only thing in the app that needs a key. Everything else —
+    /// the plan, progression, the workout runner, history — is on-device. So
+    /// the absence of a key is a quiet note, not a blocked app.
+    private var hasAPIKey: Bool {
+        KeychainService.load(key: KeychainService.apiKeyKey)?.isEmpty == false
+    }
+
+    @ViewBuilder
     private var inputBar: some View {
+        if hasAPIKey {
+            liveInputBar
+        } else {
+            noKeyNotice
+        }
+    }
+
+    private var noKeyNotice: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "key")
+                .font(.system(size: 13, weight: .medium))
+            Text("Add a Claude API key in Settings to chat with the coach.")
+                .font(.system(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Color.secondaryText)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cardSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+    }
+
+    private var liveInputBar: some View {
         HStack(spacing: 8) {
             HStack(spacing: 8) {
                 TextField("Tell the coach…", text: $chatVM.draft, axis: .vertical)

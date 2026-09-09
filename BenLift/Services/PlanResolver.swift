@@ -49,11 +49,11 @@ enum PlanResolver {
         let lookup = exerciseLookup(modelContext: modelContext)
         let source = lastSession(of: category, in: sessions, before: day, lookup: lookup)
 
-        print("[BenLift/Resolver] \(sessions.count) completed sessions; today = \(category.displayName)")
+        debugLog("[BenLift/Resolver] \(sessions.count) completed sessions; today = \(category.displayName)")
         if let source {
-            print("[BenLift/Resolver] replaying \(source.date.shortFormatted) — \(source.sortedEntries.filter { !$0.isSkipped }.count) entries")
+            debugLog("[BenLift/Resolver] replaying \(source.date.shortFormatted) — \(source.sortedEntries.filter { !$0.isSkipped }.count) entries")
         } else {
-            print("[BenLift/Resolver] no prior \(category.displayName) session — using template")
+            debugLog("[BenLift/Resolver] no prior \(category.displayName) session — using template")
         }
 
         var lifts = source
@@ -63,7 +63,7 @@ enum PlanResolver {
         let beforeRules = lifts.count
         lifts = applyRules(to: lifts, modelContext: modelContext)
         if lifts.count != beforeRules {
-            print("[BenLift/Resolver] rules removed \(beforeRules - lifts.count) of \(beforeRules) lifts")
+            debugLog("[BenLift/Resolver] rules removed \(beforeRules - lifts.count) of \(beforeRules) lifts")
         }
 
         // Staleness — loads from a month ago aren't loads you can hit today.
@@ -383,7 +383,7 @@ enum PlanResolver {
         return lifts.compactMap { lift in
             let key = lift.name.lowercased()
             if excluded.contains(key) {
-                print("[BenLift/Resolver] dropped \(lift.name) — active exerciseOut rule")
+                debugLog("[BenLift/Resolver] dropped \(lift.name) — active exerciseOut rule")
                 return nil
             }
             if let preferred = substitutions[key] {

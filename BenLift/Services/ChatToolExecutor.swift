@@ -352,8 +352,8 @@ final class ChatToolExecutor {
         ))
 
         return ok(call, """
-        Proposed — waiting on his approval, not saved yet. Tell him what the \
-        rule would do in one short sentence. Do not claim it's saved.
+        Proposed — waiting on their approval, not saved yet. Tell them what \
+        the rule would do in one short sentence. Do not claim it's saved.
         """)
     }
 
