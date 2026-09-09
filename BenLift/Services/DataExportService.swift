@@ -21,7 +21,6 @@ struct DataExportService {
         let userRules: [UserRuleBackup]?
         let sessionEvents: [SessionEventBackup]?
         let muscleGroupPins: [MuscleGroupPinBackup]?
-        let seedPatterns: [SeedPatternBackup]?
     }
 
     struct SessionBackup: Codable {
@@ -106,14 +105,6 @@ struct DataExportService {
         let muscleGroups: [String]
         let label: String?
         let note: String?
-        let createdAt: Date
-    }
-
-    struct SeedPatternBackup: Codable {
-        let id: UUID
-        let weekday: Int
-        let muscleGroups: [String]
-        let sourceRaw: String
         let createdAt: Date
     }
 
@@ -211,15 +202,6 @@ struct DataExportService {
             )
         }
 
-        // Seed patterns — weekday defaults for the week strip.
-        let seeds = (try? modelContext.fetch(FetchDescriptor<SeedPattern>())) ?? []
-        let seedBackups = seeds.map { s in
-            SeedPatternBackup(
-                id: s.id, weekday: s.weekday, muscleGroups: s.muscleGroups.map(\.rawValue),
-                sourceRaw: s.sourceRaw, createdAt: s.createdAt
-            )
-        }
-
         let backup = BenLiftBackup(
             version: 1,
             exportDate: Date(),
@@ -228,8 +210,7 @@ struct DataExportService {
             customExercises: exerciseBackups,
             userRules: ruleBackups,
             sessionEvents: eventBackups,
-            muscleGroupPins: pinBackups,
-            seedPatterns: seedBackups
+            muscleGroupPins: pinBackups
         )
 
         let encoder = JSONEncoder()
@@ -337,21 +318,6 @@ struct DataExportService {
             modelContext.insert(pin)
         }
 
-        // Import seed patterns
-        for sb in backup.seedPatterns ?? [] {
-            let checkId = sb.id
-            let existing = try? modelContext.fetch(FetchDescriptor<SeedPattern>(
-                predicate: #Predicate { $0.id == checkId }
-            ))
-            if let existing, !existing.isEmpty { continue }
-            let seed = SeedPattern(
-                id: sb.id, weekday: sb.weekday,
-                muscleGroups: sb.muscleGroups.compactMap(MuscleGroup.init(rawValue:)),
-                source: SeedSource(rawValue: sb.sourceRaw) ?? .bootstrap,
-                createdAt: sb.createdAt
-            )
-            modelContext.insert(seed)
-        }
 
         try modelContext.save()
         print("[BenLift/Import] Import complete")

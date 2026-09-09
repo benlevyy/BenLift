@@ -113,22 +113,20 @@ enum ChatTools {
         tool(
             name: "set_focus",
             description: """
-            Pin what to train on a given day, overriding the split rotation. Use for "let's do legs today instead", or for planning \
-            around something ahead: "I'm climbing Thursday, do push that day". \
-            days_ahead 0 is today and rebuilds today's plan from scratch, so \
-            only use it when the user wants a different day type, not for \
-            swapping a lift.
+            Change what TODAY trains, overriding the split rotation — "let's \
+            do legs today instead" is one call, and today's plan is rebuilt \
+            from the last session of that day type. Only for changing the day \
+            type, never for swapping a single lift. There is no future-day \
+            version: tomorrow is decided tomorrow.
             """,
             properties: [
                 "muscle_groups": [
                     "type": "array",
-                    "description": "Muscle groups to train that day.",
+                    "description": "Muscle groups to train today.",
                     "items": ["type": "string", "enum": MuscleGroup.allCases.map(\.rawValue)]
-                ],
-                "days_ahead": integer("0 for today, 1 for tomorrow, and so on."),
-                "note": string("Short reason, shown on the day in the week strip.")
+                ]
             ],
-            required: ["muscle_groups", "days_ahead"]
+            required: ["muscle_groups"]
         ),
 
         tool(

@@ -124,7 +124,7 @@ struct TodayChatView: View {
             .padding(.bottom, 12)
 
             if weekStripExpanded {
-                WeekStripView(aiTargetMuscleForToday: chatVM.plan?.muscleGroups.first)
+                SplitWeekStrip(plan: chatVM.plan)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 10)
                     .transition(.opacity.combined(with: .move(edge: .top)))

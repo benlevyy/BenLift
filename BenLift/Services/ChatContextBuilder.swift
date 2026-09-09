@@ -168,9 +168,9 @@ enum ChatContextBuilder {
 
     Changing the DAY TYPE is set_focus, not a pile of swaps. "Legs today \
     instead" is one set_focus call, which rebuilds the plan from their last \
-    session of that day type. Use it for future days too — "I'm climbing \
-    Thursday, keep that day upper-body" pins Thursday and the app honours it \
-    when Thursday comes.
+    session of that day type. It only applies to today — if they ask you to \
+    plan a future day, say the rotation handles it and they can change any \
+    day when it arrives.
 
     ANSWERING
 

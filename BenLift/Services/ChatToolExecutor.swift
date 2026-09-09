@@ -289,41 +289,31 @@ final class ChatToolExecutor {
             return error(call, "None of those are muscle groups I know: \(raw.joined(separator: ", ")).")
         }
 
-        let daysAhead = max(0, call.input["days_ahead"] as? Int ?? 0)
-        guard let target = Calendar.current.date(byAdding: .day, value: daysAhead, to: Date()) else {
-            return error(call, "Couldn't work out which day that is.")
-        }
-        let day = Calendar.current.startOfDay(for: target)
+        // Today only. Future pinning existed and was removed — pre-deciding a
+        // day nobody has arrived at yet was the old planner's habit, and a
+        // stale pin firing days later reads as the app overriding the
+        // rotation for reasons nobody remembers. Tomorrow is decided tomorrow.
+        let day = Calendar.current.startOfDay(for: Date())
 
-        let descriptor = FetchDescriptor<MuscleGroupPin>()
-        let pins = (try? modelContext.fetch(descriptor)) ?? []
+        let pins = (try? modelContext.fetch(FetchDescriptor<MuscleGroupPin>())) ?? []
         if let existing = pins.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) {
             existing.muscleGroups = groups
-            if let note = call.input["note"] as? String { existing.note = note }
         } else {
-            let pin = MuscleGroupPin(date: day, muscleGroups: groups)
-            pin.note = call.input["note"] as? String
-            modelContext.insert(pin)
+            modelContext.insert(MuscleGroupPin(date: day, muscleGroups: groups))
         }
+
+        // Today's plan was resolved against the old focus and is stored;
+        // `resolve` never overwrites a stored plan, so it has to go or the
+        // override does nothing. A different day type makes the old lifts
+        // moot anyway.
+        if let stored = PlanResolver.existingPlan(on: day, modelContext: modelContext) {
+            modelContext.delete(stored)
+        }
+        didChangeFocus = true
+        try? modelContext.save()
 
         let names = groups.map(\.displayName).joined(separator: " + ")
-
-        if daysAhead == 0 {
-            // Today's plan was resolved against the old focus and is stored;
-            // `resolve` never overwrites a stored plan, so it has to go or the
-            // pin does nothing. A different day type makes the old lifts moot
-            // anyway.
-            if let stored = PlanResolver.existingPlan(on: day, modelContext: modelContext) {
-                modelContext.delete(stored)
-            }
-            didChangeFocus = true
-            try? modelContext.save()
-            return ok(call, "Today is now \(names). Rebuilt the plan from the last session of that type — describe it in one sentence.")
-        }
-
-        try? modelContext.save()
-        let when = daysAhead == 1 ? "Tomorrow" : "In \(daysAhead) days"
-        return ok(call, "\(when) is pinned to \(names).")
+        return ok(call, "Today is now \(names). Rebuilt the plan from the last session of that type — describe it in one sentence.")
     }
 
     // MARK: - Rules

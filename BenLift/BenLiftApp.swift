@@ -25,9 +25,9 @@ struct BenLiftApp: App {
             SessionEvent.self,
             // Durable user decisions the resolver enforces in Swift.
             UserRule.self,
-            // Calendar / week strip.
+            // Today-override carrier — written by chat's set_focus, read by
+            // the resolver ahead of the rotation.
             MuscleGroupPin.self,
-            SeedPattern.self,
             // Chat-first rebuild: the deterministic plan, the daily thread,
             // and the API spend log.
             DailyPlan.self,
@@ -67,6 +67,7 @@ struct BenLiftApp: App {
             Self.migrateGoalTextIfNeeded(in: context)
             Self.retireImplicitExerciseRules(in: context)
             Self.backfillSessionCategories(in: context)
+            Self.clearFutureDatedPins(in: context)
         }
 
         // One-shot: re-save the API key with AfterFirstUnlock so a locked
@@ -200,6 +201,24 @@ struct BenLiftApp: App {
             print("[BenLift] Labelled \(labelled) session(s); \(undecided) left undecided")
         }
         UserDefaults.standard.set(true, forKey: "didBackfillSessionCategories")
+    }
+
+    /// Future-day pinning is gone — both the week strip's pin sheet and
+    /// set_focus used to write pins for days to come, and nothing does now. A stale future pin left behind would still be
+    /// honoured by the resolver when its day arrived, silently overriding
+    /// the rotation with a decision nobody remembers making. Clear them once.
+    private static func clearFutureDatedPins(in context: ModelContext) {
+        guard !UserDefaults.standard.bool(forKey: "didClearFuturePins") else { return }
+        let today = Calendar.current.startOfDay(for: Date())
+        if let pins = try? context.fetch(FetchDescriptor<MuscleGroupPin>()) {
+            let future = pins.filter { $0.date > today }
+            for pin in future { context.delete(pin) }
+            if !future.isEmpty {
+                try? context.save()
+                print("[BenLift] Cleared \(future.count) future-dated pin(s)")
+            }
+        }
+        UserDefaults.standard.set(true, forKey: "didClearFuturePins")
     }
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
