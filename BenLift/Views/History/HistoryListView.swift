@@ -20,14 +20,14 @@ struct HistoryListView: View {
         var id: String {
             switch self {
             case .workout(let s): return s.id.uuidString
-            case .activity(let i, _, let d, _, _, _): return "act-\(i)-\(d.timeIntervalSince1970)"
+            case .activity(let i, _, let d, _, _, _, _): return "act-\(i)-\(d.timeIntervalSince1970)"
             }
         }
 
         var date: Date {
             switch self {
             case .workout(let s): return s.date
-            case .activity(_, _, let d, _, _, _): return d
+            case .activity(_, _, let d, _, _, _, _): return d
             }
         }
     }
