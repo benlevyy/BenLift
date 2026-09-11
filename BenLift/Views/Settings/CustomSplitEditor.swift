@@ -85,12 +85,60 @@ struct CustomSplitDayEditor: View {
     /// Everything except core — every day gets core implicitly.
     private let choices = MuscleGroup.allCases.filter { $0 != .core }
 
+    /// Applying a preset renames the day too, unless the name has been typed
+    /// by hand — overwriting "Heavy Day" with "Push" because the muscles
+    /// happen to match would be the app second-guessing a deliberate choice.
+    private func apply(_ preset: DayPreset) {
+        Haptics.selection()
+        selected = Set(preset.muscleGroups)
+        let untouched = name.trimmingCharacters(in: .whitespaces).isEmpty
+            || DayPreset.allCases.contains { $0.name == name }
+            || name.hasPrefix("Day ")
+        if untouched { name = preset.name }
+    }
+
+    /// A preset reads as selected when the muscles match exactly, whatever
+    /// the day ended up being called.
+    private func matches(_ preset: DayPreset) -> Bool {
+        selected == Set(preset.muscleGroups)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("Name") {
                     TextField("Day name", text: $name)
                 }
+
+                Section {
+                    ForEach(DayPreset.allCases) { preset in
+                        Button {
+                            apply(preset)
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(preset.name)
+                                        .foregroundStyle(.primary)
+                                    Text(preset.summary)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 8)
+                                if matches(preset) {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Color.accent)
+                                }
+                            }
+                        }
+                        .frame(minHeight: 44)
+                    }
+                } header: {
+                    Text("Start from")
+                } footer: {
+                    Text("Fills in the muscles below. Adjust them afterwards if you want something different — what's ticked is what counts, not the name.")
+                }
+
                 Section {
                     ForEach(choices) { group in
                         Button {

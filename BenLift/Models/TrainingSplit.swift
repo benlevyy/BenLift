@@ -34,6 +34,49 @@ struct CustomSplitDay: Codable, Identifiable, Equatable {
     }
 }
 
+/// A ready-made day type, so building a custom split doesn't require knowing
+/// that "Push" means chest, shoulders and triceps. Applying one sets the name
+/// and the muscles; both stay editable afterwards, and the muscles are what
+/// the resolver actually reads — the name is just what it's called.
+enum DayPreset: String, CaseIterable, Identifiable {
+    case push, pull, legs, upper, lower, fullBody, arms, chestBack, shouldersArms
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .push: return "Push"
+        case .pull: return "Pull"
+        case .legs: return "Legs"
+        case .upper: return "Upper"
+        case .lower: return "Lower"
+        case .fullBody: return "Full Body"
+        case .arms: return "Arms"
+        case .chestBack: return "Chest + Back"
+        case .shouldersArms: return "Shoulders + Arms"
+        }
+    }
+
+    var muscleGroups: [MuscleGroup] {
+        switch self {
+        case .push: return [.chest, .shoulders, .triceps]
+        case .pull: return [.back, .biceps, .forearms]
+        case .legs: return [.quads, .hamstrings, .glutes, .calves]
+        case .upper: return [.chest, .back, .shoulders, .biceps, .triceps]
+        case .lower: return [.quads, .hamstrings, .glutes, .calves]
+        case .fullBody: return [.chest, .back, .shoulders, .quads, .hamstrings, .glutes]
+        case .arms: return [.biceps, .triceps, .forearms]
+        case .chestBack: return [.chest, .back]
+        case .shouldersArms: return [.shoulders, .biceps, .triceps]
+        }
+    }
+
+    /// Shown under the preset name so the choice is legible without tapping.
+    var summary: String {
+        muscleGroups.map(\.displayName).joined(separator: ", ")
+    }
+}
+
 enum TrainingSplit: String, Codable, CaseIterable, Identifiable {
     case pushPullLegs
     case upperLower
