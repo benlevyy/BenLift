@@ -159,10 +159,13 @@ class HealthKitService {
         let startDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: Date(), options: .strictStartDate)
 
+        // The cap scales with the window: 50 covers a fortnight, but the
+        // Hub's portrait asks for a year, and a year of climbing twice a
+        // week is well past 50 rows.
         let descriptor = HKSampleQueryDescriptor(
             predicates: [.workout(predicate)],
             sortDescriptors: [SortDescriptor(\.startDate, order: .reverse)],
-            limit: 50
+            limit: max(50, days * 2)
         )
 
         do {
