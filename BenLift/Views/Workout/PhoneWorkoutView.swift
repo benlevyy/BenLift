@@ -97,11 +97,11 @@ struct PhoneWorkoutView: View {
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $showFinishSheet) {
-            FinishWorkoutSheet(workoutVM: workoutVM) { effort in
+            FinishWorkoutSheet(workoutVM: workoutVM) { effort, note in
                 workoutVM.finishWorkout(
                     modelContext: modelContext,
                     feeling: nil,
-                    concerns: nil,
+                    concerns: note,
                     effortScore: effort
                 )
                 showFinishSheet = false
@@ -203,10 +203,19 @@ struct PhoneWorkoutView: View {
 /// `HKWorkoutEffortRelationship`. "Skip" saves the workout without effort.
 private struct FinishWorkoutSheet: View {
     @Bindable var workoutVM: PhoneWorkoutViewModel
-    let onConfirm: (Double?) -> Void
+    /// Effort (nil = skipped) and an optional note, saved on the session and
+    /// editable later from History.
+    let onConfirm: (Double?, String?) -> Void
     let onCancel: () -> Void
 
     @State private var effort: Int = 6
+    @State private var note: String = ""
+    @FocusState private var noteFocused: Bool
+
+    private var trimmedNote: String? {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     var body: some View {
         VStack(spacing: 28) {
@@ -259,11 +268,24 @@ private struct FinishWorkoutSheet: View {
             }
             .sensoryFeedback(.selection, trigger: effort)
 
+            // One line, optional. The place to say "shoulder was off" while
+            // it's still true — it lands on the session and can be edited
+            // from History later.
+            TextField("Add a note (optional)", text: $note, axis: .vertical)
+                .lineLimit(1...3)
+                .font(.subheadline)
+                .focused($noteFocused)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .background(Color.cardSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
             Spacer(minLength: 0)
 
             VStack(spacing: 10) {
                 Button {
-                    onConfirm(Double(effort))
+                    noteFocused = false
+                    onConfirm(Double(effort), trimmedNote)
                 } label: {
                     Text("Save Workout")
                         .font(.headline)
@@ -274,7 +296,8 @@ private struct FinishWorkoutSheet: View {
                 .sensoryFeedback(.success, trigger: 0)
 
                 Button("Skip rating") {
-                    onConfirm(nil)
+                    noteFocused = false
+                    onConfirm(nil, trimmedNote)
                 }
                 .font(.subheadline)
                 .foregroundColor(.secondary)

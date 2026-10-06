@@ -1028,6 +1028,13 @@ class PhoneWorkoutViewModel {
     }
 
     private func applySnapshot(_ s: WorkoutSnapshot) {
+        // Phone-owned session: the watch runs a sensor-only HK session that
+        // is mirrored to us, so anything arriving on that channel is the
+        // watch's optimistic local state, not the truth. The truth is here.
+        if workoutMode == .standalone, snapshot?.isActive == true {
+            print("[BenLift/Phone] Ignored watch snapshot — phone owns this session")
+            return
+        }
         // Drop stale (out-of-order) snapshots — but only if they're from the
         // SAME workout session. Comparing versions across sessions silently
         // dropped every new snapshot when the prior session's final version
@@ -1284,6 +1291,21 @@ class PhoneWorkoutViewModel {
         guard let index = liveIndex(ofExerciseNamed: name) else { return false }
         skipExercise(at: index)
         workoutAdjustments.append(AdjustmentRecord(kind: .skip, summary: "Dropped \(exerciseStates[index].name)"))
+        return true
+    }
+
+    /// Add an exercise to the running session. Returns false when it's
+    /// already there — a second "add the curls" shouldn't make two rows.
+    ///
+    /// The chat executor used to write the new lift to the stored plan and
+    /// stop, so "add some curls" mid-workout changed tomorrow's record of
+    /// today and nothing on the screen in front of them. This is the half
+    /// that was missing.
+    @discardableResult
+    func liveAdd(_ info: WatchExerciseInfo) -> Bool {
+        guard liveIndex(ofExerciseNamed: info.name) == nil else { return false }
+        addExercise(info)
+        workoutAdjustments.append(AdjustmentRecord(kind: .addExercise, summary: "Added \(info.name)"))
         return true
     }
 

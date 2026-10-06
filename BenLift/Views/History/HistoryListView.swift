@@ -114,6 +114,18 @@ struct HistoryListView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     HStack(spacing: 12) {
+                        // Per-lift history: every session a lift appeared
+                        // in and where the weight moved. The timeline below
+                        // is organised by day; this is the same data
+                        // organised by lift.
+                        if !sessions.isEmpty {
+                            NavigationLink {
+                                ExerciseHistoryView()
+                            } label: {
+                                Image(systemName: "chart.xyaxis.line")
+                            }
+                        }
+
                         Button {
                             showManualEntry = true
                         } label: {

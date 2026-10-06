@@ -115,7 +115,7 @@ final class ChatToolExecutor {
         lift.progressionDelta = 0
         lift.usesStraps = false
 
-        if let sets = call.input["sets"] as? Int { lift.sets = sets }
+        if let sets = integer(call.input["sets"]) { lift.sets = sets }
         if let reps = call.input["target_reps"] as? String { lift.targetReps = reps }
         if let weight = numeric(call.input["weight"]) {
             lift.weight = weight
@@ -148,11 +148,20 @@ final class ChatToolExecutor {
 
     private func addExercise(_ call: ChatToolCall) -> ChatToolResult {
         guard let plan else { return error(call, "There's no plan to edit here.") }
-        guard let name = call.input["name"] as? String,
-              let sets = call.input["sets"] as? Int,
-              let reps = call.input["target_reps"] as? String else {
-            return error(call, "add_exercise needs name, sets and target_reps.")
+        guard let rawName = call.input["name"] as? String,
+              !rawName.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return error(call, "add_exercise needs a name.")
         }
+        // Lenient on the numbers: a "3" that arrives as a string or a 3.0
+        // used to fail the whole call with a schema complaint, which read
+        // as "adding doesn't work". Sensible defaults when they're missing.
+        let sets = integer(call.input["sets"]) ?? 3
+        let reps = (call.input["target_reps"] as? String)
+            .flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? "8-12"
+        // Use the library's spelling when it has one, so the lift matches
+        // history and the add-exercise picker rather than a near-duplicate.
+        let name = exercise(named: rawName)?.name ?? rawName.trimmingCharacters(in: .whitespaces)
+
         if lift(named: name, in: plan) != nil {
             return error(call, "\(name) is already in today's plan. Use set_load to change it.")
         }
@@ -183,8 +192,29 @@ final class ChatToolExecutor {
         // rule that was keeping it out.
         archiveExerciseOutRule(for: name)
 
+        // Mid-workout, the running session is what they're looking at. The
+        // stored plan alone changing is invisible from the gym floor.
+        var suffix = ""
+        if let live = liveWorkout, live.isWorkoutActive {
+            let info = WatchExerciseInfo(
+                name: name,
+                sets: sets,
+                targetReps: reps,
+                suggestedWeight: weight,
+                warmupSets: nil,
+                notes: nil,
+                intent: "isolation",
+                lastWeight: nil,
+                lastReps: nil,
+                equipment: exercise(named: name)?.equipment
+            )
+            suffix = live.liveAdd(info)
+                ? " Added to the running session too."
+                : " (Already in the running session.)"
+        }
+
         markEdited()
-        return ok(call, "Added \(name), \(sets)x\(reps) at \(format(weight)) lbs.")
+        return ok(call, "Added \(name), \(sets)x\(reps) at \(format(weight)) lbs.\(suffix)")
     }
 
     private func removeExercise(_ call: ChatToolCall) -> ChatToolResult {
@@ -229,7 +259,7 @@ final class ChatToolExecutor {
             lift.progressionDelta = 0
             changes.append("\(format(weight)) lbs")
         }
-        if let sets = call.input["sets"] as? Int {
+        if let sets = integer(call.input["sets"]) {
             lift.sets = sets
             changes.append("\(sets) sets")
         }
@@ -245,7 +275,7 @@ final class ChatToolExecutor {
             live.liveSetLoad(
                 exerciseNamed: lift.name,
                 weight: numeric(call.input["weight"]),
-                sets: call.input["sets"] as? Int
+                sets: integer(call.input["sets"])
             )
         }
 
@@ -256,7 +286,7 @@ final class ChatToolExecutor {
     private func reorder(_ call: ChatToolCall) -> ChatToolResult {
         guard let plan else { return error(call, "There's no plan to edit here.") }
         guard let name = call.input["name"] as? String,
-              let position = call.input["position"] as? Int else {
+              let position = integer(call.input["position"]) else {
             return error(call, "reorder needs a name and a position.")
         }
         guard let lift = lift(named: name, in: plan) else {
@@ -330,7 +360,7 @@ final class ChatToolExecutor {
               PlannedActivity.knownTypes.contains(type) else {
             return error(call, "plan_activity needs one of: \(PlannedActivity.knownTypes.joined(separator: ", ")).")
         }
-        guard let daysAhead = call.input["days_ahead"] as? Int, daysAhead >= 1, daysAhead <= 21 else {
+        guard let daysAhead = integer(call.input["days_ahead"]), daysAhead >= 1, daysAhead <= 21 else {
             return error(call, "days_ahead must be between 1 and 21.")
         }
         guard let target = Calendar.current.date(byAdding: .day, value: daysAhead, to: Date()) else {
@@ -410,7 +440,7 @@ final class ChatToolExecutor {
     // MARK: - History queries
 
     private func queryHistory(_ call: ChatToolCall) -> ChatToolResult {
-        let days = call.input["days"] as? Int ?? 28
+        let days = integer(call.input["days"]) ?? 28
         let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
         let exerciseFilter = (call.input["exercise"] as? String)?.lowercased()
         let groupFilter = (call.input["muscle_group"] as? String).flatMap(MuscleGroup.init(rawValue:))
@@ -504,8 +534,14 @@ final class ChatToolExecutor {
     private func numeric(_ value: Any?) -> Double? {
         if let d = value as? Double { return d }
         if let i = value as? Int { return Double(i) }
-        if let s = value as? String { return Double(s) }
+        if let s = value as? String { return Double(s.trimmingCharacters(in: .whitespaces)) }
         return nil
+    }
+
+    /// Whole number from whatever JSON shape it arrived in — 3, 3.0 or "3".
+    private func integer(_ value: Any?) -> Int? {
+        guard let d = numeric(value), d.isFinite, d >= 1 else { return nil }
+        return Int(d.rounded())
     }
 
     private func format(_ weight: Double) -> String {

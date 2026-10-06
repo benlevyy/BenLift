@@ -109,10 +109,22 @@ class WatchSyncService: NSObject, WCSessionDelegate {
         do {
             let data = try JSONEncoder().encode(snapshot)
             let payload = data.base64EncodedString()
-            try WCSession.default.updateApplicationContext([
+            let dict: [String: Any] = [
                 "type": "phoneOwnedSnapshot",
                 "payload": payload,
-            ])
+            ]
+            // Two deliveries, one snapshot. Application context is the
+            // durable path — the watch gets the latest state whenever it
+            // next wakes — but it's delivered "when opportune", which on a
+            // locked phone was long enough that a Skip tapped on the wrist
+            // appeared to do nothing. sendMessage lands within a beat when
+            // the watch app is reachable (foreground, or running its sensor
+            // session). The watch gates on `version`, so the duplicate is
+            // harmless.
+            if WCSession.default.isReachable {
+                WCSession.default.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+            }
+            try WCSession.default.updateApplicationContext(dict)
         } catch {
             print("[BenLift/Sync] ❌ Failed to send phone-owned snapshot: \(error)")
         }
@@ -352,6 +364,12 @@ class WatchSyncService: NSObject, WCSessionDelegate {
                 #if os(iOS)
                 handlePhoneCommandPayload(message["payload"] as? String)
                 #endif
+            case "phoneOwnedSnapshot":
+                // Real-time copy of the phone-owned snapshot. Same payload
+                // the application-context path carries; same handler.
+                #if os(watchOS)
+                handlePhoneOwnedSnapshotPayload(message["payload"] as? String)
+                #endif
             case "vitals":
                 // Real-time HR / calorie stream from the watch during a
                 // phone-owned session. Routed through a notification so
@@ -429,14 +447,29 @@ class WatchSyncService: NSObject, WCSessionDelegate {
             // Phone is the owner of an active workout; we're the passive
             // display. Reuses the same `WorkoutSnapshot` the watch-owned
             // path uses — watch UI renders from snapshot either way.
-            if let snap = try? JSONDecoder().decode(WorkoutSnapshot.self, from: payloadData) {
-                DispatchQueue.main.async {
-                    self.receivedPhoneSnapshot = snap
-                    NotificationCenter.default.post(name: .phoneOwnedSnapshotReceived, object: nil)
-                }
-            }
+            #if os(watchOS)
+            handlePhoneOwnedSnapshotPayload(payloadString)
+            #endif
         }
     }
+
+    /// Decode + deliver a phone-owned snapshot (base64 JSON of
+    /// `WorkoutSnapshot`). Shared by the sendMessage and applicationContext
+    /// arrivals so both land in the same slot and post the same notification.
+    #if os(watchOS)
+    private func handlePhoneOwnedSnapshotPayload(_ payloadString: String?) {
+        guard let payloadString,
+              let data = Data(base64Encoded: payloadString),
+              let snap = try? JSONDecoder().decode(WorkoutSnapshot.self, from: data) else {
+            print("[BenLift/Sync] ❌ Couldn't decode phoneOwnedSnapshot payload")
+            return
+        }
+        DispatchQueue.main.async {
+            self.receivedPhoneSnapshot = snap
+            NotificationCenter.default.post(name: .phoneOwnedSnapshotReceived, object: nil)
+        }
+    }
+    #endif
 }
 
 // MARK: - Notification Names

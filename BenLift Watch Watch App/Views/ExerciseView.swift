@@ -199,9 +199,17 @@ struct ExerciseView: View {
             .padding(.horizontal, 4)
         }
         .onAppear {
+            // Any route in — a tapped row, a rest ending, the phone moving
+            // on — lands here with the weight loaded, never 0.
+            workoutVM.ensureInputsPrimed()
             suppressCrownSync = true
             crownReps = workoutVM.currentReps
             repsFocused = true
+        }
+        .onChange(of: workoutVM.activeExerciseIndex) { _, _ in
+            workoutVM.ensureInputsPrimed()
+            suppressCrownSync = true
+            crownReps = workoutVM.currentReps
         }
     }
 }

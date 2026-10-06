@@ -28,13 +28,18 @@ struct SessionDetailView: View {
                     exercisesSection
                 }
 
-                // Pre-workout notes
-                if session.feeling != nil || session.concerns != nil {
-                    preWorkoutSection
+                // Notes — editable in place. Nothing in the app wrote this
+                // field before (the finish sheet passed nil), so a session
+                // that needed a note had nowhere to put one.
+                notesSection
+
+                if let feeling = session.feeling {
+                    feelingRow(feeling)
                 }
             }
             .padding()
         }
+        .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showChat) {
             SessionChatSheet(session: session)
         }
@@ -49,8 +54,7 @@ struct SessionDetailView: View {
                     .bold()
                 } else {
                     Button("Edit") {
-                        editSnapshot = sessionFingerprint()
-                        isEditing = true
+                        beginEditing()
                     }
                 }
             }
@@ -129,10 +133,24 @@ struct SessionDetailView: View {
                 // the data feeds the AI's patterns card.
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
-                        Text(entry.exerciseName)
-                            .font(.body.bold())
-                            .strikethrough(entry.isSkipped, color: .secondaryText)
-                            .foregroundColor(entry.isSkipped ? .secondaryText : .primary)
+                        // The name opens that lift's history — every
+                        // session it appeared in, and where the weight
+                        // moved. "Where did I bump this" is answered from
+                        // the place the question comes up.
+                        NavigationLink {
+                            ExerciseProgressView(exerciseName: entry.exerciseName)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(entry.exerciseName)
+                                    .font(.body.bold())
+                                    .strikethrough(entry.isSkipped, color: .secondaryText)
+                                    .foregroundColor(entry.isSkipped ? .secondaryText : .primary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.tertiaryText)
+                            }
+                        }
+                        .buttonStyle(.plain)
                         if entry.isSkipped {
                             Text("skipped")
                                 .font(.caption2.bold())
@@ -292,28 +310,101 @@ struct SessionDetailView: View {
         }
     }
 
-    // MARK: - Pre-Workout
+    // MARK: - Notes
 
-    private var preWorkoutSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Pre-Workout")
+    /// Stored in `WorkoutSession.concerns` — the field predates the rename,
+    /// and chat already reads it as "what they said at the time".
+    private var noteBinding: Binding<String> {
+        Binding(
+            get: { session.concerns ?? "" },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                session.concerns = trimmed.isEmpty ? nil : newValue
+            }
+        )
+    }
+
+    private var hasNote: Bool {
+        !(session.concerns ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    @ViewBuilder
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Notes")
                 .font(.caption.bold())
                 .foregroundColor(.secondaryText)
                 .textCase(.uppercase)
 
-            if let feeling = session.feeling {
-                Text("Feeling: \(feeling)/5")
-                    .font(.caption)
-            }
-            if let concerns = session.concerns, !concerns.isEmpty {
-                Text("Concerns: \(concerns)")
-                    .font(.caption)
-                    .foregroundColor(.secondaryText)
+            if isEditing {
+                TextField(
+                    "How it went, what to change next time…",
+                    text: noteBinding,
+                    axis: .vertical
+                )
+                .lineLimit(2...8)
+                .font(.body)
+                .padding(12)
+                .background(Color.cardSurface)
+                .cornerRadius(8)
+            } else if hasNote {
+                // Tapping the note is the fast way into editing it — the
+                // toolbar Edit does the same thing from further away.
+                Button {
+                    beginEditing()
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(session.concerns ?? "")
+                            .font(.body)
+                            .foregroundColor(.primary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Image(systemName: "pencil")
+                            .font(.caption)
+                            .foregroundColor(.tertiaryText)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.cardSurface)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    beginEditing()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.pencil")
+                        Text("Add a note")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.accentBlue)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.cardSurface)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
             }
         }
-        .padding()
-        .background(Color.cardSurface)
-        .cornerRadius(8)
+    }
+
+    private func feelingRow(_ feeling: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "face.smiling")
+                .font(.caption)
+            Text("Felt \(feeling)/5 going in")
+                .font(.caption)
+        }
+        .foregroundColor(.secondaryText)
+        .padding(.horizontal, 4)
+    }
+
+    private func beginEditing() {
+        guard !isEditing else { return }
+        editSnapshot = sessionFingerprint()
+        isEditing = true
     }
 
     // MARK: - Edit Actions
@@ -371,10 +462,11 @@ struct SessionDetailView: View {
     }
 
     private func sessionFingerprint() -> String {
-        session.sortedEntries.map { entry in
+        let entries = session.sortedEntries.map { entry in
             let sets = entry.sortedSets.map { "\($0.weight)-\($0.reps)-\($0.isWarmup)" }.joined(separator: "|")
             return "\(entry.exerciseName):\(sets)"
         }.joined(separator: ";")
+        return entries + "#" + (session.concerns ?? "")
     }
 
 }
