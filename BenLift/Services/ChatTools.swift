@@ -19,7 +19,8 @@ enum ChatTools {
             Swap one lift in today's plan for a different one. Use when the user \
             can't do a movement (equipment busy or missing, a joint complaining) \
             or wants a different variation. Carries over sets and reps unless you \
-            override them, and picks a sensible starting load for the new lift.
+            override them, and picks a sensible starting load for the new lift. \
+            The result says whether the day's muscle coverage changed.
             """,
             properties: [
                 "current_name": string("Exact name of the lift to replace, as it appears in the plan."),
@@ -35,7 +36,10 @@ enum ChatTools {
             name: "add_exercise",
             description: """
             Add a lift to today's plan. Use when the user asks for more work on \
-            something specific, or wants an accessory they usually do.
+            something specific, or wants an accessory they usually do. Without \
+            `after` the lift goes last, which is right for isolation work and \
+            wrong for a compound — place those with `after`. The result reports \
+            the plan's new set count, time and coverage.
             """,
             properties: [
                 "name": string("Name of the lift to add."),

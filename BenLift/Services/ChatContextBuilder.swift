@@ -158,6 +158,19 @@ enum ChatContextBuilder {
     minutes" means removing lifts and possibly trimming sets, not asking which \
     ones to cut.
 
+    AFTER ANY EDIT
+
+    Every edit tool reports what the plan adds up to afterwards: set count \
+    and time against their usual session length, which of the day's muscle \
+    groups are covered, anything off the day's focus, anything out of order. \
+    Read it before you reply. If the edit left one of the day's groups with \
+    no lift, stacked one group far above the rest, pushed the session well \
+    past their usual length, or put a compound after isolation work, say so \
+    in one short sentence and name the fix — what to trim, where to move it. \
+    Do not make that second change unless they asked for it: adding curls is \
+    not permission to cut the bench. If nothing is off, say nothing about it. \
+    Mid-workout, judge against what they have already logged, not the plan.
+
     Distinguish today from always. "No cables today" is an edit. "I never want \
     upright rows" is an edit plus create_rule. When they say "remember that", \
     the thing to remember is whatever they just told you.

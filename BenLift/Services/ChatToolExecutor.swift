@@ -65,35 +65,198 @@ final class ChatToolExecutor {
     }
 
     func execute(_ calls: [ChatToolCall]) -> [ChatToolResult] {
+        // Shape of the plan before this round, so each edit can report what
+        // it did to the rest of the workout — not just to its own lift.
+        var shapeBefore = plan.map(shape(of:))
+
         let results = calls.map { call -> ChatToolResult in
-            if let allowedTools, !allowedTools.contains(call.name) {
-                return ChatToolResult(
-                    toolUseId: call.id,
-                    content: "\(call.name) isn't available here — this is a past session, not today's plan.",
-                    isError: true
-                )
-            }
-            switch call.name {
-            case "replace_exercise": return replaceExercise(call)
-            case "add_exercise":     return addExercise(call)
-            case "remove_exercise":  return removeExercise(call)
-            case "set_load":         return setLoad(call)
-            case "reorder":          return reorder(call)
-            case "set_focus":        return setFocus(call)
-            case "plan_activity":    return planActivity(call)
-            case "create_rule":      return createRule(call)
-            case "query_history":    return queryHistory(call)
-            default:
-                return ChatToolResult(
-                    toolUseId: call.id,
-                    content: "Unknown tool \(call.name).",
-                    isError: true
-                )
-            }
+            let result = run(call)
+            guard Self.planEditingTools.contains(call.name),
+                  !result.isError,
+                  let plan,
+                  let before = shapeBefore else { return result }
+            let after = shape(of: plan)
+            shapeBefore = after
+            return ChatToolResult(
+                toolUseId: result.toolUseId,
+                content: result.content + "\n\n" + impactReport(before: before, after: after, plan: plan)
+            )
         }
         try? modelContext.save()
         return results
     }
+
+    private func run(_ call: ChatToolCall) -> ChatToolResult {
+        if let allowedTools, !allowedTools.contains(call.name) {
+            return ChatToolResult(
+                toolUseId: call.id,
+                content: "\(call.name) isn't available here — this is a past session, not today's plan.",
+                isError: true
+            )
+        }
+        switch call.name {
+        case "replace_exercise": return replaceExercise(call)
+        case "add_exercise":     return addExercise(call)
+        case "remove_exercise":  return removeExercise(call)
+        case "set_load":         return setLoad(call)
+        case "reorder":          return reorder(call)
+        case "set_focus":        return setFocus(call)
+        case "plan_activity":    return planActivity(call)
+        case "create_rule":      return createRule(call)
+        case "query_history":    return queryHistory(call)
+        default:
+            return ChatToolResult(
+                toolUseId: call.id,
+                content: "Unknown tool \(call.name).",
+                isError: true
+            )
+        }
+    }
+
+    // MARK: - Impact of an edit on the rest of the workout
+
+    /// Tools that change today's lifts in place. `set_focus` rebuilds the
+    /// whole plan and is reported differently.
+    private static let planEditingTools: Set<String> = [
+        "replace_exercise", "add_exercise", "remove_exercise", "set_load", "reorder"
+    ]
+
+    /// The parts of a plan that one lift changing can knock out of shape:
+    /// how much work there is, which of the day's muscle groups it covers,
+    /// and whether compounds still come before isolation work.
+    private struct PlanShape {
+        var liftCount: Int
+        var sets: Int
+        var minutes: Int
+        var setsByGroup: [MuscleGroup: Int]
+        var liftsByGroup: [MuscleGroup: [String]]
+        /// "X (compound) comes after Y (isolation)" — only where intents are
+        /// recorded. Replayed lifts usually carry none, and guessing from
+        /// equipment gets barbell curls wrong.
+        var orderIssues: [String]
+
+        var coveredGroups: Set<MuscleGroup> { Set(setsByGroup.keys) }
+    }
+
+    /// Groups that appear on every day of a split but are rarely programmed
+    /// explicitly. Their absence is not worth a warning.
+    private static let incidentalGroups: Set<MuscleGroup> = [.core, .forearms]
+
+    private func shape(of plan: DailyPlan) -> PlanShape {
+        let lookup = exerciseLookup()
+        var setsByGroup: [MuscleGroup: Int] = [:]
+        var liftsByGroup: [MuscleGroup: [String]] = [:]
+        var firstIsolation: String?
+        var orderIssues: [String] = []
+
+        for lift in plan.sortedLifts {
+            if let group = lift.muscleGroup ?? lookup[lift.name.lowercased()]?.muscleGroup {
+                setsByGroup[group, default: 0] += lift.sets
+                liftsByGroup[group, default: []].append(lift.name)
+            }
+            switch lift.intentRaw {
+            case "isolation", "finisher":
+                if firstIsolation == nil { firstIsolation = lift.name }
+            case "primary compound", "secondary compound":
+                if let first = firstIsolation {
+                    orderIssues.append("\(lift.name) (compound) comes after \(first) (isolation)")
+                }
+            default:
+                break
+            }
+        }
+
+        return PlanShape(
+            liftCount: plan.lifts.count,
+            sets: plan.lifts.reduce(0) { $0 + $1.sets },
+            minutes: plan.estimatedMinutes,
+            setsByGroup: setsByGroup,
+            liftsByGroup: liftsByGroup,
+            orderIssues: orderIssues
+        )
+    }
+
+    /// Facts for the model, not advice. What the plan now adds up to, what
+    /// the edit did to the day's coverage, and anything out of order — so
+    /// "add curls" comes back with "that's 18 sets and ~54 min; you usually
+    /// run 45" already in hand rather than something to notice.
+    private func impactReport(before: PlanShape, after: PlanShape, plan: DailyPlan) -> String {
+        var lines: [String] = []
+
+        var headline = "Plan now: \(after.liftCount) lift\(after.liftCount == 1 ? "" : "s"), \(after.sets) working sets, ~\(after.minutes) min"
+        if before.sets != after.sets {
+            headline += " (was \(before.sets) sets, ~\(before.minutes) min)"
+        }
+        if let usual = usualSessionMinutes {
+            headline += ". Their sessions usually run ~\(usual) min"
+        }
+        lines.append(headline + ".")
+
+        let dayGroups = plan.muscleGroups
+        let covered = after.coveredGroups
+
+        // Coverage of the day's groups, as it stands.
+        if !dayGroups.isEmpty {
+            let parts = dayGroups.compactMap { group -> String? in
+                guard let sets = after.setsByGroup[group], let lifts = after.liftsByGroup[group] else { return nil }
+                return "\(group.displayName.lowercased()) \(lifts.count)×/\(sets) sets"
+            }
+            if !parts.isEmpty { lines.append("Covers: \(parts.joined(separator: ", ")).") }
+
+            let uncovered = dayGroups.filter { !covered.contains($0) && !Self.incidentalGroups.contains($0) }
+            if !uncovered.isEmpty {
+                let newlyUncovered = uncovered.filter { before.coveredGroups.contains($0) }
+                if !newlyUncovered.isEmpty {
+                    lines.append("⚠ This edit left \(newlyUncovered.map { $0.displayName.lowercased() }.joined(separator: " and ")) with no lift today.")
+                } else {
+                    lines.append("Not covered today: \(uncovered.map { $0.displayName.lowercased() }.joined(separator: ", ")).")
+                }
+            }
+        }
+
+        // Lifts that train something outside the day's focus.
+        let offDay = covered.subtracting(dayGroups).subtracting(Self.incidentalGroups)
+        let newOffDay = offDay.subtracting(before.coveredGroups)
+        if !newOffDay.isEmpty {
+            let names = newOffDay.sorted { $0.rawValue < $1.rawValue }.map { group in
+                "\((after.liftsByGroup[group] ?? []).joined(separator: ", ")) (\(group.displayName.lowercased()))"
+            }
+            lines.append("Off today's focus: \(names.joined(separator: "; ")).")
+        }
+
+        // One group swallowing the session.
+        if let top = after.setsByGroup.max(by: { $0.value < $1.value }),
+           top.value >= 9,
+           let runnerUp = after.setsByGroup.filter({ $0.key != top.key }).values.max(),
+           top.value >= runnerUp * 2 {
+            lines.append("⚠ \(top.key.displayName) is now \(top.value) sets — double anything else today.")
+        }
+
+        // Ordering.
+        let newOrderIssues = after.orderIssues.filter { !before.orderIssues.contains($0) }
+        if !newOrderIssues.isEmpty {
+            lines.append("⚠ Order: \(newOrderIssues.joined(separator: "; ")).")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    /// Median length of recent sessions, in minutes, so "longer than usual"
+    /// has a number behind it. Nil until there are a few real sessions.
+    private lazy var usualSessionMinutes: Int? = {
+        let descriptor = FetchDescriptor<WorkoutSession>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        let durations = ((try? modelContext.fetch(descriptor)) ?? [])
+            .prefix(20)
+            .compactMap(\.duration)
+            .filter { $0 >= 600 }   // under ten minutes is a test or a mistake
+            .prefix(10)
+            .sorted()
+        guard durations.count >= 3 else { return nil }
+        let median = durations[durations.count / 2]
+        return Int((median / 60).rounded())
+    }()
 
     // MARK: - Plan edits
 
