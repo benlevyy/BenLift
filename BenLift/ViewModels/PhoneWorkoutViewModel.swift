@@ -32,6 +32,21 @@ class PhoneWorkoutViewModel {
     var currentReps: Double = 0
     var weightIncrement: Double = 5.0
 
+    /// Armed by the [W] toggle: the next set the user logs is recorded as a
+    /// warm-up regardless of what the plan says. Plan-generated warm-up sets
+    /// (`isWarmupPhase`) cover the case where the app decided; this covers the
+    /// far more common one where the user did — and since the resolver stopped
+    /// emitting `warmupSets` entirely, it is now the only way to mark one.
+    ///
+    /// Cleared after each logged set, like the failed-rep annotation: it
+    /// describes one set, not a mode.
+    var markNextSetAsWarmup: Bool = false
+
+    /// What the next logged set will actually be recorded as.
+    var nextSetIsWarmup: Bool {
+        (activeExercise?.isWarmupPhase ?? false) || markNextSetAsWarmup
+    }
+
     /// Phone's currently-viewed exercise. May differ from `snapshot.activeExerciseIndex`
     /// while user is browsing. Selecting an exercise on phone sends a command to align.
     var viewingExerciseIndex: Int? = nil
@@ -269,7 +284,7 @@ class PhoneWorkoutViewModel {
 
     // Rest timer — derived from absolute end-time so backgrounding can't drift
     var isResting: Bool { snapshot?.restEndsAt != nil }
-    var restTimerDuration: TimeInterval { snapshot?.restDuration ?? 150 }
+    var restTimerDuration: TimeInterval { snapshot?.restDuration ?? RestTiming.defaultDuration }
     var restEndsAt: Date? { snapshot?.restEndsAt }
     /// Live remaining seconds. SwiftUI views should wrap reads in TimelineView for ticks.
     var restTimerRemaining: TimeInterval {
@@ -356,7 +371,9 @@ class PhoneWorkoutViewModel {
                 isSkipped: false
             )
         }
-        let restDuration = effectivePlan.restTimerDuration ?? 150
+        // A manual session has no plan-supplied rest, so fall back to the
+        // user's setting rather than a hardcoded 150.
+        let restDuration = effectivePlan.restTimerDuration ?? baseRestDuration
 
         let initialSnapshot = WorkoutSnapshot(
             version: 1,
@@ -481,16 +498,20 @@ class PhoneWorkoutViewModel {
         }
     }
 
+    /// The user's Rest Timer setting, read live rather than captured at session
+    /// start — changing the stepper in Settings mid-workout takes effect on the
+    /// very next set. Deliberately NOT `snapshot.restDuration`: that field holds
+    /// the *current* rest length, which intent has already scaled, so reading it
+    /// back as the base compounded on every set.
+    private var baseRestDuration: TimeInterval {
+        let stored = UserDefaults.standard.double(forKey: "restTimerDuration")
+        return stored > 0 ? stored : RestTiming.defaultDuration
+    }
+
     /// Watch-side maps exercise intent to rest duration; phone does the same
     /// so a standalone session feels like a watch session.
     private func restDurationForIntent(_ intent: String?) -> TimeInterval {
-        switch intent {
-        case "primary compound": return 180
-        case "secondary compound": return 120
-        case "isolation": return 75
-        case "finisher": return 60
-        default: return snapshot?.restDuration ?? 150
-        }
+        RestTiming.duration(base: baseRestDuration, intent: intent)
     }
 
     private var standaloneRestHapticTimer: Timer?
@@ -540,6 +561,9 @@ class PhoneWorkoutViewModel {
 
     func selectExercise(at index: Int) {
         viewingExerciseIndex = index
+        // The annotation belongs to the set being dialled in, not to the
+        // session — moving to another exercise abandons it.
+        markNextSetAsWarmup = false
         // Initialize the input wheels from the exercise we're viewing.
         if index < exerciseStates.count {
             let state = exerciseStates[index]
@@ -576,7 +600,9 @@ class PhoneWorkoutViewModel {
             print("[BenLift/Phone] Log blocked — viewing \(viewing) but watch active is \(String(describing: activeExerciseIndex))")
             return
         }
-        let isWarmup = activeExercise?.isWarmupPhase ?? false
+        let isWarmup = nextSetIsWarmup
+        // One set, one annotation — disarm before anything can early-return.
+        markNextSetAsWarmup = false
 
         if workoutMode == .standalone {
             standaloneLogSet(index: viewing, isWarmup: isWarmup)
@@ -681,7 +707,11 @@ class PhoneWorkoutViewModel {
                 guard idx < snap.exercises.count,
                       !snap.exercises[idx].loggedSets.isEmpty else { return }
                 let removed = snap.exercises[idx].loggedSets.removeLast()
-                if removed.isWarmup {
+                // Only re-enter the warm-up phase if the plan actually has
+                // warm-ups to go back into. A hand-flagged warm-up on an
+                // exercise with none would otherwise strand the exercise in a
+                // phase it was never in.
+                if removed.isWarmup, snap.exercises[idx].totalWarmups > 0 {
                     snap.exercises[idx].isWarmupPhase = true
                 }
                 // Restore the inputs so the user can re-log the undone set.
@@ -691,6 +721,63 @@ class PhoneWorkoutViewModel {
             return
         }
         sendCommand(.undoSet(exerciseIndex: idx))
+    }
+
+    /// Change how many working sets the viewed exercise calls for.
+    ///
+    /// A plan's `targetSets` is a prescription, not a contract — some days the
+    /// third set is clearly there and some days it clearly isn't. Logging past
+    /// the target already worked (nothing blocks it), but the counter then read
+    /// "Set 4 of 3" and the exercise had been marked complete two sets ago;
+    /// stopping early had no expression at all short of skipping the whole
+    /// exercise. This gives both a number the rest of the session agrees with.
+    ///
+    /// Clamped to what's already been logged — you can't prescribe fewer sets
+    /// than you've done — and to a ceiling that stops a stuck finger from
+    /// asking for sixty.
+    func adjustTargetSets(by delta: Int) {
+        guard let idx = viewingExerciseIndex ?? activeExerciseIndex,
+              let target = clampedTargetSets(at: idx, delta: delta) else { return }
+
+        if workoutMode == .standalone {
+            commitStandaloneMutation { snap in
+                guard idx < snap.exercises.count else { return }
+                snap.exercises[idx].targetSets = target
+            }
+            return
+        }
+        sendCommand(.adjustTargetSets(index: idx, delta: delta))
+    }
+
+    /// The target `adjustTargetSets` would land on, or nil when the delta is a
+    /// no-op. Shared by the action and by the UI's enable/disable state so the
+    /// button can't offer a change that won't happen.
+    ///
+    /// `current` is the count the header is showing, which can exceed the
+    /// prescription when the user has already logged past it ("Set 4 of 3").
+    /// Working from that rather than from `targetSets` keeps [+] meaning "one
+    /// more than I've done" and stops [−] from silently ratcheting the target
+    /// *up* to meet the sets already logged.
+    func clampedTargetSets(at index: Int, delta: Int) -> Int? {
+        guard index < exerciseStates.count else { return nil }
+        let ex = exerciseStates[index]
+        let current = max(ex.targetSets, ex.workingSetsCompleted)
+        let lowerBound = max(1, ex.workingSetsCompleted)
+        let proposed = min(Self.maxTargetSets, max(lowerBound, current + delta))
+        return (proposed == current || proposed == ex.targetSets) ? nil : proposed
+    }
+
+    /// Upper bound on sets per exercise. Well past any real prescription —
+    /// this is a guard against a held button, not a programming opinion.
+    static let maxTargetSets = 15
+
+    /// True when the viewed exercise can take another set / give one up.
+    var canAddSet: Bool { deltaAvailable(1) }
+    var canSkipSet: Bool { deltaAvailable(-1) }
+
+    private func deltaAvailable(_ delta: Int) -> Bool {
+        guard let idx = viewingExerciseIndex ?? activeExerciseIndex else { return false }
+        return clampedTargetSets(at: idx, delta: delta) != nil
     }
 
     func skipWarmups() {
@@ -1260,7 +1347,7 @@ class PhoneWorkoutViewModel {
                 guard idx < snap.exercises.count,
                       !snap.exercises[idx].loggedSets.isEmpty else { return }
                 let removed = snap.exercises[idx].loggedSets.removeLast()
-                if removed.isWarmup {
+                if removed.isWarmup, snap.exercises[idx].totalWarmups > 0 {
                     snap.exercises[idx].isWarmupPhase = true
                 }
             }
@@ -1278,6 +1365,12 @@ class PhoneWorkoutViewModel {
             unskipExercise(at: idx)
         case .setNote(let idx, let note):
             setNote(note, forExerciseAt: idx)
+        case .adjustTargetSets(let idx, let delta):
+            guard let target = clampedTargetSets(at: idx, delta: delta) else { return }
+            commitStandaloneMutation { snap in
+                guard idx < snap.exercises.count else { return }
+                snap.exercises[idx].targetSets = target
+            }
         case .addExercise(let info):
             // The watch has no history; its picker sends a library default
             // unless the plan carried a real number, and a phone-owned

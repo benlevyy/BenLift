@@ -138,6 +138,32 @@ final class ChatViewModel {
         load(modelContext: modelContext)
     }
 
+    /// What pull-to-refresh on Today actually does.
+    ///
+    /// It used to call `reresolve` alone, which re-ran a deterministic
+    /// resolver over unchanged inputs and therefore produced a byte-identical
+    /// plan — a refresh gesture that provably could not change anything on
+    /// screen. The input that *does* go stale is HealthKit: a climb or a run
+    /// logged since open changes the cross-training flag, and the week strip
+    /// with it. So pull the activities first, then re-resolve against them.
+    ///
+    /// An edited plan still survives — `reresolve` guards that — but the
+    /// cross-training it's shown beside refreshes either way.
+    func refresh(modelContext: ModelContext) async {
+        await loadCrossTraining()
+
+        // Same rule as `reresolve` — an edited plan is the user's and survives
+        // a pull — but the reload runs either way, so the freshly-fetched
+        // activities reach the week strip even when the plan is left alone.
+        let today = Calendar.current.startOfDay(for: Date())
+        if let existing = PlanResolver.existingPlan(on: today, modelContext: modelContext),
+           !existing.wasEdited {
+            modelContext.delete(existing)
+            try? modelContext.save()
+        }
+        load(modelContext: modelContext)
+    }
+
     /// Discard chat's edits and rebuild today's plan from history.
     ///
     /// `reresolve` deliberately refuses to touch an edited plan — those edits
@@ -161,13 +187,18 @@ final class ChatViewModel {
         load(modelContext: modelContext)
     }
 
+    /// Today's planning thread. Scoped to `.today` so a session review of a
+    /// workout done today doesn't land in this transcript — and so clearing
+    /// this one doesn't take those answers with it.
     private static func thread(for day: Date, modelContext: ModelContext) -> ChatThread {
         let descriptor = FetchDescriptor<ChatThread>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         let threads = (try? modelContext.fetch(descriptor)) ?? []
-        if let existing = threads.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) {
+        if let existing = threads.first(where: {
+            $0.kind == .today && Calendar.current.isDate($0.date, inSameDayAs: day)
+        }) {
             return existing
         }
-        let fresh = ChatThread(date: day)
+        let fresh = ChatThread(date: day, kind: .today)
         modelContext.insert(fresh)
         try? modelContext.save()
         return fresh

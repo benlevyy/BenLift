@@ -49,31 +49,76 @@ enum ChatRole: String, Codable {
     case system
 }
 
+// MARK: - Chat thread kind
+
+/// What a thread is a conversation *about*.
+///
+/// Threads used to be keyed on the day alone, which quietly merged three
+/// different conversations: planning today on the Today tab, talking mid-set
+/// during a workout, and reviewing a finished session from History. Reviewing
+/// a past workout reopened that day's planning chatter; asking about today's
+/// plan showed review answers inline; "Clear today's chat" wiped both. The
+/// day-scoped thread is still right for Today (and for the in-workout sheet,
+/// which is deliberately the same conversation) — a review is its own thing.
+enum ChatThreadKind: String, Codable {
+    /// The Today tab's conversation, one per calendar day. Shared with the
+    /// in-workout chat sheet on purpose: "kill the overhead press" should
+    /// resolve against this morning's plan.
+    case today
+    /// Review of one finished workout, keyed to that session. Survives its
+    /// day, because a session is worth asking about later.
+    case session
+}
+
 // MARK: - Chat Thread
 
-/// One conversation per day, seeded with that day's resolved plan. Keeping
-/// threads day-scoped bounds context size without compaction; anything
-/// worth remembering longer becomes a `UserRule` instead of living in
-/// scrollback.
+/// One conversation per day for planning, plus one per finished session for
+/// review. Day-scoping bounds context size without compaction; anything worth
+/// remembering longer becomes a `UserRule` instead of living in scrollback.
 @Model
 final class ChatThread {
     var id: UUID
-    /// Start of the day this thread belongs to.
+    /// Start of the day this thread belongs to. For a session thread this is
+    /// the day of the workout, so review threads still sort chronologically.
     var date: Date
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.thread)
     var messages: [ChatMessage]
     var createdAt: Date
 
+    /// Defaulted so rows written before threads had kinds migrate as `.today`,
+    /// which is what every one of them was.
+    var kindRaw: String = ChatThreadKind.today.rawValue
+
+    /// The `WorkoutSession.id` a `.session` thread reviews. Stored as a string
+    /// rather than a relationship so deleting a session doesn't cascade the
+    /// conversation away mid-read; an orphaned thread is inert. Always nil for
+    /// `.today`.
+    var sessionIDString: String?
+
     init(
         id: UUID = UUID(),
         date: Date,
         messages: [ChatMessage] = [],
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        kind: ChatThreadKind = .today,
+        sessionID: UUID? = nil
     ) {
         self.id = id
         self.date = date
         self.messages = messages
         self.createdAt = createdAt
+        self.kindRaw = kind.rawValue
+        self.sessionIDString = sessionID?.uuidString
+    }
+
+    var kind: ChatThreadKind {
+        get { ChatThreadKind(rawValue: kindRaw) ?? .today }
+        set { kindRaw = newValue.rawValue }
+    }
+
+    var sessionID: UUID? {
+        get { sessionIDString.flatMap(UUID.init(uuidString:)) }
+        set { sessionIDString = newValue?.uuidString }
     }
 
     var sortedMessages: [ChatMessage] {

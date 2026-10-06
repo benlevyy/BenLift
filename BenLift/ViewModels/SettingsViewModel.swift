@@ -15,8 +15,6 @@ class SettingsViewModel {
     @AppStorage("dumbbellIncrement") var dumbbellIncrement: Double = 2.5
     @ObservationIgnored
     @AppStorage("weightUnit") var weightUnitRaw: String = WeightUnit.lbs.rawValue
-    @ObservationIgnored
-    @AppStorage("warmUpGeneration") var warmUpGeneration: Bool = true
 
     // Notifications
     @ObservationIgnored

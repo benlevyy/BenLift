@@ -26,9 +26,19 @@ struct ExerciseView: View {
                             .font(.caption2)
                             .foregroundColor(.yellow)
                     } else {
-                        Text("Set \(workoutVM.workingSetsCompleted + 1) of \(workoutVM.targetSets)")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                        // Skip-a-set / add-a-set, either side of the count they
+                        // change. The control row below is already full, and
+                        // these belong next to the number anyway.
+                        HStack(spacing: 10) {
+                            setCountButton("minus", enabled: workoutVM.canSkipSet, delta: -1)
+
+                            Text("Set \(workoutVM.workingSetsCompleted + 1) of \(workoutVM.targetSets)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .monospacedDigit()
+
+                            setCountButton("plus", enabled: workoutVM.canAddSet, delta: 1)
+                        }
                     }
                 }
 
@@ -163,13 +173,14 @@ struct ExerciseView: View {
                 Button {
                     workoutVM.logSet()
                 } label: {
-                    Text("Log Set")
+                    Text(workoutVM.nextSetIsWarmup ? "Log Warm-up" : "Log Set")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(workoutVM.currentReps <= 0 && !workoutVM.isWarmupPhase)
+                .tint(workoutVM.nextSetIsWarmup ? .yellow : .accentColor)
+                .disabled(workoutVM.currentReps <= 0 && !workoutVM.nextSetIsWarmup)
 
                 // Undo / Skip Warmup / Back
                 HStack(spacing: 6) {
@@ -184,6 +195,20 @@ struct ExerciseView: View {
                                 .font(.caption2)
                         }
                         .buttonStyle(.bordered)
+                    }
+
+                    // Warm-up flag — the counterpart to [F] on the reps row,
+                    // and the only way to mark one now that plans no longer
+                    // generate warm-up sets.
+                    if !workoutVM.isWarmupPhase {
+                        Button {
+                            workoutVM.markNextSetAsWarmup.toggle()
+                        } label: {
+                            Text("W")
+                                .font(.caption2.bold())
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(workoutVM.markNextSetAsWarmup ? .yellow : .gray)
                     }
 
                     // Skip warmups
@@ -221,5 +246,25 @@ struct ExerciseView: View {
             suppressCrownSync = true
             crownReps = workoutVM.currentReps
         }
+    }
+
+    private func setCountButton(
+        _ systemName: String,
+        enabled: Bool,
+        delta: Int
+    ) -> some View {
+        Button {
+            workoutVM.adjustTargetSets(by: delta)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(enabled ? .accentColor : .secondary)
+                .frame(width: 22, height: 22)
+                .background(Color.gray.opacity(enabled ? 0.3 : 0.12))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(delta > 0 ? "Add a set" : "Skip a set")
     }
 }

@@ -4,11 +4,13 @@ import Observation
 
 /// Chat about a workout that already happened.
 ///
-/// Uses that day's thread rather than a separate one, so opening 4 September's
-/// session continues whatever was said on 4 September. The context and the
-/// tools differ from today's chat: a finished session can't be edited, so the
-/// plan-mutating tools are withheld and the prompt is about explaining rather
-/// than planning.
+/// Has its own thread, keyed to the session. It used to borrow that day's
+/// Today thread on the theory that one day is one conversation — but the two
+/// are not the same conversation at all: reviewing a session reopened that
+/// morning's planning chatter, review answers appeared inline on the Today
+/// tab, and "Clear today's chat" deleted them. The context and the tools
+/// differ too: a finished session can't be edited, so the plan-mutating tools
+/// are withheld and the prompt is about explaining rather than planning.
 @MainActor
 @Observable
 final class SessionChatViewModel {
@@ -36,14 +38,22 @@ final class SessionChatViewModel {
     // MARK: Load
 
     func load(modelContext: ModelContext) {
-        let day = Calendar.current.startOfDay(for: session.date)
+        let sessionID = session.id
         let descriptor = FetchDescriptor<ChatThread>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         let threads = (try? modelContext.fetch(descriptor)) ?? []
 
-        if let existing = threads.first(where: { Calendar.current.isDate($0.date, inSameDayAs: day) }) {
+        if let existing = threads.first(where: {
+            $0.kind == .session && $0.sessionID == sessionID
+        }) {
             thread = existing
         } else {
-            let fresh = ChatThread(date: day)
+            // Dated to the workout, not to now, so review threads still sort
+            // chronologically alongside the planning ones.
+            let fresh = ChatThread(
+                date: Calendar.current.startOfDay(for: session.date),
+                kind: .session,
+                sessionID: sessionID
+            )
             modelContext.insert(fresh)
             try? modelContext.save()
             thread = fresh

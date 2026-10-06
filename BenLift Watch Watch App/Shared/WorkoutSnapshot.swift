@@ -103,4 +103,40 @@ enum WorkoutCommand: Codable {
     case unskipExercise(index: Int)
     /// Set (or clear, with nil) the user's note on an exercise.
     case setNote(exerciseIndex: Int, note: String?)
+    /// Change how many working sets an exercise calls for, mid-session.
+    /// `delta` of +1 is "add a set", -1 is "skip the one I'm not doing".
+    /// The owner clamps; mirrors just send the intent.
+    case adjustTargetSets(index: Int, delta: Int)
+}
+
+// MARK: - Rest timing
+
+/// How long to rest after a working set.
+///
+/// The user's Settings value is the baseline; exercise intent scales it.
+/// Before this, intent assigned *absolute* durations (180/120/75/60) on every
+/// logged set, which clobbered the setting outright — and since almost every
+/// planned exercise carries an intent, the Rest Timer stepper in Settings
+/// genuinely did nothing. Multipliers are expressed relative to the 150s
+/// default so leaving the setting alone reproduces the old numbers exactly.
+enum RestTiming {
+    static let defaultDuration: TimeInterval = 150
+
+    static func multiplier(for intent: String?) -> Double {
+        switch intent {
+        case "primary compound": return 1.2    // 180s at the default base
+        case "secondary compound": return 0.8  // 120s
+        case "isolation": return 0.5           //  75s
+        case "finisher": return 0.4            //  60s
+        default: return 1.0
+        }
+    }
+
+    /// Rounded to 5s — a rest timer that reads 2:37 looks like a bug, not a
+    /// preference. Floored at 15s so a very short base can't produce a timer
+    /// that expires before the user has racked the weight.
+    static func duration(base: TimeInterval, intent: String?) -> TimeInterval {
+        let scaled = base * multiplier(for: intent)
+        return max(15, (scaled / 5).rounded() * 5)
+    }
 }

@@ -211,7 +211,8 @@ struct TodayChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .refreshable {
-                chatVM.reresolve(modelContext: modelContext)
+                await chatVM.refresh(modelContext: modelContext)
+                Haptics.selection()
             }
             .onChange(of: messages.count) { _, _ in
                 withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo("bottom", anchor: .bottom) }

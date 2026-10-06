@@ -10,7 +10,6 @@ struct SettingsView: View {
     @AppStorage("restTimerDuration") private var restTimerDuration: Double = 150
     @AppStorage("weightIncrement") private var weightIncrement: Double = 5.0
     @AppStorage("dumbbellIncrement") private var dumbbellIncrement: Double = 2.5
-    @AppStorage("warmUpGeneration") private var warmUpGeneration: Bool = true
     @AppStorage("weightUnit") private var weightUnitRaw: String = WeightUnit.lbs.rawValue
     @AppStorage("workoutNotificationsEnabled") private var workoutNotificationsEnabled: Bool = true
     @AppStorage("dailyReminderEnabled") private var dailyReminderEnabled: Bool = false
@@ -100,8 +99,12 @@ struct SettingsView: View {
         }
     }
 
+    /// The "Generate Warm-up Sets" toggle lived here until the resolver stopped
+    /// emitting warm-up sets at all, leaving it wired to nothing. Warm-ups are
+    /// now flagged by hand during the set, which is the only thing that ever
+    /// actually happened anyway.
     private var workoutPreferencesSection: some View {
-        Section("Workout Preferences") {
+        Section {
             HStack {
                 Text("Rest Timer")
                 Spacer()
@@ -129,7 +132,10 @@ struct SettingsView: View {
                     .labelsHidden()
             }
 
-            Toggle("Generate Warm-up Sets", isOn: $warmUpGeneration)
+        } header: {
+            Text("Workout Preferences")
+        } footer: {
+            Text("Rest is scaled from here by what the exercise is: a primary compound rests longer than a finisher. Mark a warm-up with [W] beside Log Set — nothing generates them for you.")
         }
     }
 

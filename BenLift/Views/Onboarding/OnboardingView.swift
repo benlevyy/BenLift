@@ -15,16 +15,20 @@ struct OnboardingView: View {
     // through with a single tap if they want.
     @State private var goal: BootstrapGoal = .hypertrophy
     @State private var daysPerWeek: Int = 5
+
+    /// The rotation the resolver walks. Onboarding used to skip this entirely
+    /// while asking for days-per-week, which lands on a dead column — so a new
+    /// user answering "3 days" was silently put on the default push/pull/legs
+    /// and had to find Settings to change it. Custom isn't offered here: it
+    /// needs the day editor, which lives in Settings.
+    @AppStorage(TrainingSplit.storageKey) private var trainingSplitRaw: String =
+        TrainingSplit.pushPullLegs.rawValue
     @State private var experience: BootstrapExperience = .oneToThreeYears
     @State private var equipment: BootstrapEquipment = .fullGym
     @State private var focusAreas: Set<MuscleGroup> = []
     @State private var injuriesOrAvoid: String = ""
     @State private var crossTraining: String = ""
     @State private var preferences: String = ""
-
-    // MARK: - Bootstrap call state
-
-    @State private var bootstrappedProgramName: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -132,16 +136,17 @@ struct OnboardingView: View {
         .padding()
     }
 
-    // MARK: - Step 2: HealthKit + Bootstrap form
+    // MARK: - Step 2: HealthKit + setup form
     //
-    // Single Form that collects every `BootstrapInput` field. On "Design my
-    // program" we call `CoachServiceProtocol.bootstrap(...)` and persist via
-    // `BootstrapPersister`. On error we still let the user proceed — the
-    // pattern engine + planner can run without bootstrap (just less seeded).
+    // This used to POST every field to a bootstrap endpoint that designed a
+    // program. Nothing reads that program any more, so the form now does two
+    // concrete things: it sets the split the resolver walks, and it composes
+    // the plain-text goal the coach reads on every turn. Everything is local
+    // and instant; there is nothing here that can fail.
 
     private var goalStep: some View {
         Form {
-            if !healthRequested {
+            if !healthRequested && !HealthKitService.shared.isAuthorized {
                 Section {
                     healthKitCard
                 }
@@ -158,13 +163,23 @@ struct OnboardingView: View {
                 .pickerStyle(.menu)
             }
 
-            Section("Schedule") {
+            Section {
                 Picker("Days per week", selection: $daysPerWeek) {
                     ForEach([3, 4, 5, 6], id: \.self) { n in
                         Text("\(n)").tag(n)
                     }
                 }
                 .pickerStyle(.segmented)
+
+                Picker("Split", selection: $trainingSplitRaw) {
+                    ForEach(TrainingSplit.allCases.filter { $0 != .custom }) { split in
+                        Text(split.displayName).tag(split.rawValue)
+                    }
+                }
+            } header: {
+                Text("Schedule")
+            } footer: {
+                Text("Your days cycle through the split in order — it doesn't matter which day of the week you train. Changeable any time in Settings, where you can also build a custom one.")
             }
 
             Section("Experience") {
@@ -271,10 +286,11 @@ struct OnboardingView: View {
     // This used to call Claude to design a starter program (split,
     // periodisation, per-muscle volume targets) and persist it via
     // BootstrapPersister. None of that is read any more: the plan comes from
-    // rotating push/pull/legs and replaying the last session of that type,
-    // and a cold start uses the default exercise library. So onboarding does
-    // the one thing that still matters — write down what he's training for,
-    // in his own words — and does it locally, instantly, with no API key
+    // rotating the chosen split and replaying the last session of that day
+    // type, and a cold start uses the default exercise library. So onboarding
+    // does the two things that still matter — pick the split (written straight
+    // to `TrainingSplit.storageKey` by the picker) and write down what he's
+    // training for in his own words — locally, instantly, and with no API key
     // required to get through the door.
 
     @MainActor
@@ -288,18 +304,16 @@ struct OnboardingView: View {
         program.goalText = composedGoalText
         modelContext.insert(program)
 
-        // Things to avoid become real rules, enforced by the resolver in
-        // Swift rather than requested of a model.
-        if let avoid = injuriesOrAvoid.trimmedOrNil {
-            modelContext.insert(UserRule(
-                kind: .programming,
-                subject: avoid,
-                reason: "From onboarding"
-            ))
-        }
+        // "Things to avoid" used to also be written as a `.programming`
+        // UserRule, which read as enforcement it never had: the resolver only
+        // acts on `.exerciseOut` and `.preferOver`, so a free-text rule sat in
+        // Settings under "Enforced in the app before the coach is involved"
+        // doing nothing of the kind. The text is already in `goalText`, which
+        // the coach reads every turn — one home for it, and an honest one.
+        // Naming a specific lift to drop is an exerciseOut rule, made from
+        // chat where it can be matched against the library.
 
         try? modelContext.save()
-        bootstrappedProgramName = "Ready"
         step = 3
     }
 
@@ -338,12 +352,14 @@ struct OnboardingView: View {
             Text("You're Ready")
                 .font(.title.bold())
 
-            if let bootstrappedProgramName {
-                Text("Program: \(bootstrappedProgramName)")
-                    .foregroundColor(.secondaryText)
-            }
-
             Text("Start your first workout from the Today tab.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondaryText)
+
+            // Names what onboarding actually decided, rather than the old
+            // "Program: Ready" placeholder left over from the bootstrap call.
+            Text("\(TrainingSplit.current.displayName) · first day up: \(firstDayName)")
+                .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondaryText)
 
@@ -357,6 +373,10 @@ struct OnboardingView: View {
     }
 
     // MARK: - Helpers
+
+    private var firstDayName: String {
+        TrainingSplit.current.days.first?.name ?? "Push"
+    }
 
     private func primaryButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {

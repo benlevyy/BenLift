@@ -43,22 +43,34 @@ struct PhoneExerciseDetailView: View {
                 // Log Set button — optimistic UI, no spinner. Set appears in the
                 // table instantly; the watch's snapshot reconciles in the background.
                 let viewingMatchesActive = workoutVM.viewingExerciseIndex == workoutVM.activeExerciseIndex
-                let invalidReps = workoutVM.currentReps <= 0 && !workoutVM.isWarmupPhase
+                let invalidReps = workoutVM.currentReps <= 0 && !workoutVM.nextSetIsWarmup
                 let isDisabled = invalidReps || !viewingMatchesActive
 
-                Button {
-                    Haptics.impact(.medium)
-                    workoutVM.logSet()
-                } label: {
-                    Text("Log Set")
-                        .font(.title3.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(isDisabled ? Color.accentBlue.opacity(0.4) : Color.accentBlue)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
+                HStack(spacing: 12) {
+                    // Warm-up flag — the counterpart to [F] on the reps row.
+                    // Hidden during a plan-driven warm-up phase, where every
+                    // set is already a warm-up and the toggle would be a lie.
+                    if !workoutVM.isWarmupPhase {
+                        warmupToggle
+                    }
+
+                    Button {
+                        Haptics.impact(.medium)
+                        workoutVM.logSet()
+                    } label: {
+                        Text(workoutVM.nextSetIsWarmup ? "Log Warm-up" : "Log Set")
+                            .font(.title3.bold())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(logButtonColor(disabled: isDisabled))
+                            // White on yellow is unreadable; the warm-up state
+                            // takes the dark label its background needs.
+                            .foregroundColor(workoutVM.nextSetIsWarmup ? .black : .white)
+                            .cornerRadius(12)
+                            .animation(.snappy, value: workoutVM.nextSetIsWarmup)
+                    }
+                    .disabled(isDisabled)
                 }
-                .disabled(isDisabled)
 
                 // Logged sets table
                 if let state, !state.loggedSets.isEmpty {
@@ -226,7 +238,7 @@ struct PhoneExerciseDetailView: View {
     // MARK: - Exercise Header
 
     private var exerciseHeader: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 8) {
             Text(state?.info.name ?? "")
                 .font(.title2.bold())
                 .multilineTextAlignment(.center)
@@ -240,11 +252,70 @@ struct PhoneExerciseDetailView: View {
                     .background(Color.yellow.opacity(0.15))
                     .cornerRadius(6)
             } else {
-                Text("Set \(workoutVM.workingSetsCompleted + 1) of \(workoutVM.targetSets)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondaryText)
+                setCountControl
             }
         }
+    }
+
+    /// Skip-a-set / add-a-set, placed either side of the count they change.
+    /// `targetSets` is a prescription, not a contract — the third set is
+    /// clearly there some days and clearly isn't on others — and until now the
+    /// only way to express either was to log past the target (leaving the
+    /// header reading "Set 4 of 3" and the exercise marked complete two sets
+    /// early) or to bail on the whole exercise.
+    private var setCountControl: some View {
+        HStack(spacing: 14) {
+            setCountButton(
+                "minus",
+                enabled: workoutVM.canSkipSet,
+                delta: -1,
+                label: "Skip a set"
+            )
+
+            // Read from the exercise on screen, like the name above it —
+            // `workoutVM.targetSets` tracks the *active* exercise, which can
+            // lag the viewed one for a beat in a mirrored session.
+            Text("Set \(completedHere + 1) of \(targetHere)")
+                .font(.subheadline)
+                .foregroundColor(.secondaryText)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .animation(.snappy, value: targetHere)
+                .frame(minWidth: 104)
+
+            setCountButton(
+                "plus",
+                enabled: workoutVM.canAddSet,
+                delta: 1,
+                label: "Add a set"
+            )
+        }
+    }
+
+    private var targetHere: Int { state?.targetSets ?? workoutVM.targetSets }
+    private var completedHere: Int {
+        state?.workingSetsCompleted ?? workoutVM.workingSetsCompleted
+    }
+
+    private func setCountButton(
+        _ systemName: String,
+        enabled: Bool,
+        delta: Int,
+        label: String
+    ) -> some View {
+        Button {
+            Haptics.selection()
+            workoutVM.adjustTargetSets(by: delta)
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(enabled ? Color.accentBlue : Color.secondaryText.opacity(0.35))
+                .frame(width: 34, height: 34)
+                .background(Color.cardSurface)
+                .clipShape(Circle())
+        }
+        .disabled(!enabled)
+        .accessibilityLabel(label)
     }
 
     // MARK: - Weight Section
@@ -357,6 +428,31 @@ struct PhoneExerciseDetailView: View {
         }
     }
 
+    /// Mirrors the [F] chip's shape and behaviour: an annotation on the set
+    /// about to be logged, not a mode, so it clears itself once the set lands.
+    private var warmupToggle: some View {
+        Button {
+            Haptics.selection()
+            workoutVM.markNextSetAsWarmup.toggle()
+        } label: {
+            Text("W")
+                .font(.title3.bold())
+                .foregroundColor(workoutVM.markNextSetAsWarmup ? .black : .yellow)
+                .frame(width: 52, height: 52)
+                .background(
+                    workoutVM.markNextSetAsWarmup
+                        ? Color.yellow : Color.yellow.opacity(0.15)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .accessibilityLabel("Log as warm-up set")
+    }
+
+    private func logButtonColor(disabled: Bool) -> Color {
+        let base: Color = workoutVM.nextSetIsWarmup ? .yellow : .accentBlue
+        return disabled ? base.opacity(0.4) : base
+    }
+
     // MARK: - Logged Sets Table
 
     private func loggedSetsTable(state: PhoneWorkoutViewModel.ExerciseState) -> some View {
@@ -365,7 +461,7 @@ struct PhoneExerciseDetailView: View {
                 .font(.caption.bold())
                 .foregroundColor(.secondaryText)
 
-            ForEach(Array(state.loggedSets.enumerated()), id: \.offset) { _, set in
+            ForEach(Array(state.loggedSets.enumerated()), id: \.offset) { index, set in
                 HStack {
                     if set.isWarmup {
                         Text("W")
@@ -373,7 +469,11 @@ struct PhoneExerciseDetailView: View {
                             .foregroundColor(.yellow)
                             .frame(width: 20)
                     } else {
-                        Text("\(set.setNumber - state.loggedSets.filter(\.isWarmup).count)")
+                        // Count the working sets *before* this one. Subtracting
+                        // the exercise's total warm-ups only worked while every
+                        // warm-up came first; a hand-flagged warm-up in the
+                        // middle used to renumber the sets above it.
+                        Text("\(state.loggedSets.prefix(index + 1).filter { !$0.isWarmup }.count)")
                             .font(.caption.bold().monospacedDigit())
                             .foregroundColor(.secondaryText)
                             .frame(width: 20)

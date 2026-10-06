@@ -324,6 +324,13 @@ struct HistoryListView: View {
             for set in entry.sets { modelContext.delete(set) }
             modelContext.delete(entry)
         }
+        // The review conversation is about a workout that no longer exists.
+        // Not a relationship, so nothing cascades — clean it up by hand.
+        let sessionID = session.id
+        let threads = (try? modelContext.fetch(FetchDescriptor<ChatThread>())) ?? []
+        for thread in threads where thread.kind == .session && thread.sessionID == sessionID {
+            modelContext.delete(thread)
+        }
         modelContext.delete(session)
     }
 

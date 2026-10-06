@@ -52,10 +52,29 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
     /// returns early so a late mirror message can't mutate half-cleaned state.
     private var isFinalizingWorkout: Bool = false
 
+    /// Armed by the [W] button: the next logged set is recorded as a warm-up
+    /// even when the plan has no warm-up phase. Cleared after each set — an
+    /// annotation on one set, not a mode. Mirrors the phone's flag of the
+    /// same name.
+    @Published var markNextSetAsWarmup: Bool = false
+
+    /// What the next logged set will actually be recorded as.
+    var nextSetIsWarmup: Bool {
+        guard let idx = activeExerciseIndex, idx < exerciseStates.count else {
+            return markNextSetAsWarmup
+        }
+        return exerciseStates[idx].isWarmupPhase || markNextSetAsWarmup
+    }
+
     // MARK: - Rest Timer
     @Published var isResting: Bool = false
     @Published var restTimerRemaining: TimeInterval = 0
     @Published var restTimerDuration: TimeInterval = 150
+    /// The user's Rest Timer setting, arriving with the plan from the phone.
+    /// Kept apart from `restTimerDuration` because that field is the *current*
+    /// rest length after intent scaling — reading it back as the base made every
+    /// set compound the scaling, and made the Settings stepper look inert.
+    private var baseRestDuration: TimeInterval = RestTiming.defaultDuration
     /// Absolute end-time of the current rest. Source of truth for the snapshot.
     /// `restTimerRemaining` is the local watch UI's countdown derived from this.
     private var restEndsAt: Date?
@@ -97,7 +116,12 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         /// in a phone snapshot). Carried through the snapshot and the result.
         var userNote: String? = nil
 
-        var targetSets: Int { info.sets }
+        /// Set count for *this session*, when the user has added or dropped one.
+        /// `WatchExerciseInfo` is the plan exactly as the phone sent it and stays
+        /// immutable; a mid-session change belongs to the session, not the plan.
+        var targetSetsOverride: Int?
+
+        var targetSets: Int { targetSetsOverride ?? info.sets }
         var workingSetsCompleted: Int { loggedSets.filter { !$0.isWarmup }.count }
         var isComplete: Bool { workingSetsCompleted >= targetSets }
         var warmupSetsCompleted: Int { loggedSets.filter(\.isWarmup).count }
@@ -208,6 +232,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         // Apply settings from the plan (sent by iPhone)
         if let timer = plan.restTimerDuration, timer > 0 {
+            baseRestDuration = timer
             restTimerDuration = timer
         }
         if let increment = plan.weightIncrement, increment > 0 {
@@ -302,6 +327,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     func selectExercise(at index: Int) {
         guard index < exerciseStates.count else { return }
+        // The flag annotates the set being dialled in, not the session.
+        markNextSetAsWarmup = false
         activeExerciseIndex = index
         primeInputs(for: index)
         currentScreen = .exercise
@@ -314,6 +341,11 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
     func logSet() {
         guard let idx = activeExerciseIndex, idx < exerciseStates.count else { return }
+        // Two ways a set is a warm-up: the plan said so, or the user flagged
+        // it. Kept apart because only the plan-driven kind advances a phase.
+        let isPlannedWarmup = exerciseStates[idx].isWarmupPhase
+        let isWarmup = isPlannedWarmup || markNextSetAsWarmup
+        markNextSetAsWarmup = false
         var state = exerciseStates[idx]
 
         let setResult = WatchSetResult(
@@ -321,7 +353,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             weight: currentWeight,
             reps: currentReps,
             timestamp: Date(),
-            isWarmup: state.isWarmupPhase
+            isWarmup: isWarmup
         )
         state.loggedSets.append(setResult)
 
@@ -331,16 +363,16 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             exerciseIndex: idx,
             weight: currentWeight,
             reps: currentReps,
-            isWarmup: state.isWarmupPhase
+            isWarmup: isWarmup
         ))
 
-        let label = state.isWarmupPhase ? " (warmup)" : ""
+        let label = isWarmup ? " (warmup)" : ""
         print("[BenLift/Watch] Logged: \(state.info.name) \(Int(currentWeight))x\(currentReps.formattedReps)\(label)")
 
         WKInterfaceDevice.current().play(.click)
 
         // Check warmup phase
-        if state.isWarmupPhase {
+        if isPlannedWarmup {
             if state.warmupSetsCompleted >= state.totalWarmups {
                 state.isWarmupPhase = false
                 // Load working weight
@@ -360,16 +392,18 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         exerciseStates[idx] = state
 
-        // Set rest duration based on exercise intent
-        if let intent = state.info.intent {
-            switch intent {
-            case "primary compound": restTimerDuration = 180   // 3:00
-            case "secondary compound": restTimerDuration = 120 // 2:00
-            case "isolation": restTimerDuration = 75            // 1:15
-            case "finisher": restTimerDuration = 60             // 1:00
-            default: break // keep current setting
-            }
+        // A hand-flagged warm-up gets no rest timer either — the point of
+        // marking it is that it doesn't count, and resting after it would.
+        if isWarmup {
+            broadcastSnapshot()
+            return
         }
+
+        // Scale the user's rest setting by the exercise's intent.
+        restTimerDuration = RestTiming.duration(
+            base: baseRestDuration,
+            intent: state.info.intent
+        )
 
         startRestTimer()
         // startRestTimer broadcasts the snapshot for us
@@ -461,6 +495,48 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         primeInputs(for: idx)
         print("[BenLift/Watch] Skipped warmups for \(exerciseStates[idx].info.name)")
         broadcastSnapshot()
+    }
+
+    // MARK: - Target Sets
+
+    /// Change how many working sets the active exercise calls for. See the
+    /// phone's `adjustTargetSets` for the reasoning; the clamp is identical so
+    /// both owners land on the same number for the same tap.
+    func adjustTargetSets(by delta: Int) {
+        guard let idx = activeExerciseIndex else { return }
+        guard let target = clampedTargetSets(at: idx, delta: delta) else { return }
+        exerciseStates[idx].targetSetsOverride = target
+        WKInterfaceDevice.current().play(.click)
+        print("[BenLift/Watch] \(exerciseStates[idx].info.name) target sets → \(target)")
+        forwardIfMirrored(.adjustTargetSets(index: idx, delta: delta))
+        broadcastSnapshot()
+    }
+
+    /// The target `adjustTargetSets` would land on, or nil when the delta is a
+    /// no-op. Drives the buttons' disabled state as well as the mutation.
+    ///
+    /// `current` is the count the header is showing, which can exceed the
+    /// prescription when the user has already logged past it ("Set 4 of 3").
+    /// Working from that rather than from `targetSets` keeps [+] meaning "one
+    /// more than I've done" and stops [−] from silently ratcheting the target
+    /// *up* to meet the sets already logged.
+    func clampedTargetSets(at index: Int, delta: Int) -> Int? {
+        guard index < exerciseStates.count else { return nil }
+        let state = exerciseStates[index]
+        let current = max(state.targetSets, state.workingSetsCompleted)
+        let lowerBound = max(1, state.workingSetsCompleted)
+        let proposed = min(Self.maxTargetSets, max(lowerBound, current + delta))
+        return (proposed == current || proposed == state.targetSets) ? nil : proposed
+    }
+
+    static let maxTargetSets = 15
+
+    var canAddSet: Bool { deltaAvailable(1) }
+    var canSkipSet: Bool { deltaAvailable(-1) }
+
+    private func deltaAvailable(_ delta: Int) -> Bool {
+        guard let idx = activeExerciseIndex else { return false }
+        return clampedTargetSets(at: idx, delta: delta) != nil
     }
 
     // MARK: - Skip / Unskip Exercise
@@ -837,8 +913,10 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         // Restore weight/reps from undone set
         currentWeight = removed.weight
         currentReps = removed.reps
-        // If we undid back into warmup phase
-        if removed.isWarmup {
+        // If we undid back into warmup phase. Only when the plan actually has
+        // warm-ups to return to — undoing a hand-flagged warm-up on an exercise
+        // with none would otherwise strand it in a phase it was never in.
+        if removed.isWarmup, exerciseStates[idx].totalWarmups > 0 {
             exerciseStates[idx].isWarmupPhase = true
         }
         WKInterfaceDevice.current().play(.click)
@@ -1002,7 +1080,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         let snapshotExercises = exerciseStates.map { state in
             SnapshotExercise(
                 name: state.info.name,
-                targetSets: state.info.sets,
+                targetSets: state.targetSets,
                 targetReps: state.info.targetReps,
                 suggestedWeight: state.info.suggestedWeight,
                 warmupSets: state.info.warmupSets,
@@ -1086,7 +1164,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             }
         }
         switch cmd {
-        case .logSet(let idx, let weight, let reps, _):
+        case .logSet(let idx, let weight, let reps, let isWarmup):
             guard idx < exerciseStates.count else { return }
             // If the phone wants to log to a different exercise than the active one,
             // switch the active first (per Q1: phone has independent navigation, but
@@ -1096,6 +1174,11 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             }
             currentWeight = weight
             currentReps = reps
+            // Honour the mirror's warm-up flag — it used to be discarded and
+            // re-derived from `isWarmupPhase`, so a set flagged [W] on the
+            // phone came back from the watch as a working set. Set after
+            // `selectExercise`, which clears the flag by design.
+            markNextSetAsWarmup = isWarmup
             logSet()
 
         case .undoSet(let idx):
@@ -1157,6 +1240,12 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         case .setNote(let idx, let note):
             guard idx < exerciseStates.count else { return }
             exerciseStates[idx].userNote = note
+            broadcastSnapshot()
+
+        case .adjustTargetSets(let idx, let delta):
+            guard idx < exerciseStates.count,
+                  let target = clampedTargetSets(at: idx, delta: delta) else { return }
+            exerciseStates[idx].targetSetsOverride = target
             broadcastSnapshot()
         }
     }

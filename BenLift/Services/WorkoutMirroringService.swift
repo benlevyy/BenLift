@@ -77,7 +77,7 @@ class WorkoutMirroringService: NSObject, HKWorkoutSessionDelegate {
         // `"\(message)"` which relied on Swift's enum stringification being
         // stable and payload-inclusive — not guaranteed across toolchains.
         if case .command(let cmd) = message {
-            let signature = Self.debounceSignature(for: cmd)
+            let signature = debounceSignature(for: cmd)
             if signature == lastSentSignature,
                Date().timeIntervalSince(lastSentAt) < debounceWindow {
                 return false
@@ -99,7 +99,7 @@ class WorkoutMirroringService: NSObject, HKWorkoutSessionDelegate {
     /// Explicit per-case signature. Each command carries whatever identifying
     /// payload matters (index, weight, etc.) so two distinct user actions can
     /// never accidentally share a signature and get deduped into one.
-    private static func debounceSignature(for cmd: WorkoutCommand) -> String {
+    private func debounceSignature(for cmd: WorkoutCommand) -> String {
         switch cmd {
         case .logSet(let i, let w, let r, let isWarmup):
             return "logSet:\(i):\(w):\(r):\(isWarmup)"
@@ -123,8 +123,21 @@ class WorkoutMirroringService: NSObject, HKWorkoutSessionDelegate {
             return "skipExercise:\(i)"
         case .unskipExercise(let i):
             return "unskipExercise:\(i)"
+        case .setNote(let i, let note):
+            return "setNote:\(i):\(note ?? "nil")"
+        case .adjustTargetSets(let i, let delta):
+            // Deliberately unique per send. The other commands are one-shot
+            // intents where a repeat inside 250ms is a misfire; a stepper is
+            // the opposite — two [+] taps mean two sets, and collapsing them
+            // would make the button feel broken exactly when it's used fast.
+            adjustTargetSetsNonce &+= 1
+            return "adjustTargetSets:\(i):\(delta):\(adjustTargetSetsNonce)"
         }
     }
+
+    /// Counter that keeps consecutive `adjustTargetSets` sends distinct. Wraps
+    /// harmlessly; only inequality with the previous value matters.
+    private var adjustTargetSetsNonce: UInt64 = 0
 
     // MARK: - HKWorkoutSessionDelegate
 
