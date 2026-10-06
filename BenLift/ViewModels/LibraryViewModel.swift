@@ -57,6 +57,7 @@ class LibraryViewModel {
         )
         context.insert(exercise)
         try? context.save()
+        WatchLibrarySync.pushCustomExercises(from: context)
     }
 
     @MainActor
@@ -64,6 +65,7 @@ class LibraryViewModel {
         guard exercise.isCustom else { return }
         context.delete(exercise)
         try? context.save()
+        WatchLibrarySync.pushCustomExercises(from: context)
     }
 
     @MainActor

@@ -28,6 +28,20 @@ class WatchSyncService: NSObject, WCSessionDelegate {
     private var lastReachable: Bool = false
     #endif
 
+    // watchOS: the user's custom exercises, as last pushed by the phone.
+    // Persisted so the picker has them before the phone is reachable.
+    #if os(watchOS)
+    private static let customExercisesKey = "watchCustomExercises"
+    var customExercises: [WatchCustomExercise] = [] {
+        didSet {
+            if let data = try? JSONEncoder().encode(customExercises) {
+                UserDefaults.standard.set(data, forKey: Self.customExercisesKey)
+            }
+            NotificationCenter.default.post(name: .customExercisesReceived, object: nil)
+        }
+    }
+    #endif
+
     // iOS: received workout result from Watch
     var receivedWorkoutResult: WatchWorkoutResult? {
         didSet { NotificationCenter.default.post(name: .workoutResultReceived, object: nil) }
@@ -69,7 +83,48 @@ class WatchSyncService: NSObject, WCSessionDelegate {
         session.delegate = self
         session.activate()
         print("[BenLift/Sync] WCSession activating...")
+
+        #if os(watchOS)
+        if let data = UserDefaults.standard.data(forKey: Self.customExercisesKey),
+           let saved = try? JSONDecoder().decode([WatchCustomExercise].self, from: data) {
+            customExercises = saved
+        }
+        #endif
     }
+
+    // MARK: - iOS → Watch: Custom exercises
+
+    /// Push the full custom list. Queued (transferUserInfo) so it lands on
+    /// the next watch wake even if sent with the watch asleep. The previous
+    /// payload is remembered so a launch with nothing changed sends nothing.
+    #if os(iOS)
+    private static let lastCustomPayloadKey = "lastSentCustomExercises"
+    /// A send that arrived before activation finished — the launch-time
+    /// push always does — waits here and goes out from the activation
+    /// callback.
+    private var pendingCustomExercisesPayload: String?
+
+    func sendCustomExercises(_ exercises: [WatchCustomExercise]) {
+        let sorted = exercises.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        guard let data = try? JSONEncoder().encode(sorted) else { return }
+        let payload = data.base64EncodedString()
+        guard payload != UserDefaults.standard.string(forKey: Self.lastCustomPayloadKey) else { return }
+        guard WCSession.default.activationState == .activated else {
+            pendingCustomExercisesPayload = payload
+            return
+        }
+        transferCustomExercises(payload)
+    }
+
+    private func transferCustomExercises(_ payload: String) {
+        WCSession.default.transferUserInfo([
+            "type": "customExercises",
+            "payload": payload,
+        ])
+        UserDefaults.standard.set(payload, forKey: Self.lastCustomPayloadKey)
+        print("[BenLift/Sync] → Sent custom exercises to Watch")
+    }
+    #endif
 
     // MARK: - iOS → Watch: Send Workout Plan
 
@@ -217,6 +272,10 @@ class WatchSyncService: NSObject, WCSessionDelegate {
             self.isWatchAppInstalled = session.isWatchAppInstalled
             self.lastReachable = session.isReachable
             print("[BenLift/Sync] Session activated: paired=\(session.isPaired), installed=\(session.isWatchAppInstalled), reachable=\(session.isReachable)")
+            if activationState == .activated, let payload = self.pendingCustomExercisesPayload {
+                self.pendingCustomExercisesPayload = nil
+                self.transferCustomExercises(payload)
+            }
             #else
             print("[BenLift/Sync] Watch session activated: reachable=\(session.isReachable)")
             #endif
@@ -305,6 +364,16 @@ class WatchSyncService: NSObject, WCSessionDelegate {
                     print("[BenLift/Sync] ← Received workout result: \(result.entries.count) exercises")
                 }
             }
+
+        case "customExercises":
+            #if os(watchOS)
+            if let list = try? decoder.decode([WatchCustomExercise].self, from: payloadData) {
+                DispatchQueue.main.async {
+                    self.customExercises = list
+                    print("[BenLift/Sync] ← Received \(list.count) custom exercise(s)")
+                }
+            }
+            #endif
 
         case "phoneCommand":
             // Watch-originated command that queued up (sendMessage failed
@@ -449,6 +518,8 @@ class WatchSyncService: NSObject, WCSessionDelegate {
 extension Notification.Name {
     static let workoutPlanReceived = Notification.Name("workoutPlanReceived")
     static let workoutResultReceived = Notification.Name("workoutResultReceived")
+    /// Watch-side hook: the phone pushed a fresh custom-exercise list.
+    static let customExercisesReceived = Notification.Name("customExercisesReceived")
     /// Watch listens for this to finish a session the phone initiated end on.
     /// Declared in the shared file so both targets see the identifier.
     static let remoteFinishRequested = Notification.Name("remoteFinishRequested")

@@ -10,6 +10,8 @@ struct WatchAddExerciseView: View {
     /// automatically when the field gets focus. Filters across Recent +
     /// all muscle-group sections.
     @State private var searchText: String = ""
+    /// Phone-made exercises, refreshed when a new list lands mid-sheet.
+    @State private var customExercises: [WatchCustomExercise] = WatchSyncService.shared.customExercises
 
     var body: some View {
         List {
@@ -33,6 +35,9 @@ struct WatchAddExerciseView: View {
             }
         }
         .searchable(text: $searchText, prompt: "Search")
+        .onReceive(NotificationCenter.default.publisher(for: .customExercisesReceived)) { _ in
+            customExercises = WatchSyncService.shared.customExercises
+        }
         .navigationTitle(showAll ? "All" : "Add")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -89,7 +94,8 @@ struct WatchAddExerciseView: View {
         }()
         let pool = Self.exercisePool(
             for: focus,
-            knownWeights: workoutVM.currentPlan?.recentWeights ?? [:]
+            knownWeights: workoutVM.currentPlan?.recentWeights ?? [:],
+            custom: customExercises
         ).filter { !alreadyInPlan.contains($0.name) }
         guard !searchText.isEmpty else { return pool }
         return pool.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
@@ -119,9 +125,10 @@ struct WatchAddExerciseView: View {
         // Build a name→muscle-group lookup from the static library so we
         // can bucket the runtime `WatchExerciseInfo` entries (which don't
         // carry their own muscle-group tag) into sections.
-        let groupByName: [String: MuscleGroup] = Dictionary(
+        var groupByName: [String: MuscleGroup] = Dictionary(
             uniqueKeysWithValues: Self.library.map { ($0.name, $0.muscleGroup) }
         )
+        for custom in customExercises { groupByName[custom.name] = custom.muscleGroup }
         let grouped = Dictionary(grouping: available) { info in
             groupByName[info.name] ?? .core
         }
@@ -151,9 +158,15 @@ struct WatchAddExerciseView: View {
     ///   which is most of what "the weights feel random" means on the watch.
     static func exercisePool(
         for focus: [MuscleGroup],
-        knownWeights: [String: Double] = [:]
+        knownWeights: [String: Double] = [:],
+        custom: [WatchCustomExercise] = []
     ) -> [WatchExerciseInfo] {
-        let scoped = focus.isEmpty ? library : library.filter { focus.contains($0.muscleGroup) }
+        // Phone-made lifts join the shipped list; a custom lift with the
+        // same name as a shipped one replaces it (the user's filing wins).
+        let customNames = Set(custom.map { $0.name.lowercased() })
+        let merged = library.filter { !customNames.contains($0.name.lowercased()) }
+            + custom.map { LibraryItem($0.name, $0.defaultWeight ?? 0, $0.equipment, $0.muscleGroup) }
+        let scoped = focus.isEmpty ? merged : merged.filter { focus.contains($0.muscleGroup) }
         return scoped.map { item in
             WatchExerciseInfo(
                 name: item.name,

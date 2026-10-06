@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @State private var viewModel = SettingsViewModel()
+    @State private var showKeyGuide = false
     @Environment(\.modelContext) private var modelContext
 
     // AppStorage directly in the view — works reliably with SwiftUI bindings
@@ -47,6 +48,16 @@ struct SettingsView: View {
             SecureField("Claude API Key", text: $viewModel.apiKey)
                 .textContentType(.password)
                 .onSubmit { viewModel.saveAPIKey() }
+
+            Button {
+                showKeyGuide = true
+            } label: {
+                Label("How do I get a key?", systemImage: "questionmark.circle")
+            }
+            .sheet(isPresented: $showKeyGuide) {
+                APIKeyGuideView()
+                    .presentationDetents([.large])
+            }
 
             Button {
                 viewModel.saveAPIKey()

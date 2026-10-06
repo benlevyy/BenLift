@@ -213,6 +213,19 @@ struct WatchExerciseResult: Codable {
     var prescribedWeight: Double? = nil
 }
 
+/// A user-made exercise, pushed phone → watch so the wrist's add picker
+/// knows about it. The watch has no database; its library is a static copy
+/// of the shipped defaults, so without this a custom lift only ever existed
+/// on the phone. The whole custom list is sent each time (replace, not
+/// append) so a deletion on the phone removes it from the watch too.
+struct WatchCustomExercise: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let muscleGroup: MuscleGroup
+    let equipment: Equipment
+    let defaultWeight: Double?
+}
+
 struct WatchSetResult: Codable {
     let setNumber: Int
     let weight: Double

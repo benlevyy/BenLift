@@ -81,6 +81,12 @@ struct BenLiftApp: App {
         }
 
         WatchSyncService.shared.activate()
+        // Custom exercises reach the watch via a queued transfer; sending
+        // on launch covers lifts made before this existed. No-op when the
+        // list hasn't changed since the last send.
+        if failure == nil {
+            WatchLibrarySync.pushCustomExercises(from: context)
+        }
 
         phoneMirroring = PhoneMirroringController()
         phoneMirroring.phoneWorkoutVM.modelContext = container.mainContext

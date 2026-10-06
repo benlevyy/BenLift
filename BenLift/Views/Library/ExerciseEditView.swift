@@ -89,5 +89,11 @@ struct ExerciseEditView: View {
             modelContext.insert(newExercise)
         }
         try? modelContext.save()
+        // Renaming or re-weighting a custom lift changes what the watch
+        // should offer; a shipped lift's edits stay phone-side (the watch
+        // carries its own copy of the defaults).
+        if exercise?.isCustom ?? true {
+            WatchLibrarySync.pushCustomExercises(from: modelContext)
+        }
     }
 }

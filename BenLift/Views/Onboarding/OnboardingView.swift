@@ -7,6 +7,7 @@ struct OnboardingView: View {
 
     @State private var step = 0
     @State private var apiKey = ""
+    @State private var showKeyGuide = false
 
     // MARK: - Bootstrap form state
     //
@@ -106,6 +107,22 @@ struct OnboardingView: View {
                 .padding(.horizontal, 32)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+
+            // Most people installing this have never made an API key.
+            Button {
+                showKeyGuide = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "questionmark.circle")
+                    Text("How do I get a key?")
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(.accentBlue)
+            }
+            .sheet(isPresented: $showKeyGuide) {
+                APIKeyGuideView()
+                    .presentationDetents([.large])
+            }
 
             Spacer()
 
