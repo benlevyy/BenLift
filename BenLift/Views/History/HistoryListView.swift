@@ -155,7 +155,7 @@ struct HistoryListView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This will permanently delete all \(sessions.count) workout sessions and their AI analyses. HealthKit activities will remain.")
+                Text("This will permanently delete all \(sessions.count) workout sessions. HealthKit activities will remain.")
             }
             .onAppear { loadActivities() }
         }

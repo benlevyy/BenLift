@@ -45,59 +45,6 @@ struct VolumeTarget: Codable {
     let repRange: String
 }
 
-struct VolumeAnalysisEntry: Codable {
-    let actual: Int
-    let weeklyTarget: Int
-    let weeklyActual: Int
-    let status: String
-}
-
-struct GoalProgressEntry: Codable, Identifiable {
-    var id: String { goal }
-    let goal: String
-    let metric: String
-    let current: Double
-    let previous: Double
-    let trend: String
-    let projection: String
-}
-
-struct ProgramAdjustment: Codable, Identifiable {
-    var id: String { "\(type)-\(detail.prefix(20))" }
-    let type: String // exercise_swap, volume_adjustment
-    let detail: String
-    let priority: String // low, medium, high
-}
-
-struct RecoveryReport: Codable {
-    let avgSleep: Double?
-    let sleepTrend: String?
-    let avgRestingHR: Double?
-    let restingHRTrend: String?
-    let note: String?
-}
-
-struct StrengthTrend: Codable, Identifiable {
-    var id: String { exercise }
-    let exercise: String
-    let e1rm4wkAgo: Double?
-    let e1rmNow: Double?
-    let trend: String
-
-    enum CodingKeys: String, CodingKey {
-        case exercise
-        case e1rm4wkAgo = "e1rm_4wk_ago"
-        case e1rmNow = "e1rm_now"
-        case trend
-    }
-}
-
-struct VolumeComplianceEntry: Codable {
-    let target: Int
-    let actual: Int
-    let status: String
-}
-
 // MARK: - Touchpoint 1: Program Generation Response
 
 struct ProgramResponse: Codable {
@@ -126,11 +73,6 @@ struct DailyPlanResponse: Codable {
     let deloadNote: String?
 }
 
-// MARK: - Touchpoint 0+2 Combined: Recommendation + Plan in one call
-
-/// One-shot response that returns both the recovery recommendation and the day's
-/// workout plan in a single LLM call. Replaces the prior split flow (Sonnet
-/// recommend -> Haiku plan) — ~2.2x faster, ~2.7x cheaper, equivalent quality.
 struct PlannedExercise: Identifiable {
     var id: String { name }
     let name: String
@@ -141,38 +83,6 @@ struct PlannedExercise: Identifiable {
     let warmupSets: [WarmupSet]?
     let notes: String?
     let intent: String?
-    /// Per-exercise "why this pick" from daily_plan_v5's `evidenceNote`.
-    /// Defaulted so every existing call site that constructs a
-    /// `PlannedExercise` directly (the resolver, chat swaps, manual
-    /// entry) doesn't need to change — nil there is correct, since only
-    /// the LLM path has this reasoning. Feeds the muscle-group TL;DR on
-    /// Today (see TodayView.muscleGroupHeader).
-    let evidenceNote: String?
-
-    /// Explicit memberwise init (rather than relying on the compiler-
-    /// synthesized one) so `evidenceNote` can default to nil without
-    /// requiring every existing call site to pass it.
-    init(
-        name: String,
-        sets: Int,
-        targetReps: String,
-        suggestedWeight: Double?,
-        repScheme: String?,
-        warmupSets: [WarmupSet]?,
-        notes: String?,
-        intent: String?,
-        evidenceNote: String? = nil
-    ) {
-        self.name = name
-        self.sets = sets
-        self.targetReps = targetReps
-        self.suggestedWeight = suggestedWeight
-        self.repScheme = repScheme
-        self.warmupSets = warmupSets
-        self.notes = notes
-        self.intent = intent
-        self.evidenceNote = evidenceNote
-    }
 
     /// Safe weight accessor — returns 0 for bodyweight exercises
     var weight: Double { suggestedWeight ?? 0 }
@@ -192,14 +102,10 @@ extension PlannedExercise: Codable {
         warmupSets = try container.decodeIfPresent([WarmupSet].self, forKey: .warmupSets)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         intent = try container.decodeIfPresent(String.self, forKey: .intent)
-        // Not part of this legacy JSON shape — only the v5 path (via the
-        // explicit init above) ever sets this.
-        evidenceNote = nil
 
         // Handle suggestedWeight as Double, String, or null. Hard-cap at 2000 lb —
         // no legitimate human lift exceeds this, so any larger value is an LLM
         // hallucination or a comma-stripped concatenation ("15,000 lbs" → 15000).
-        // Null gets resolved downstream by the chat tool executor.
         let maxPlausible: Double = 2000
         if let d = try? container.decodeIfPresent(Double.self, forKey: .suggestedWeight) {
             suggestedWeight = (d.isFinite && d <= maxPlausible) ? d : nil
@@ -222,25 +128,6 @@ struct WarmupSet: Codable {
     let reps: Int
 
     var displayWeight: Double { weight ?? 0 }
-}
-
-// MARK: - Touchpoint 3: Mid-Workout Adapt Response
-
-// MARK: - Touchpoint 4: Post-Workout Analysis Response
-
-struct PerformanceVsPlan: Codable {
-    let adherence: Double?
-    let notes: String?
-}
-
-// MARK: - Touchpoint 5: Weekly Review Response
-
-struct WeekSummaryData: Codable {
-    let sessionsCompleted: Int
-    let sessionsPlanned: Int
-    let totalVolume: Double
-    let totalDuration: Double?
-    let avgFeeling: Double?
 }
 
 // MARK: - Watch Transfer Models
@@ -334,102 +221,6 @@ struct WatchSetResult: Codable {
     let isWarmup: Bool
 }
 
-struct WatchExerciseLibrary: Codable {
-    let exercises: [WatchExerciseItem]
-    let daysSinceLast: [String: Int]
-    let todayCategory: String?
-    let programSplit: [String]?
-}
-
-struct WatchExerciseItem: Codable, Identifiable {
-    var id: String { name }
-    let name: String
-    let muscleGroup: MuscleGroup
-    let equipment: Equipment
-    let defaultWeight: Double?
-}
-
-// MARK: - daily_plan_v5 Response
-
-/// Response shape for the v5 daily-plan prompt. Calendar decides muscle
-/// upstream — this prompt only designs the session (exercises, sets, reps,
-/// loads, order) with safety adjudication and weight anchoring.
-struct PlannedExerciseV5: Codable {
-    let name: String
-    let sets: Int
-    let targetReps: String
-    let suggestedWeight: Double?
-    let weightAnchor: WeightAnchor
-    let evidenceNote: String?
-    let warmupSets: [WarmupSet]?
-    let notes: String?
-    let intent: String
-}
-
-struct WeightAnchor: Codable {
-    let source: String      // exercise name | "bodyweight" | "no_history"
-    let rationale: String
-}
-
-/// Slim subset of the prompt's verbose `selfCheck`. We capture the fields
-/// we want to log/audit (set-count math, ritual omissions, hard-rule
-/// evidence) and let the rest decode-skip via Codable's permissive default.
-struct SelfCheckBlock: Codable {
-    let setCountMath: String?
-    let ritualsOmitted: [RitualOmission]?
-    /// Map of rule name (lowReadiness | injury | exerciseOut) → literal
-    /// evidence string. Kept as `[String: String]` so we don't have to
-    /// model the rule-name keys statically.
-    let hardRulesCheck: [String: String]?
-}
-
-struct RitualOmission: Codable {
-    let ritual: String
-    let safe: Bool
-    let reason: String
-}
-
-// MARK: - iterate Response
-//
-// Two-shape union: either a plan-edit (swap/prioritize/load_adjust/
-// add_finisher/remove) or a conversational explain. The decoder switches
-// on the `responseType` discriminator. Encode round-trips through the
-// inner case so downstream code can mutate and re-emit.
-
-struct IterateEdit: Codable {
-    let responseType: String   // "edit"
-    let editKind: String       // "swap" | "prioritize" | "load_adjust" | "add_finisher" | "remove"
-    let edits: [PlanEdit]
-    let rationale: String
-    let watchOuts: String?
-}
-
-struct PlanEdit: Codable {
-    let action: String                       // "replace" | "insert" | "delete" | "modify"
-    let targetExerciseName: String?
-    let newExercise: PlannedExerciseV5?      // null for delete
-}
-
-struct IterateExplain: Codable {
-    let responseType: String   // "explain"
-    let answer: String
-}
-
-// MARK: - bootstrap Response
-//
-// One-time program design from onboarding answers. Seeds calendar pattern,
-// exercise rotation per muscle, weekly volume targets, progression scheme.
-
-/// Distinct from the existing `VolumeTarget` (which carries `sets` + `repRange`
-/// for the older program-generation flow). Bootstrap volume targets have a
-/// `rationale` string instead of a rep range.
-struct ProgressionScheme: Codable {
-    let compounds: String
-    let isolation: String
-}
-
-/// Onboarding input passed to the bootstrap prompt. Codable so we can
-/// serialize directly to JSON for the `{{ONBOARDING_JSON}}` template slot.
 // MARK: - Health Context (sent to Claude)
 
 struct HealthContext: Codable {
@@ -456,15 +247,4 @@ struct CategoryStats: Codable {
     let sessionCount: Int
     let avgFeeling: Double?
     let lastSessionDate: Date?
-}
-
-// MARK: - Intelligence Refresh Response
-
-struct IntelligenceRefreshResponse: Codable {
-    let activityPatterns: String
-    let trainingPatterns: String
-    let strengthProfile: String
-    let recoveryProfile: String
-    let exercisePreferences: String
-    let notableObservations: String
 }

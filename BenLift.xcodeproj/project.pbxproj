@@ -645,7 +645,7 @@
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BenLift saves strength workouts, calories, and effort ratings to Apple Health.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKBackgroundModes = "workout-processing";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = benlevy.BenLift;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = App.BenLift;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -682,7 +682,7 @@
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "BenLift saves strength workouts, calories, and effort ratings to Apple Health.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKBackgroundModes = "workout-processing";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = benlevy.BenLift;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = App.BenLift;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

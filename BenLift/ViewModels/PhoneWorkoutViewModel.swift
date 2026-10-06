@@ -1452,27 +1452,6 @@ class PhoneWorkoutViewModel {
         }
         sendCommand(.adaptExercise(index: index, replacement: info))
     }
-
-    /// Turn a PlannedExercise from the LLM into a WatchExerciseInfo command
-    /// payload. Extracted so both the targeted-swap and untargeted-reshape
-    /// branches of `acceptAdaptation` build payloads the same way.
-    private func watchInfo(for exercise: PlannedExercise) -> WatchExerciseInfo {
-        WatchExerciseInfo(
-            name: exercise.name,
-            sets: exercise.sets,
-            targetReps: exercise.targetReps,
-            suggestedWeight: exercise.weight,
-            warmupSets: exercise.warmupSets,
-            notes: exercise.notes,
-            intent: exercise.intent,
-            lastWeight: nil,
-            lastReps: nil,
-            equipment: DefaultExercises.all.first(where: { $0.name == exercise.name })?.equipment
-        )
-    }
-
-    func dismissAdaptation() {
-    }
 }
 
 // MARK: - SnapshotExercise compat shim
@@ -1526,47 +1505,5 @@ enum SnapshotCache {
 
     static func clear() {
         UserDefaults.standard.removeObject(forKey: key)
-    }
-}
-
-// MARK: - Adapt Reason
-
-enum AdaptReason: String, CaseIterable, Identifiable {
-    case equipmentTaken
-    case painDiscomfort
-    case tooHard
-    case tooEasy
-    case other
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .equipmentTaken: return "Equipment Taken"
-        case .painDiscomfort: return "Pain / Discomfort"
-        case .tooHard: return "Too Hard"
-        case .tooEasy: return "Too Easy"
-        case .other: return "Other"
-        }
-    }
-
-    var promptText: String {
-        switch self {
-        case .equipmentTaken: return "Equipment is taken or broken — suggest an alternative exercise targeting the same muscle group with available equipment"
-        case .painDiscomfort: return "Experiencing pain or discomfort — suggest a safer alternative that avoids the problematic movement pattern"
-        case .tooHard: return "Exercise is too difficult today — suggest an easier variation or lower intensity alternative"
-        case .tooEasy: return "Exercise is too easy — suggest a more challenging variation or progression"
-        case .other: return "User wants to change exercise"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .equipmentTaken: return "xmark.circle"
-        case .painDiscomfort: return "bandage"
-        case .tooHard: return "arrow.down.circle"
-        case .tooEasy: return "arrow.up.circle"
-        case .other: return "ellipsis.circle"
-        }
     }
 }

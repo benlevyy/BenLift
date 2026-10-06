@@ -22,10 +22,6 @@ struct OnboardingView: View {
     @State private var crossTraining: String = ""
     @State private var preferences: String = ""
 
-    // MARK: - Bootstrap call state
-
-    @State private var bootstrappedProgramName: String? = nil
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -110,7 +106,7 @@ struct OnboardingView: View {
                     if !apiKey.isEmpty {
                         do {
                             try KeychainService.save(key: KeychainService.apiKeyKey, value: apiKey)
-                            print("[BenLift] API key saved to Keychain (\(apiKey.prefix(10))...)")
+                            print("[BenLift] API key saved to Keychain")
                         } catch {
                             print("[BenLift] Failed to save API key: \(error)")
                         }
@@ -299,7 +295,6 @@ struct OnboardingView: View {
         }
 
         try? modelContext.save()
-        bootstrappedProgramName = "Ready"
         step = 3
     }
 
@@ -337,11 +332,6 @@ struct OnboardingView: View {
 
             Text("You're Ready")
                 .font(.title.bold())
-
-            if let bootstrappedProgramName {
-                Text("Program: \(bootstrappedProgramName)")
-                    .foregroundColor(.secondaryText)
-            }
 
             Text("Start your first workout from the Today tab.")
                 .multilineTextAlignment(.center)

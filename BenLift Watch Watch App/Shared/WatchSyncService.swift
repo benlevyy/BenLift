@@ -38,9 +38,6 @@ class WatchSyncService: NSObject, WCSessionDelegate {
         didSet { NotificationCenter.default.post(name: .workoutPlanReceived, object: nil) }
     }
 
-    // watchOS: cached exercise library + metadata
-    var exerciseLibrary: WatchExerciseLibrary?
-
     // watchOS: latest snapshot from a PHONE-owned session. When the user
     // starts a workout on the phone (watch unavailable or chose not to
     // engage HK mirroring), the phone broadcasts snapshots here so the
@@ -76,6 +73,8 @@ class WatchSyncService: NSObject, WCSessionDelegate {
 
     // MARK: - iOS → Watch: Send Workout Plan
 
+    /// Currently unused — phone-started sessions go through `sendPhoneOwnedSnapshot`.
+    /// Kept so a plan can be pushed to the watch for starting a workout from the wrist.
     func sendWorkoutPlan(_ plan: WatchWorkoutPlan) {
         guard WCSession.default.activationState == .activated else {
             print("[BenLift/Sync] ❌ Session not activated")
@@ -186,24 +185,6 @@ class WatchSyncService: NSObject, WCSessionDelegate {
         }
     }
     #endif
-
-    // MARK: - iOS → Watch: Send Exercise Library (via applicationContext)
-
-    func sendExerciseLibrary(_ library: WatchExerciseLibrary) {
-        guard WCSession.default.activationState == .activated else { return }
-
-        do {
-            let data = try JSONEncoder().encode(library)
-            let payload = data.base64EncodedString()
-            try WCSession.default.updateApplicationContext([
-                "type": "exerciseLibrary",
-                "payload": payload,
-            ])
-            print("[BenLift/Sync] → Sent exercise library to Watch (\(library.exercises.count) exercises)")
-        } catch {
-            print("[BenLift/Sync] ❌ Failed to send exercise library: \(error)")
-        }
-    }
 
     // MARK: - watchOS → iPhone: Send Workout Result
 
@@ -432,23 +413,14 @@ class WatchSyncService: NSObject, WCSessionDelegate {
     // MARK: - Receive applicationContext
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        guard let type = applicationContext["type"] as? String,
-              let payloadString = applicationContext["payload"] as? String,
-              let payloadData = Data(base64Encoded: payloadString) else { return }
+        guard let type = applicationContext["type"] as? String else { return }
 
-        if type == "exerciseLibrary" {
-            if let library = try? JSONDecoder().decode(WatchExerciseLibrary.self, from: payloadData) {
-                DispatchQueue.main.async {
-                    self.exerciseLibrary = library
-                    print("[BenLift/Sync] ← Received exercise library: \(library.exercises.count) exercises")
-                }
-            }
-        } else if type == "phoneOwnedSnapshot" {
+        if type == "phoneOwnedSnapshot" {
             // Phone is the owner of an active workout; we're the passive
             // display. Reuses the same `WorkoutSnapshot` the watch-owned
             // path uses — watch UI renders from snapshot either way.
             #if os(watchOS)
-            handlePhoneOwnedSnapshotPayload(payloadString)
+            handlePhoneOwnedSnapshotPayload(applicationContext["payload"] as? String)
             #endif
         }
     }
