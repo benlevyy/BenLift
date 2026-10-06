@@ -91,6 +91,11 @@ extension Double {
         // 4.5 means 4 completed + failed 5th
         return "\(Int(self))F"
     }
+
+    /// Load as a bare number: "135", "17.5". No unit.
+    var formattedLoad: String {
+        truncatingRemainder(dividingBy: 1) == 0 ? String(Int(self)) : String(format: "%.1f", self)
+    }
 }
 
 // MARK: - TimeInterval Extensions

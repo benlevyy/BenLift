@@ -170,7 +170,7 @@ struct SessionDetailView: View {
                                     .foregroundColor(.secondaryText)
                                     .frame(width: 50, alignment: .leading)
 
-                                Text("\(Int(set.weight)) x \(set.reps.formattedReps)")
+                                Text("\(set.weight.formattedLoad) x \(set.reps.formattedReps)")
                                     .font(.body.monospacedDigit())
                                     .foregroundColor(set.isFailed ? .failedRed : .primary)
 

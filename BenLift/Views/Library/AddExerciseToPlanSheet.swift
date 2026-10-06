@@ -48,7 +48,7 @@ struct AddExerciseToPlanSheet: View {
                                     Text(exercise.name)
                                     Spacer()
                                     if let w = exercise.defaultWeight {
-                                        Text("\(Int(w)) lbs")
+                                        Text("\(w.formattedLoad) lbs")
                                             .font(.caption)
                                             .foregroundColor(.secondaryText)
                                     }

@@ -56,7 +56,7 @@ struct ExerciseView: View {
                     .buttonStyle(.plain)
 
                     VStack(spacing: 0) {
-                        Text("\(Int(workoutVM.currentWeight))")
+                        Text(workoutVM.currentWeight.formattedLoad)
                             .font(.system(size: 28, weight: .bold, design: .rounded))
                             .monospacedDigit()
                         Text("lbs")
@@ -154,7 +154,7 @@ struct ExerciseView: View {
 
                 // Ghost data
                 if let lastW = exercise?.lastWeight, let lastR = exercise?.lastReps {
-                    Text("Last: \(Int(lastW)) × \(lastR.formattedReps)")
+                    Text("Last: \(lastW.formattedLoad) × \(lastR.formattedReps)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

@@ -83,7 +83,7 @@ struct PhoneExerciseDetailView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.caption2)
-                        Text("Last: \(Int(lastW)) × \(lastR.formattedReps)")
+                        Text("Last: \(lastW.formattedLoad) × \(lastR.formattedReps)")
                             .font(.caption)
                     }
                     .foregroundColor(.secondaryText)
@@ -338,7 +338,7 @@ struct PhoneExerciseDetailView: View {
                 }
 
                 VStack(spacing: 0) {
-                    Text("\(Int(workoutVM.currentWeight))")
+                    Text(workoutVM.currentWeight.formattedLoad)
                         .font(.system(size: 54, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
@@ -479,7 +479,7 @@ struct PhoneExerciseDetailView: View {
                             .frame(width: 20)
                     }
 
-                    Text("\(Int(set.weight)) lbs")
+                    Text("\(set.weight.formattedLoad) lbs")
                         .font(.subheadline.monospacedDigit())
 
                     Text("×")

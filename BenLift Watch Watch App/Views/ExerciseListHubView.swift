@@ -91,9 +91,14 @@ struct ExerciseListHubView: View {
 
     private var headerRow: some View {
         HStack {
-            Text(workoutVM.elapsedTime.formattedMinSec)
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
+            // elapsedTime is derived from the start date, not @Published, so
+            // nothing redraws it on its own. In a mirrored session nothing
+            // else changes between sets either, and the clock sat still.
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                Text(workoutVM.elapsedTime.formattedMinSec)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
 
             Spacer()
 
@@ -158,7 +163,10 @@ struct ExerciseListHubView: View {
                         .foregroundColor(titleColor(for: state))
                         .strikethrough(state.isSkipped, color: .secondary)
 
-                    Text("\(state.targetSets)×\(state.info.targetReps) @ \(Int(state.info.suggestedWeight))")
+                    // Bodyweight moves carry no load — "@ 0" read like a bug.
+                    Text(state.info.suggestedWeight > 0
+                         ? "\(state.targetSets)×\(state.info.targetReps) @ \(state.info.suggestedWeight.formattedLoad)"
+                         : "\(state.targetSets)×\(state.info.targetReps)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

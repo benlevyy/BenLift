@@ -207,7 +207,7 @@ struct PhoneExerciseListView: View {
                             .foregroundColor(.secondaryText)
 
                         if state.info.suggestedWeight > 0 {
-                            Text("@ \(Int(state.info.suggestedWeight)) lbs")
+                            Text("@ \(state.info.suggestedWeight.formattedLoad) lbs")
                                 .font(.caption)
                                 .foregroundColor(state.effectivelySkipped ? .secondaryText : .accentBlue)
                         }

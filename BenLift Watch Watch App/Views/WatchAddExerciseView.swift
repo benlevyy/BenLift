@@ -60,7 +60,7 @@ struct WatchAddExerciseView: View {
                         .font(.caption.bold())
                         .lineLimit(1)
                     if exercise.suggestedWeight > 0 {
-                        Text("\(Int(exercise.suggestedWeight)) lbs")
+                        Text("\(exercise.suggestedWeight.formattedLoad) lbs")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }

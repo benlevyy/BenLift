@@ -188,7 +188,7 @@ struct HubView: View {
                         Text(lift.date.formatted(.dateTime.day().month(.abbreviated)))
                             .font(.system(size: 11.5))
                             .foregroundStyle(Color.tertiaryText)
-                        Text("\(Int(lift.weight))")
+                        Text(lift.weight.formattedLoad)
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(Color.primaryText)
                             .monospacedDigit()

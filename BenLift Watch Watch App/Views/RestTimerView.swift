@@ -36,8 +36,24 @@ struct RestTimerView: View {
         return .red
     }
 
+    /// One line on what the rest is for. Nil when nothing is active.
+    private var upNextLabel: String? {
+        guard let ex = workoutVM.activeExercise else { return nil }
+        if ex.isComplete {
+            return "\(ex.info.name) done · back to list"
+        }
+        var line = "Next: \(ex.info.name) · set \(ex.workingSetsCompleted + 1) of \(ex.targetSets)"
+        // currentWeight is what the next set will log; suggestedWeight is
+        // only the plan's opening number. 0 means bodyweight, so say nothing.
+        if workoutVM.currentWeight > 0 {
+            line += " · \(workoutVM.currentWeight.formattedLoad)"
+        }
+        return line
+    }
+
     var body: some View {
-        VStack(spacing: 6) {
+        // Tight: this is a VStack with no ScrollView and has to fit 41mm.
+        VStack(spacing: 4) {
             // Timer ring
             ZStack {
                 Circle()
@@ -64,14 +80,27 @@ struct RestTimerView: View {
             }
             .frame(width: 90, height: 90)
 
+            // What's next
+            if let upNext = upNextLabel {
+                Text(upNext)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+
             // Elapsed + HR
             HStack(spacing: 16) {
                 HStack(spacing: 3) {
                     Image(systemName: "timer")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
-                    Text(workoutVM.elapsedTime.formattedMinSec)
-                        .font(.caption2.monospacedDigit())
+                    // Same reason as the hub header: elapsed is derived, so
+                    // it needs its own tick or it freezes between sets.
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(workoutVM.elapsedTime.formattedMinSec)
+                            .font(.caption2.monospacedDigit())
+                    }
                 }
 
                 if workoutVM.currentHeartRate > 0 {
