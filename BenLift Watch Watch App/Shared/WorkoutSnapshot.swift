@@ -62,6 +62,12 @@ struct SnapshotExercise: Codable, Identifiable {
     /// as incomplete either. Optional so older snapshots decode as unskipped.
     var isSkipped: Bool?
 
+    /// What the user typed about this exercise during the session — "elbow
+    /// talking on set 2", "try 140 next time". Distinct from `notes`, which
+    /// is the plan's own annotation ("was Bench Press", "Straps"). Persists
+    /// to `ExerciseEntry.note`. Optional so older snapshots decode.
+    var userNote: String? = nil
+
     var effectivelySkipped: Bool { isSkipped ?? false }
     var workingSetsCompleted: Int { loggedSets.filter { !$0.isWarmup }.count }
     var warmupSetsCompleted: Int { loggedSets.filter(\.isWarmup).count }
@@ -95,4 +101,6 @@ enum WorkoutCommand: Codable {
     case skipExercise(index: Int)
     /// Undo a prior skip — restore the exercise to the active pool.
     case unskipExercise(index: Int)
+    /// Set (or clear, with nil) the user's note on an exercise.
+    case setNote(exerciseIndex: Int, note: String?)
 }

@@ -48,6 +48,8 @@ struct LiftPerformance: Identifiable {
     let sets: [SetLog]
     let targetReps: String?
     let change: LiftChange
+    /// What they wrote about it that day, if anything.
+    let note: String?
 
     var repsDetail: String {
         sets.map(\.reps.formattedReps).joined(separator: ", ")
@@ -88,7 +90,8 @@ enum LiftHistory {
                 weight: weight,
                 sets: working,
                 targetReps: entry.targetReps,
-                change: change
+                change: change,
+                note: entry.note
             ))
         }
         return result
@@ -129,13 +132,13 @@ struct LiftSummary: Identifiable {
     let latestChange: LiftChange
 }
 
-private func formatLbs(_ weight: Double) -> String {
+func formatLbs(_ weight: Double) -> String {
     weight.truncatingRemainder(dividingBy: 1) == 0
         ? String(Int(weight))
         : String(format: "%.1f", weight)
 }
 
-private func shortDate(_ date: Date) -> String {
+func shortDate(_ date: Date) -> String {
     date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
 }
 
@@ -193,7 +196,7 @@ struct ExerciseHistoryView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            changeBadge(summary.latestChange)
+            LiftChangeBadge(change: summary.latestChange)
             Text(formatLbs(summary.latestWeight))
                 .font(.body.weight(.semibold).monospacedDigit())
                 .foregroundColor(.primaryText)
@@ -261,7 +264,7 @@ struct ExerciseProgressView: View {
                     .font(.headline)
                     .foregroundColor(.secondaryText)
                 Spacer()
-                changeBadge(latest.change)
+                LiftChangeBadge(change: latest.change)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -452,9 +455,16 @@ struct ExerciseProgressView: View {
                             }
                             .foregroundColor(.secondaryText)
                             .lineLimit(1)
+                            if let note = perf.note, !note.isEmpty {
+                                Text(note)
+                                    .font(.caption)
+                                    .italic()
+                                    .foregroundColor(.secondaryText)
+                                    .lineLimit(2)
+                            }
                         }
                         Spacer(minLength: 6)
-                        changeBadge(perf.change)
+                        LiftChangeBadge(change: perf.change)
                         Text(formatLbs(perf.weight))
                             .font(.body.weight(.semibold).monospacedDigit())
                             .foregroundColor(.primaryText)
@@ -474,28 +484,32 @@ struct ExerciseProgressView: View {
 // MARK: - Shared badge
 
 /// Arrow plus number, never colour alone — same visual language as the
-/// progression badge on the plan card.
-@ViewBuilder
-private func changeBadge(_ change: LiftChange) -> some View {
-    switch change {
-    case .bumped, .dropped:
-        HStack(spacing: 1) {
-            if let symbol = change.symbol {
-                Image(systemName: symbol)
-                    .font(.system(size: 8, weight: .heavy))
+/// progression badge on the plan card. Used here and on the workout
+/// runner's history strip.
+struct LiftChangeBadge: View {
+    let change: LiftChange
+
+    var body: some View {
+        switch change {
+        case .bumped, .dropped:
+            HStack(spacing: 1) {
+                if let symbol = change.symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 8, weight: .heavy))
+                }
+                Text(change.label)
+                    .font(.system(size: 10, weight: .bold))
+                    .monospacedDigit()
             }
+            .foregroundStyle(change.color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(change.color.opacity(0.13))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        case .held, .first:
             Text(change.label)
-                .font(.system(size: 10, weight: .bold))
-                .monospacedDigit()
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.tertiaryText)
         }
-        .foregroundStyle(change.color)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2)
-        .background(change.color.opacity(0.13))
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-    case .held, .first:
-        Text(change.label)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.tertiaryText)
     }
 }

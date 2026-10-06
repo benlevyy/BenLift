@@ -168,7 +168,8 @@ class PhoneWorkoutViewModel {
                 lastReps: ex.lastReps,
                 loggedSets: ex.loggedSets + appended,
                 isWarmupPhase: ex.isWarmupPhase,
-                isSkipped: mergedSkipped
+                isSkipped: mergedSkipped,
+                userNote: ex.userNote
             )
         }
     }
@@ -417,10 +418,18 @@ class PhoneWorkoutViewModel {
             if let recent = ex.loggedSets.last(where: { !$0.isWarmup }) {
                 currentWeight = recent.weight
             } else {
-                currentWeight = ex.lastWeight ?? ex.suggestedWeight
+                currentWeight = Self.startingWeight(for: ex)
             }
             currentReps = 0
         }
+    }
+
+    /// The plan's weight is the prescription — it already carries today's
+    /// progression — so it wins. Last session's weight is the fallback for a
+    /// lift the plan has no number for. Preferring `lastWeight` would quietly
+    /// undo every bump the resolver made.
+    static func startingWeight(for ex: SnapshotExercise) -> Double {
+        ex.suggestedWeight > 0 ? ex.suggestedWeight : (ex.lastWeight ?? 0)
     }
 
     /// In-place snapshot mutator used by every standalone command path.
@@ -545,7 +554,7 @@ class PhoneWorkoutViewModel {
                 if let recent = state.loggedSets.last(where: { !$0.isWarmup }) {
                     currentWeight = recent.weight
                 } else {
-                    currentWeight = state.lastWeight ?? state.suggestedWeight
+                    currentWeight = Self.startingWeight(for: state)
                 }
                 currentReps = 0
             }
@@ -749,6 +758,26 @@ class PhoneWorkoutViewModel {
         }
     }
 
+    // MARK: - Exercise notes
+
+    /// Set or clear the user's note on an exercise in the running session.
+    /// Standalone: written into the snapshot. Watch-owned: sent as a command
+    /// and the next snapshot carries it. Saved to `ExerciseEntry.note` at
+    /// finish, so it shows in History and the next time the lift comes up.
+    func setNote(_ note: String?, forExerciseAt index: Int) {
+        guard index < exerciseStates.count else { return }
+        let trimmed = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        if workoutMode == .standalone {
+            commitStandaloneMutation { snap in
+                guard index < snap.exercises.count else { return }
+                snap.exercises[index].userNote = cleaned
+            }
+            return
+        }
+        sendCommand(.setNote(exerciseIndex: index, note: cleaned))
+    }
+
     // MARK: - Add Exercise Mid-Workout
 
     func addExercise(_ info: WatchExerciseInfo) {
@@ -931,7 +960,10 @@ class PhoneWorkoutViewModel {
                 let entry = ExerciseEntry(
                     exerciseName: ex.name,
                     order: order,
-                    isSkipped: ex.effectivelySkipped
+                    isSkipped: ex.effectivelySkipped,
+                    targetReps: ex.targetReps,
+                    prescribedWeight: ex.suggestedWeight,
+                    note: ex.userNote
                 )
                 for set in ex.loggedSets {
                     entry.sets.append(SetLog(
@@ -1118,7 +1150,7 @@ class PhoneWorkoutViewModel {
                     if let recent = ex.loggedSets.last(where: { !$0.isWarmup }) {
                         currentWeight = recent.weight
                     } else {
-                        currentWeight = ex.lastWeight ?? ex.suggestedWeight
+                        currentWeight = Self.startingWeight(for: ex)
                     }
                     currentReps = 0
                 }
@@ -1244,8 +1276,14 @@ class PhoneWorkoutViewModel {
             skipExercise(at: idx)
         case .unskipExercise(let idx):
             unskipExercise(at: idx)
+        case .setNote(let idx, let note):
+            setNote(note, forExerciseAt: idx)
         case .addExercise(let info):
-            addExercise(info)
+            // The watch has no history; its picker sends a library default
+            // unless the plan carried a real number, and a phone-owned
+            // session's thin plan carries none. The phone has the history,
+            // so this is where the user's own weight goes on.
+            addExercise(withHistoricalWeight(info))
         case .adaptExercise(let idx, let replacement):
             replaceExerciseCommand(at: idx, with: replacement)
         case .end(let effort):
@@ -1292,6 +1330,36 @@ class PhoneWorkoutViewModel {
         skipExercise(at: index)
         workoutAdjustments.append(AdjustmentRecord(kind: .skip, summary: "Dropped \(exerciseStates[index].name)"))
         return true
+    }
+
+    /// Replace a library-default load with the user's last working weight
+    /// for that lift, when there is one.
+    private func withHistoricalWeight(_ info: WatchExerciseInfo) -> WatchExerciseInfo {
+        guard let ctx = modelContext else { return info }
+        let descriptor = FetchDescriptor<WorkoutSession>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        let sessions = ((try? ctx.fetch(descriptor)) ?? []).prefix(30)
+        let target = info.name.lowercased()
+        for session in sessions {
+            guard let entry = session.entries.first(where: {
+                $0.exerciseName.lowercased() == target && !$0.isSkipped
+            }), let working = PlanResolver.workingWeight(of: entry.workingSets) else { continue }
+            let lastReps = entry.workingSets.last { abs($0.weight - working) < 0.01 }?.reps
+            return WatchExerciseInfo(
+                name: info.name,
+                sets: info.sets,
+                targetReps: info.targetReps,
+                suggestedWeight: working,
+                warmupSets: info.warmupSets,
+                notes: info.notes,
+                intent: info.intent,
+                lastWeight: working,
+                lastReps: lastReps,
+                equipment: info.equipment
+            )
+        }
+        return info
     }
 
     /// Add an exercise to the running session. Returns false when it's

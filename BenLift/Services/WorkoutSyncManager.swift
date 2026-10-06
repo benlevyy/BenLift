@@ -82,7 +82,10 @@ class WorkoutSyncManager {
             let exerciseEntry = ExerciseEntry(
                 exerciseName: entry.exerciseName,
                 order: entry.order,
-                isSkipped: entry.isSkipped ?? false
+                isSkipped: entry.isSkipped ?? false,
+                targetReps: entry.targetReps,
+                prescribedWeight: entry.prescribedWeight,
+                note: entry.userNote
             )
             for set in entry.sets {
                 let setLog = SetLog(

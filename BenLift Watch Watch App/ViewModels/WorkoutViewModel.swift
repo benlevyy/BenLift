@@ -93,6 +93,9 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
         /// User-initiated skip via swipe. Separate from completion — lets us
         /// distinguish "bailed" from "finished" for future AI context.
         var isSkipped: Bool = false
+        /// The user's note on this exercise, typed on the phone (or arriving
+        /// in a phone snapshot). Carried through the snapshot and the result.
+        var userNote: String? = nil
 
         var targetSets: Int { info.sets }
         var workingSetsCompleted: Int { loggedSets.filter { !$0.isWarmup }.count }
@@ -273,11 +276,20 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             if let recent = state.loggedSets.last(where: { !$0.isWarmup }) {
                 currentWeight = recent.weight
             } else {
-                currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
+                currentWeight = Self.startingWeight(for: state.info)
             }
             currentReps = 0
         }
         inputsPrimedFor = index
+    }
+
+    /// The plan's weight is the prescription — it already carries today's
+    /// progression — so it wins. Last session's weight is the fallback for a
+    /// lift the plan has no number for (bodyweight with added load, a lift
+    /// added mid-session). Preferring `lastWeight` here would quietly undo
+    /// every bump the resolver made.
+    static func startingWeight(for info: WatchExerciseInfo) -> Double {
+        info.suggestedWeight > 0 ? info.suggestedWeight : (info.lastWeight ?? 0)
     }
 
     /// Called by ExerciseView on appear. Any path that lands on the exercise
@@ -332,7 +344,7 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
             if state.warmupSetsCompleted >= state.totalWarmups {
                 state.isWarmupPhase = false
                 // Load working weight
-                currentWeight = state.info.lastWeight ?? state.info.suggestedWeight
+                currentWeight = Self.startingWeight(for: state.info)
                 currentReps = 0
             } else {
                 // Next warmup
@@ -558,7 +570,10 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                 exerciseName: state.info.name,
                 order: index,
                 sets: state.loggedSets,
-                isSkipped: state.isSkipped ? true : nil
+                isSkipped: state.isSkipped ? true : nil,
+                userNote: state.userNote,
+                targetReps: state.info.targetReps,
+                prescribedWeight: state.info.suggestedWeight
             )
         }
 
@@ -683,7 +698,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                 ),
                 loggedSets: ex.loggedSets,
                 isWarmupPhase: ex.isWarmupPhase,
-                isSkipped: ex.isSkipped ?? false
+                isSkipped: ex.isSkipped ?? false,
+                userNote: ex.userNote
             )
         }
         // The snapshot's active index is the exercise the PHONE is logging
@@ -996,7 +1012,8 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
                 lastReps: state.info.lastReps,
                 loggedSets: state.loggedSets,
                 isWarmupPhase: state.isWarmupPhase,
-                isSkipped: state.isSkipped
+                isSkipped: state.isSkipped,
+                userNote: state.userNote
             )
         }
         return WorkoutSnapshot(
@@ -1136,6 +1153,11 @@ class WorkoutViewModel: NSObject, ObservableObject, HKWorkoutSessionDelegate, HK
 
         case .unskipExercise(let idx):
             unskipExercise(at: idx)
+
+        case .setNote(let idx, let note):
+            guard idx < exerciseStates.count else { return }
+            exerciseStates[idx].userNote = note
+            broadcastSnapshot()
         }
     }
 

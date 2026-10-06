@@ -188,6 +188,20 @@ struct SessionDetailView: View {
                             .font(.caption)
                             .foregroundColor(.secondaryText)
                     }
+
+                    if let note = entry.note, !note.isEmpty {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "text.quote")
+                                .font(.caption2)
+                                .foregroundColor(.tertiaryText)
+                            Text(note)
+                                .font(.caption)
+                                .italic()
+                                .foregroundColor(.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.top, 2)
+                    }
                 }
                 .padding()
                 .background(Color.cardSurface.opacity(entry.isSkipped ? 0.4 : 1))
@@ -242,6 +256,21 @@ struct SessionDetailView: View {
             ForEach(entry.sortedSets) { set in
                 editableSetRow(set, entry: entry)
             }
+
+            TextField(
+                "Note on this lift…",
+                text: Binding(
+                    get: { entry.note ?? "" },
+                    set: { newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        entry.note = trimmed.isEmpty ? nil : newValue
+                    }
+                ),
+                axis: .vertical
+            )
+            .lineLimit(1...4)
+            .font(.caption)
+            .textFieldStyle(.roundedBorder)
 
             // Add set button
             Button {
@@ -464,7 +493,7 @@ struct SessionDetailView: View {
     private func sessionFingerprint() -> String {
         let entries = session.sortedEntries.map { entry in
             let sets = entry.sortedSets.map { "\($0.weight)-\($0.reps)-\($0.isWarmup)" }.joined(separator: "|")
-            return "\(entry.exerciseName):\(sets)"
+            return "\(entry.exerciseName):\(sets):\(entry.note ?? "")"
         }.joined(separator: ";")
         return entries + "#" + (session.concerns ?? "")
     }

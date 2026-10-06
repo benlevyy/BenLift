@@ -44,6 +44,24 @@ struct ExerciseListView: View {
     }
 
     private func exerciseRow(_ exercise: Exercise) -> some View {
+        HStack(spacing: 8) {
+            exerciseDetails(exercise)
+            Spacer(minLength: 4)
+            // Borderless so the tap is its own target inside the
+            // NavigationLink row rather than opening the editor.
+            ExerciseHelpButton(exerciseName: exercise.name, compact: true)
+                .buttonStyle(.borderless)
+        }
+        .contextMenu {
+            if let url = ExerciseHelp.searchURL(for: exercise.name) {
+                Link(destination: url) {
+                    Label("How to do this", systemImage: "questionmark.circle")
+                }
+            }
+        }
+    }
+
+    private func exerciseDetails(_ exercise: Exercise) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(exercise.name)
                 .font(.body)

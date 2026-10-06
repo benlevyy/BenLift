@@ -109,6 +109,7 @@ enum ChatContextBuilder {
                 .joined(separator: ", ")
             var line = "- \(entry.exerciseName): \(detail)"
             if let target = entry.targetReps { line += " (target \(target))" }
+            if let note = entry.note, !note.isEmpty { line += " — they noted: \"\(note)\"" }
             lines.append(line)
         }
         sections.append("WHAT THEY LOGGED\n\(lines.isEmpty ? "(nothing)" : lines.joined(separator: "\n"))")
@@ -279,13 +280,17 @@ enum ChatContextBuilder {
         var lines = ["Elapsed: \(elapsed) min"]
         for state in live.exerciseStates {
             let logged = state.loggedSets
+            var line: String
             if logged.isEmpty {
-                lines.append("- \(state.name): not started (\(state.targetSets) sets planned)")
+                line = "- \(state.name): not started (\(state.targetSets) sets planned)"
             } else {
                 let detail = logged.map { "\(formatWeight($0.weight))x\($0.reps.formattedReps)" }
                     .joined(separator: ", ")
-                lines.append("- \(state.name): \(detail)")
+                line = "- \(state.name): \(detail)"
             }
+            // Their own words about the lift outrank anything we can infer.
+            if let note = state.userNote, !note.isEmpty { line += " — they noted: \"\(note)\"" }
+            lines.append(line)
         }
         return lines.joined(separator: "\n")
     }

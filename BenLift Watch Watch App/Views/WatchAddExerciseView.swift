@@ -172,8 +172,13 @@ struct WatchAddExerciseView: View {
 
     /// Flat library — each entry carries the primary muscle group it trains
     /// plus the equipment (which drives the weight increment on the watch).
-    /// Single source of truth for the watch-side add pool; iOS-side picks
-    /// from `DefaultExercises` directly. Kept in lockstep with the iOS list.
+    ///
+    /// GENERATED from the phone's `DefaultExercises` — same names, groups,
+    /// equipment and textbook weights, so a lift added on the phone is
+    /// findable on the wrist and lands in the same muscle-group bucket. It
+    /// was hand-maintained before and had drifted: ~45 lifts missing and two
+    /// filed under a different group than the phone used. If you add to
+    /// `DefaultExercises`, mirror it here (or re-run the generator).
     static let library: [LibraryItem] = [
         // Chest
         .init("Bench Press", 135, .barbell, .chest),
@@ -182,6 +187,9 @@ struct WatchAddExerciseView: View {
         .init("Machine Press", 45, .machine, .chest),
         .init("Incline Barbell Press", 115, .barbell, .chest),
         .init("Landmine Press", 45, .barbell, .chest),
+        .init("Single Arm DB Floor Press", 40, .dumbbell, .chest),
+        .init("Machine Incline Press", 90, .machine, .chest),
+        .init("Svend Press", 10, .dumbbell, .chest),
         .init("Cable Flys", 17.5, .cable, .chest),
         .init("Cable Fly (3 Height)", 12.5, .cable, .chest),
         .init("Pec Deck", 100, .machine, .chest),
@@ -193,20 +201,36 @@ struct WatchAddExerciseView: View {
         .init("Lateral Raises", 20, .dumbbell, .shoulders),
         .init("Cable Lateral Raise", 10, .cable, .shoulders),
         .init("Rear Delt Fly", 15, .dumbbell, .shoulders),
+        .init("Cable Y-Raise", 7.5, .cable, .shoulders),
+        .init("Lu Raises", 10, .dumbbell, .shoulders),
+        .init("Cable Front Raise", 15, .cable, .shoulders),
+        .init("Plate Bus Driver", 10, .dumbbell, .shoulders),
+        .init("Banded Shoulder Dislocate", 0, .bodyweight, .shoulders),
+        .init("Face Pulls", 50, .cable, .shoulders),
+        .init("Reverse Pec Deck", 70, .machine, .shoulders),
+        .init("Face Pull w/ External Rotation", 30, .cable, .shoulders),
+        .init("Cable External Rotation", 10, .cable, .shoulders),
 
         // Triceps
+        .init("Close Grip Bench", 115, .barbell, .triceps),
         .init("Skull Crushers", 20, .dumbbell, .triceps),
         .init("Tricep Pushdown", 57.5, .cable, .triceps),
         .init("Tricep Overhead Extension", 47.5, .cable, .triceps),
         .init("Dips", 0, .bodyweight, .triceps),
-        .init("Close Grip Bench", 115, .barbell, .triceps),
+        .init("Tricep Kickback", 15, .dumbbell, .triceps),
+        .init("JM Press", 75, .barbell, .triceps),
+        .init("Cable Tricep Kickback", 12.5, .cable, .triceps),
         .init("Diamond Push-ups", 0, .bodyweight, .triceps),
+        .init("Single Arm Tricep Pushdown", 20, .cable, .triceps),
+        .init("French Press", 25, .dumbbell, .triceps),
+        .init("Bench Dips", 0, .bodyweight, .triceps),
 
         // Back
         .init("Pull-ups", 0, .bodyweight, .back),
         .init("Chin-ups", 0, .bodyweight, .back),
         .init("Lat Pulldown", 145, .machine, .back),
         .init("One Arm Lat Pulldown", 57.5, .cable, .back),
+        .init("Straight Arm Pulldown", 30, .cable, .back),
         .init("Neutral Grip Lat Pulldown", 130, .machine, .back),
         .init("Seated Row", 145, .cable, .back),
         .init("Chest Supported Row", 55, .dumbbell, .back),
@@ -214,19 +238,33 @@ struct WatchAddExerciseView: View {
         .init("DB Row", 50, .dumbbell, .back),
         .init("T-Bar Row", 90, .barbell, .back),
         .init("Meadows Row", 45, .barbell, .back),
+        .init("Pendlay Row", 135, .barbell, .back),
         .init("Seal Row", 40, .dumbbell, .back),
         .init("Machine Row", 115, .machine, .back),
         .init("Inverted Row", 0, .bodyweight, .back),
-        .init("Face Pulls", 50, .cable, .back),
-        .init("Reverse Pec Deck", 70, .machine, .back),
+        .init("Single Arm Cable Row", 50, .cable, .back),
+        .init("Rack Pull", 225, .barbell, .back),
+        .init("Kayak Row", 40, .cable, .back),
+        .init("Prone Y-T-W Raises", 5, .dumbbell, .back),
+        .init("Band Pull-Apart", 0, .bodyweight, .back),
+        .init("Kelso Shrug", 30, .dumbbell, .back),
+        .init("Snatch Grip Barbell Shrug", 135, .barbell, .back),
 
         // Biceps
         .init("Barbell Curl", 30, .barbell, .biceps),
         .init("Hammer Curl", 25, .dumbbell, .biceps),
         .init("Incline Hammer Curl", 25, .dumbbell, .biceps),
         .init("Preacher Curl", 12.5, .machine, .biceps),
+        .init("Incline Curl", 20, .dumbbell, .biceps),
         .init("Cable Curl", 30, .cable, .biceps),
+        .init("Spider Curl", 15, .dumbbell, .biceps),
         .init("EZ Bar Curl", 45, .barbell, .biceps),
+        .init("Concentration Curl", 20, .dumbbell, .biceps),
+        .init("Bayesian Curl", 20, .cable, .biceps),
+
+        // Forearms
+        .init("Wrist Curl", 20, .dumbbell, .forearms),
+        .init("Reverse Curl", 40, .barbell, .forearms),
 
         // Quads
         .init("Squat", 185, .barbell, .quads),
@@ -235,6 +273,7 @@ struct WatchAddExerciseView: View {
         .init("Leg Press", 270, .machine, .quads),
         .init("Goblet Squat", 45, .dumbbell, .quads),
         .init("Pendulum Squat", 90, .machine, .quads),
+        .init("Belt Squat", 135, .machine, .quads),
         .init("Split Squat", 25, .dumbbell, .quads),
         .init("Bulgarian Split Squat", 20, .dumbbell, .quads),
         .init("Step Ups", 10, .dumbbell, .quads),
@@ -242,27 +281,42 @@ struct WatchAddExerciseView: View {
         .init("Reverse Lunge", 25, .dumbbell, .quads),
         .init("Leg Extension", 180, .machine, .quads),
         .init("Sissy Squat", 0, .bodyweight, .quads),
+        .init("KB Goblet Squat Hold", 25, .kettlebell, .quads),
 
         // Hamstrings
         .init("Romanian Deadlift", 135, .barbell, .hamstrings),
         .init("Deadlift", 225, .barbell, .hamstrings),
         .init("DB Romanian Deadlift", 50, .dumbbell, .hamstrings),
         .init("Hamstring Curl", 100, .machine, .hamstrings),
+        .init("Nordic Curl", 0, .bodyweight, .hamstrings),
         .init("Good Morning", 95, .barbell, .hamstrings),
         .init("Single Leg RDL", 30, .dumbbell, .hamstrings),
+        .init("Glute Ham Raise", 0, .bodyweight, .hamstrings),
+        .init("Jefferson Curl", 15, .dumbbell, .hamstrings),
 
         // Glutes
         .init("Hip Thrust", 135, .barbell, .glutes),
+        .init("Cable Pull Through", 40, .cable, .glutes),
         .init("Kettlebell Swing", 35, .kettlebell, .glutes),
+        .init("Reverse Hyperextension", 90, .machine, .glutes),
         .init("Cable Kickback", 25, .cable, .glutes),
+        .init("Hip 90/90 Stretch", 0, .bodyweight, .glutes),
 
         // Calves
         .init("Calf Raises", 150, .machine, .calves),
         .init("Seated Calf Raise", 90, .machine, .calves),
+        .init("Single Leg Calf Raise", 0, .bodyweight, .calves),
+        .init("Donkey Calf Raise", 135, .machine, .calves),
 
         // Core
         .init("Pallof Press", 25, .cable, .core),
+        .init("Ab Wheel Rollout", 0, .bodyweight, .core),
+        .init("Dead Bug", 0, .bodyweight, .core),
+        .init("Copenhagen Plank", 0, .bodyweight, .core),
         .init("Hanging Leg Raise", 0, .bodyweight, .core),
+        .init("Farmer's Carry", 70, .dumbbell, .core),
+        .init("Suitcase Carry", 50, .dumbbell, .core),
+        .init("Cable Woodchop", 30, .cable, .core),
         .init("Weighted Leg Raises", 10, .dumbbell, .core),
         .init("Plank", 0, .bodyweight, .core),
     ]

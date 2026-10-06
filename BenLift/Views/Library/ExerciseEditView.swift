@@ -35,6 +35,15 @@ struct ExerciseEditView: View {
                     TextField("Default Weight (lbs)", text: $defaultWeight)
                         .keyboardType(.decimalPad)
                 }
+
+                if !name.trimmingCharacters(in: .whitespaces).isEmpty,
+                   let url = ExerciseHelp.searchURL(for: name.trimmingCharacters(in: .whitespaces)) {
+                    Section {
+                        Link(destination: url) {
+                            Label("How to do \(name.trimmingCharacters(in: .whitespaces))", systemImage: "questionmark.circle")
+                        }
+                    }
+                }
             }
             .navigationTitle(isEditing ? "Edit Exercise" : "Add Exercise")
             .navigationBarTitleDisplayMode(.inline)

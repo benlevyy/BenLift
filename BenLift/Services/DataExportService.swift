@@ -40,6 +40,8 @@ struct DataExportService {
         let exerciseName: String
         let order: Int
         let sets: [SetBackup]
+        /// Added with per-exercise notes; optional so older backups import.
+        var note: String? = nil
     }
 
     struct SetBackup: Codable {
@@ -139,7 +141,8 @@ struct DataExportService {
                                 timestamp: set.timestamp,
                                 isWarmup: set.isWarmup
                             )
-                        }
+                        },
+                        note: entry.note
                     )
                 }
             )
@@ -251,7 +254,7 @@ struct DataExportService {
             )
 
             for eb in sb.entries {
-                let entry = ExerciseEntry(exerciseName: eb.exerciseName, order: eb.order)
+                let entry = ExerciseEntry(exerciseName: eb.exerciseName, order: eb.order, note: eb.note)
                 for setB in eb.sets {
                     let setLog = SetLog(
                         setNumber: setB.setNumber, weight: setB.weight,

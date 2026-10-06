@@ -267,14 +267,20 @@ extension DailyPlan {
     /// Convert to the payload the Watch and the phone runner both consume.
     /// Returns nil for an empty plan so Start can't launch a session with
     /// nothing in it.
+    /// - Parameters:
+    ///   - recentWeights: last working weight per lower-cased exercise name.
+    ///   - recentReps: reps on the last working set at that weight. Together
+    ///     they are the "Last: 135 × 8" ghost line under the wheels.
     func toWatchPlan(
         recentExercises: [String] = [],
-        recentWeights: [String: Double] = [:]
+        recentWeights: [String: Double] = [:],
+        recentReps: [String: Double] = [:]
     ) -> WatchWorkoutPlan? {
         guard !lifts.isEmpty else { return nil }
 
         let exercises = sortedLifts.map { lift in
-            WatchExerciseInfo(
+            let key = lift.name.lowercased()
+            return WatchExerciseInfo(
                 name: lift.name,
                 sets: lift.sets,
                 targetReps: lift.targetReps,
@@ -282,8 +288,8 @@ extension DailyPlan {
                 warmupSets: nil,
                 notes: lift.usesStraps ? "Straps" : lift.noteText,
                 intent: lift.intentRaw,
-                lastWeight: nil,
-                lastReps: nil,
+                lastWeight: recentWeights[key],
+                lastReps: recentReps[key],
                 equipment: DefaultExercises.all.first { $0.name == lift.name }?.equipment
             )
         }

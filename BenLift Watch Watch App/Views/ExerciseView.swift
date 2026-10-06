@@ -149,6 +149,16 @@ struct ExerciseView: View {
                         .foregroundColor(.secondary)
                 }
 
+                // Note typed on the phone — read-only here.
+                if let note = workoutVM.activeExercise?.userNote, !note.isEmpty {
+                    Text(note)
+                        .font(.caption2)
+                        .italic()
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                }
+
                 // Log Set
                 Button {
                     workoutVM.logSet()

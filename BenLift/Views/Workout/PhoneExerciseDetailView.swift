@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// Set logging view for a single exercise during iPhone workout.
 struct PhoneExerciseDetailView: View {
@@ -7,9 +8,24 @@ struct PhoneExerciseDetailView: View {
     var onAdaptExercise: () -> Void
     var onComplete: () -> Void
 
+    /// Past sessions, for the history strip under the inputs. The runner is
+    /// the moment "what did I do last time" matters most.
+    @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
+    @State private var noteDraft: String = ""
+    @FocusState private var noteFocused: Bool
+    @State private var showFullHistory = false
+
     private var state: PhoneWorkoutViewModel.ExerciseState? {
         guard exerciseIndex < workoutVM.exerciseStates.count else { return nil }
         return workoutVM.exerciseStates[exerciseIndex]
+    }
+
+    private var exerciseName: String { state?.name ?? "" }
+
+    /// This lift's past performances, oldest first.
+    private var history: [LiftPerformance] {
+        guard !exerciseName.isEmpty else { return [] }
+        return LiftHistory.performances(for: exerciseName, in: sessions)
     }
 
     var body: some View {
@@ -79,13 +95,131 @@ struct PhoneExerciseDetailView: View {
 
                 // Bottom controls
                 bottomControls
+
+                // Your note on this lift, this session
+                noteSection
+
+                // What happened the last few times
+                historySection
             }
             .padding()
         }
         .background(Color.appBackground)
+        .scrollDismissesKeyboard(.interactively)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             workoutVM.selectExercise(at: exerciseIndex)
+            noteDraft = state?.userNote ?? ""
+        }
+        .onChange(of: state?.userNote) { _, newValue in
+            // A note set elsewhere (watch, chat) lands here unless the
+            // user is mid-typing.
+            guard !noteFocused else { return }
+            noteDraft = newValue ?? ""
+        }
+        .onChange(of: noteFocused) { _, focused in
+            if !focused { commitNote() }
+        }
+        .sheet(isPresented: $showFullHistory) {
+            NavigationStack {
+                ExerciseProgressView(exerciseName: exerciseName)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showFullHistory = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    // MARK: - Note
+
+    private var noteSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Note")
+                .font(.caption.bold())
+                .foregroundColor(.secondaryText)
+
+            TextField(
+                "Elbow talking on set 2, try 140 next time…",
+                text: $noteDraft,
+                axis: .vertical
+            )
+            .lineLimit(1...4)
+            .font(.subheadline)
+            .focused($noteFocused)
+            .submitLabel(.done)
+            .onSubmit { commitNote() }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.cardSurface)
+            .cornerRadius(10)
+        }
+    }
+
+    private func commitNote() {
+        let trimmed = noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != (state?.userNote ?? "") else { return }
+        workoutVM.setNote(trimmed, forExerciseAt: exerciseIndex)
+    }
+
+    // MARK: - History
+
+    @ViewBuilder
+    private var historySection: some View {
+        let perfs = history
+        if !perfs.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Last \(min(perfs.count, 4)) time\(perfs.count == 1 ? "" : "s")")
+                        .font(.caption.bold())
+                        .foregroundColor(.secondaryText)
+                    Spacer()
+                    Button {
+                        Haptics.selection()
+                        showFullHistory = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("All \(perfs.count)")
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .font(.caption)
+                        .foregroundColor(.accentBlue)
+                    }
+                }
+
+                VStack(spacing: 2) {
+                    ForEach(perfs.suffix(4).reversed()) { perf in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Text(shortDate(perf.date))
+                                    .font(.caption)
+                                    .foregroundColor(.secondaryText)
+                                    .frame(width: 92, alignment: .leading)
+                                Text("\(formatLbs(perf.weight)) × \(perf.repsDetail)")
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                LiftChangeBadge(change: perf.change)
+                            }
+                            if let note = perf.note, !note.isEmpty {
+                                Text(note)
+                                    .font(.caption)
+                                    .italic()
+                                    .foregroundColor(.secondaryText)
+                                    .lineLimit(2)
+                                    .padding(.leading, 100)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color.cardSurface)
+                        .cornerRadius(8)
+                    }
+                }
+            }
         }
     }
 
@@ -314,6 +448,9 @@ struct PhoneExerciseDetailView: View {
             }
 
             Spacer()
+
+            // Form check — a web search, one tap
+            ExerciseHelpButton(exerciseName: exerciseName)
 
             // Swap exercise
             Button {

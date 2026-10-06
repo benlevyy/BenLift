@@ -629,7 +629,9 @@ final class ChatToolExecutor {
                 let sets = entry.workingSets
                 guard !sets.isEmpty else { continue }
                 let detail = sets.map { "\(format($0.weight))x\($0.reps.formattedReps)" }.joined(separator: ", ")
-                entryLines.append("  \(entry.exerciseName): \(detail)")
+                var line = "  \(entry.exerciseName): \(detail)"
+                if let note = entry.note, !note.isEmpty { line += " — noted: \"\(note)\"" }
+                entryLines.append(line)
             }
             if !entryLines.isEmpty {
                 lines.append("\(formatter.string(from: session.date)) — \(session.displayName)")

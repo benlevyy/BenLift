@@ -185,31 +185,35 @@ struct DefaultExercises {
 
     // MARK: - Seeding
 
+    /// Seed the library on first launch, and on every launch after that
+    /// add any default the install is missing. This used to stop at "some
+    /// exercises exist", so a lift added to this list in an update never
+    /// reached anyone who had already installed the app. Existing rows,
+    /// including ones the user has renamed or re-weighted, are left alone;
+    /// a user-made custom exercise with the same name counts as present.
     @MainActor
     static func seedIfNeeded(in context: ModelContext) {
-        let descriptor = FetchDescriptor<Exercise>(
-            predicate: #Predicate { !$0.isCustom }
-        )
-        let existingCount = (try? context.fetchCount(descriptor)) ?? 0
+        let existing = (try? context.fetch(FetchDescriptor<Exercise>())) ?? []
+        let present = Set(existing.map { $0.name.lowercased() })
 
-        guard existingCount == 0 else {
-            print("[BenLift] Exercise library already seeded (\(existingCount) exercises)")
+        let missing = all.filter { !present.contains($0.name.lowercased()) }
+        guard !missing.isEmpty else {
+            print("[BenLift] Exercise library up to date (\(existing.count) exercises)")
             return
         }
 
-        for def in all {
-            let exercise = Exercise(
+        for def in missing {
+            context.insert(Exercise(
                 name: def.name,
                 muscleGroup: def.muscleGroup,
                 equipment: def.equipment,
                 defaultWeight: def.defaultWeight,
                 isCustom: false
-            )
-            context.insert(exercise)
+            ))
         }
 
         try? context.save()
-        print("[BenLift] Seeded \(all.count) default exercises")
+        print("[BenLift] Seeded \(missing.count) default exercise(s) (\(existing.count) already present)")
     }
 
     @MainActor

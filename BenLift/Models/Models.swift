@@ -165,6 +165,11 @@ final class ExerciseEntry {
     /// Lets the resolver tell "did the prescribed weight" from "worked up
     /// to something else".
     var prescribedWeight: Double?
+    /// What the user wrote about this exercise during (or after) the
+    /// session — "elbow talking on set 2", "bar path felt off". Shown in
+    /// history and on the runner the next time the lift comes round.
+    /// Optional so rows written before notes existed migrate cleanly.
+    var note: String?
 
     init(
         id: UUID = UUID(),
@@ -173,7 +178,8 @@ final class ExerciseEntry {
         sets: [SetLog] = [],
         isSkipped: Bool = false,
         targetReps: String? = nil,
-        prescribedWeight: Double? = nil
+        prescribedWeight: Double? = nil,
+        note: String? = nil
     ) {
         self.id = id
         self.exerciseName = exerciseName
@@ -182,6 +188,7 @@ final class ExerciseEntry {
         self.isSkipped = isSkipped
         self.targetReps = targetReps
         self.prescribedWeight = prescribedWeight
+        self.note = note
     }
 
     var sortedSets: [SetLog] {

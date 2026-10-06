@@ -316,6 +316,14 @@ struct WatchExerciseResult: Codable {
     /// survive into `WorkoutSession` history instead of being filtered as empty.
     /// Optional so older payloads in flight at upgrade time decode cleanly.
     let isSkipped: Bool?
+    /// The user's in-session note on this exercise, if any. Optional for
+    /// the same reason.
+    var userNote: String? = nil
+    /// The rep range and load the plan prescribed. The resolver needs the
+    /// range to tell "hit the top" from "landed mid-range"; without it every
+    /// lift holds. Watch-saved sessions never carried these before.
+    var targetReps: String? = nil
+    var prescribedWeight: Double? = nil
 }
 
 struct WatchSetResult: Codable {

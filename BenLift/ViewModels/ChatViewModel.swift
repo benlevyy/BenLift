@@ -286,6 +286,7 @@ final class ChatViewModel {
         let sessions = ((try? modelContext.fetch(descriptor)) ?? []).prefix(30)
 
         var weights: [String: Double] = [:]
+        var reps: [String: Double] = [:]
         var frequency: [String: Int] = [:]
         for session in sessions {
             for entry in session.entries where !entry.isSkipped {
@@ -295,6 +296,9 @@ final class ChatViewModel {
                 if weights[key] == nil,
                    let working = PlanResolver.workingWeight(of: entry.workingSets) {
                     weights[key] = working
+                    // Reps on the last set at that weight — the number they
+                    // are trying to beat.
+                    reps[key] = entry.workingSets.last { abs($0.weight - working) < 0.01 }?.reps
                 }
             }
         }
@@ -304,7 +308,7 @@ final class ChatViewModel {
             .prefix(20)
             .map(\.key)
 
-        return plan.toWatchPlan(recentExercises: Array(recent), recentWeights: weights)
+        return plan.toWatchPlan(recentExercises: Array(recent), recentWeights: weights, recentReps: reps)
     }
 
     // MARK: Clearing
