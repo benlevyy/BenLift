@@ -5,10 +5,10 @@ import UIKit
 /// Everything he actually does, in one place — and one picture of it.
 ///
 /// The hero is the training portrait: a drawing built from every logged
-/// exercise and every HealthKit workout, no decoration. Three rules, and
-/// they fit on one line under the canvas: outward is time, angle is muscle,
-/// bold is progress. Below it, the week's numbers, which lifts are moving
-/// and which are stuck, recovery, and the non-lifting sessions.
+/// session and every HealthKit workout, no decoration. Three rules, and
+/// they fit on one line under the canvas: every session adds a ring, angle
+/// is muscle, bold is progress. Below it, the week's numbers, which lifts
+/// are moving and which are stuck, recovery, and the non-lifting sessions.
 ///
 /// Lifting comes from SwiftData; everything else is read from HealthKit,
 /// because those sessions are already tracked by the apps that recorded
@@ -28,13 +28,21 @@ struct HubView: View {
     @State private var vo2Max: Double?
 
     // Derived in `rebuild()`, not in `body` — the portrait walks every set
-    // ever logged, and the labels toggle should not pay for that.
-    @State private var strokes: [PortraitStroke] = []
-    @State private var showsLabels = false
+    // ever logged, and a press on the canvas should not pay for that.
+    @State private var portrait: PortraitModel = .empty
     @State private var shareImage: UIImage?
     @State private var movingUp: [LiftSummary] = []
     @State private var stuck: [LiftSummary] = []
     @State private var liftsMovedUp = 0
+    /// Lifts in history the library can't place and the keyword guess
+    /// can't either. Not on the portrait until they're filed.
+    @State private var unfiledLifts: [String] = []
+
+    // Press-and-hold on the portrait: labels appear, and dragging picks
+    // out the ring under the finger.
+    @State private var isPressing = false
+    @State private var pressLocation: CGPoint?
+    @State private var canvasSize: CGSize = .zero
 
     var body: some View {
         NavigationStack {
@@ -85,11 +93,13 @@ struct HubView: View {
 
     /// Recomputes everything derived from sessions and activities.
     private func rebuild() {
-        strokes = TrainingPortrait.strokes(
+        let lookup = muscleGroupLookup()
+        portrait = TrainingPortrait.model(
             sessions: sessions,
             activities: activities,
-            exerciseGroups: muscleGroupLookup()
+            exerciseGroups: lookup
         )
+        unfiledLifts = unfiledLiftNames(lookup: lookup)
 
         let summaries = LiftHistory.summaries(in: sessions)
         let recent = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? Date()
@@ -147,9 +157,37 @@ struct HubView: View {
     }
 
     private func renderShareImage() {
-        shareImage = strokes.isEmpty
-            ? nil
-            : portraitImage(strokes: strokes, showsLabels: showsLabels)
+        shareImage = portrait.isEmpty ? nil : portraitImage(model: portrait)
+    }
+
+    /// Exercise names with working sets in history that neither the library
+    /// nor the keyword guess can file. Lower-cased dedupe, display-cased out.
+    private func unfiledLiftNames(lookup: [String: MuscleGroup]) -> [String] {
+        var seen = Set<String>()
+        var names: [String] = []
+        for session in sessions {
+            for entry in session.entries where !entry.isSkipped && !entry.workingSets.isEmpty {
+                let key = entry.exerciseName.lowercased()
+                guard !seen.contains(key),
+                      lookup[key] == nil,
+                      MuscleGroupGuess.group(forName: entry.exerciseName) == nil else { continue }
+                seen.insert(key)
+                names.append(entry.exerciseName)
+            }
+        }
+        return names
+    }
+
+    /// Ring under the finger, if any, for the caption and the highlight.
+    private var pressedRingIndex: Int? {
+        guard isPressing, let location = pressLocation, canvasSize != .zero else { return nil }
+        let layout = TrainingPortraitView.layout(in: canvasSize, ringCount: portrait.rings.count, labelled: true)
+        return layout.ringIndex(at: location)
+    }
+
+    private var pressedRing: PortraitRing? {
+        guard let index = pressedRingIndex, index < portrait.rings.count else { return nil }
+        return portrait.rings[index]
     }
 
     // MARK: Portrait
@@ -177,28 +215,66 @@ struct HubView: View {
             }
             .frame(height: 44)
 
-            TrainingPortraitView(strokes: strokes, showsLabels: showsLabels)
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    Haptics.selection()
-                    showsLabels.toggle()
-                    renderShareImage()
+            TrainingPortraitView(
+                model: portrait,
+                showsLabels: isPressing,
+                highlightedRing: pressedRingIndex
+            )
+            .frame(maxWidth: .infinity)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onAppear { canvasSize = geo.size }
+                        .onChange(of: geo.size) { _, size in canvasSize = size }
                 }
-                .accessibilityElement()
-                .accessibilityLabel("Training portrait")
-                .accessibilityValue(portraitSentence)
-                .accessibilityHint(showsLabels ? "Hides muscle labels" : "Shows muscle labels")
-                .accessibilityAddTraits(.isButton)
+            )
+            .contentShape(Rectangle())
+            // Hold to see the muscle names; move to pick out a ring. Let go
+            // and it is clean again. A plain drag is left to the scroll view.
+            .gesture(
+                LongPressGesture(minimumDuration: 0.2)
+                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+                    .onChanged { value in
+                        switch value {
+                        case .first(true):
+                            if !isPressing { Haptics.selection() }
+                            isPressing = true
+                        case .second(true, let drag):
+                            isPressing = true
+                            pressLocation = drag?.location
+                        default:
+                            break
+                        }
+                    }
+                    .onEnded { _ in
+                        isPressing = false
+                        pressLocation = nil
+                    }
+            )
+            .animation(.easeOut(duration: 0.15), value: isPressing)
+            .accessibilityElement()
+            .accessibilityLabel("Training portrait")
+            .accessibilityValue(portraitSentence)
+            .accessibilityHint("Press and hold to show muscle labels")
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(portraitSentence)
+                // While pressing, the sentence gives way to the ring under
+                // the finger; the explanation line stays put.
+                Text(pressedRing.map(ringCaption) ?? portraitSentence)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Outward is time · angle is muscle · bold is progress")
+                    .contentTransition(.opacity)
+                Text("Every session adds a ring · angle is muscle · bold is progress")
                     .font(.caption)
                     .foregroundStyle(Color.tertiaryText)
+
+                if !unfiledLifts.isEmpty {
+                    Text("Not drawn: \(unfiledLifts.prefix(4).joined(separator: ", "))\(unfiledLifts.count > 4 ? " and \(unfiledLifts.count - 4) more" : "") — add them to the library with a muscle group.")
+                        .font(.caption)
+                        .foregroundStyle(Color.tertiaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -206,6 +282,13 @@ struct HubView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.cardSurface)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// "Sat 12 Sep · Push · 17 sets · 2 lifts up" for the ring under the finger.
+    private func ringCaption(_ ring: PortraitRing) -> String {
+        var parts = [shortDate(ring.date), ring.title, "\(ring.sets) set\(ring.sets == 1 ? "" : "s")"]
+        if ring.liftsUp > 0 { parts.append("\(ring.liftsUp) lift\(ring.liftsUp == 1 ? "" : "s") up") }
+        return parts.joined(separator: " · ")
     }
 
     /// "Since 3 Jun: 48 sessions, 14 lifts moved up, 6 climbs." Built from
