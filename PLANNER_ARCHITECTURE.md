@@ -4,6 +4,19 @@
 
 **Status:** prompts validated in `evals/`. Calendar UI + Swift engine to be built. Last updated 2026-04-27.
 
+> **Status (2026-10):** this document is partly historical. The deterministic
+> planner shipped in a simpler form than described here, and the chat rebuild
+> (commit 7063128) removed two of the pieces below: the **pattern engine**
+> (3-week rolling prediction of each weekday's muscle) and **future-day
+> pinning** (tapping a future cell on the Week Strip to pin a muscle). Today
+> the muscle for a day comes from the configured `TrainingSplit` rotation plus
+> an optional same-day pin set via the `set_focus` chat tool; the daily plan is
+> replayed from the last session of that type by `PlanResolver`, and the LLM
+> prompts (`daily_plan_v5`, `bootstrap`, `iterate`) were replaced by the
+> tool-calling chat in `ChatService` / `ChatToolExecutor`. Sections on the
+> Week Strip contract, `MuscleGroupPin`, and the data model still describe
+> real code; the prediction, pinning-UI, and prompt sections do not.
+
 ---
 
 ## TL;DR

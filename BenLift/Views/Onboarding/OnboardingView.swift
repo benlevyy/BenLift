@@ -114,7 +114,7 @@ struct OnboardingView: View {
                     if !apiKey.isEmpty {
                         do {
                             try KeychainService.save(key: KeychainService.apiKeyKey, value: apiKey)
-                            print("[BenLift] API key saved to Keychain (\(apiKey.prefix(10))...)")
+                            print("[BenLift] API key saved to Keychain")
                         } catch {
                             print("[BenLift] Failed to save API key: \(error)")
                         }
