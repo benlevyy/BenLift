@@ -38,10 +38,9 @@ struct HubView: View {
     /// can't either. Not on the portrait until they're filed.
     @State private var unfiledLifts: [String] = []
 
-    // Press-and-hold on the portrait: labels appear, and dragging picks
-    // out the ring under the finger.
-    @State private var isPressing = false
-    @State private var pressLocation: CGPoint?
+    // Tap a ring to pick it out: labels appear and the caption reads that
+    // session. It stays until tapped again, so there is time to read it.
+    @State private var selectedRingIndex: Int?
     @State private var canvasSize: CGSize = .zero
 
     var body: some View {
@@ -60,7 +59,11 @@ struct HubView: View {
             .navigationTitle("Hub")
             .task { await load() }
             .refreshable { await load() }
-            .onChange(of: sessions.count) { rebuild() }
+            .onChange(of: sessions.count) {
+                // Indices shift when a session is added or removed.
+                selectedRingIndex = nil
+                rebuild()
+            }
         }
     }
 
@@ -178,16 +181,23 @@ struct HubView: View {
         return names
     }
 
-    /// Ring under the finger, if any, for the caption and the highlight.
-    private var pressedRingIndex: Int? {
-        guard isPressing, let location = pressLocation, canvasSize != .zero else { return nil }
-        let layout = TrainingPortraitView.layout(in: canvasSize, ringCount: portrait.rings.count, labelled: true)
-        return layout.ringIndex(at: location)
+    /// Selected ring, if it still exists — a rebuild can shrink the list.
+    private var selectedRing: PortraitRing? {
+        guard let index = selectedRingIndex, index < portrait.rings.count else { return nil }
+        return portrait.rings[index]
     }
 
-    private var pressedRing: PortraitRing? {
-        guard let index = pressedRingIndex, index < portrait.rings.count else { return nil }
-        return portrait.rings[index]
+    /// Tapping a ring selects it; tapping it again, or anywhere off the
+    /// rings, clears. Uses the same layout as the canvas so the hit-test and
+    /// the drawing can't disagree.
+    private func selectRing(at location: CGPoint) {
+        guard canvasSize != .zero else { return }
+        let layout = TrainingPortraitView.layout(in: canvasSize, ringCount: portrait.rings.count, labelled: true)
+        let hit = layout.ringIndex(at: location)
+        let next = (hit == selectedRingIndex) ? nil : hit
+        guard next != selectedRingIndex else { return }
+        Haptics.selection()
+        selectedRingIndex = next
     }
 
     // MARK: Portrait
@@ -217,8 +227,8 @@ struct HubView: View {
 
             TrainingPortraitView(
                 model: portrait,
-                showsLabels: isPressing,
-                highlightedRing: pressedRingIndex
+                showsLabels: selectedRing != nil,
+                highlightedRing: selectedRing == nil ? nil : selectedRingIndex
             )
             .frame(maxWidth: .infinity)
             .background(
@@ -228,38 +238,22 @@ struct HubView: View {
                 }
             )
             .contentShape(Rectangle())
-            // Hold to see the muscle names; move to pick out a ring. Let go
-            // and it is clean again. A plain drag is left to the scroll view.
-            .gesture(
-                LongPressGesture(minimumDuration: 0.2)
-                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
-                    .onChanged { value in
-                        switch value {
-                        case .first(true):
-                            if !isPressing { Haptics.selection() }
-                            isPressing = true
-                        case .second(true, let drag):
-                            isPressing = true
-                            pressLocation = drag?.location
-                        default:
-                            break
-                        }
-                    }
-                    .onEnded { _ in
-                        isPressing = false
-                        pressLocation = nil
-                    }
-            )
-            .animation(.easeOut(duration: 0.15), value: isPressing)
+            // A tap rather than press-and-drag: the old long-press needed a
+            // 0.2s hold, picked nothing until the finger moved, lost to the
+            // scroll view on any wobble, and cleared the moment you let go.
+            .onTapGesture(coordinateSpace: .local) { location in
+                selectRing(at: location)
+            }
+            .animation(.easeOut(duration: 0.15), value: selectedRingIndex)
             .accessibilityElement()
             .accessibilityLabel("Training portrait")
             .accessibilityValue(portraitSentence)
-            .accessibilityHint("Press and hold to show muscle labels")
+            .accessibilityHint("Tap a ring to read that session")
 
             VStack(alignment: .leading, spacing: 4) {
-                // While pressing, the sentence gives way to the ring under
-                // the finger; the explanation line stays put.
-                Text(pressedRing.map(ringCaption) ?? portraitSentence)
+                // With a ring selected, the sentence gives way to that
+                // session; the explanation line stays put.
+                Text(selectedRing.map(ringCaption) ?? portraitSentence)
                     .font(.system(size: 14))
                     .foregroundStyle(Color.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
